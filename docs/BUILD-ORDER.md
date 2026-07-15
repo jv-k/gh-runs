@@ -16,7 +16,7 @@ Those two are the floor. Everything below stands on them.
 
 | Stage | Build | Because |
 |---|---|---|
-| **0** | `go.mod`, `main.go`, `domain`, `clock`, `config`, `ghclient` | The skeleton of [ADR-0011](./adr/0011-package-layout-and-dependency-direction.md). `config` lands here rather than with the settings view, because the governor needs a Budget share before any view exists. `clock` is here because five later packages inject it and it imports nothing. |
+| **0** | `go.mod`, `main.go`, `domain`, `clock`, `config`, `ghclient` | The skeleton of [ADR-0011](./adr/0011-package-layout-and-dependency-direction.md). **Every line of `go.mod` is [ADR-0013](./adr/0013-dependency-pins.md)**, including the Go floor that CI and the released binaries both read from it. `config` lands here rather than with the settings view, because the governor needs a Budget share before any view exists. `clock` is here because five later packages inject it and it imports nothing. |
 | **1** | **local-store** | The root. R19's RoundTripper, R19a's injected base, R19b's 304-to-200 reconstitution, ETags, payloads. [ADR-0012](./adr/0012-transport-chain-and-the-client-surface.md). |
 | **2** | **rate-governor** | The co-root, and a RoundTripper nested inside stage 1's ([ADR-0012](./adr/0012-transport-chain-and-the-client-surface.md)). Pacing, and the published **Budget Readout**. Its pressure threshold is still open, see below. |
 | **3** | **repo-discovery** | Needs local-store's persistence and the governor's accounting. |

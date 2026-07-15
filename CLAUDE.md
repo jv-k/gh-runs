@@ -11,7 +11,7 @@ v2 is a ground-up Go rewrite. **There is no Go code yet.** v1 was a bash script 
 | [docs/PRD.md](docs/PRD.md) | What we are building, who for, and the measured constraints that shaped it. The constraints table is the most valuable thing in the repo. |
 | [docs/CONTEXT.md](docs/CONTEXT.md) | The glossary. It is binding, see below. |
 | [docs/BUILD-ORDER.md](docs/BUILD-ORDER.md) | What to build first. **Not** the PRD's feature grouping, which is a taxonomy and points roughly backwards. |
-| [docs/adr/](docs/adr/) | Eleven decisions and the options they beat. |
+| [docs/adr/](docs/adr/) | Thirteen decisions and the options they beat. |
 | [docs/features/](docs/features/) | Sixteen requirement sets, one per capability. Numbered `R*` requirements and `AC*` acceptance criteria. |
 
 ## The glossary is binding
@@ -26,6 +26,7 @@ Directory names follow the glossary. If a name feels wrong, read CONTEXT.md befo
 - **`main.go` lives at the repository root.** Not `cmd/`. This is what makes `go install …/v2@latest` yield a binary called `gh-runs`, and it is what `cli/gh-extension-precompile` builds by default. [ADR-0011](docs/adr/0011-package-layout-and-dependency-direction.md).
 - **Everything else is `internal/`.** Nothing here is a library. [ADR-0011](docs/adr/0011-package-layout-and-dependency-direction.md) fixes the tree and the direction every import points.
 - **`store` and `ghclient` must not import each other.** `store` exports an `http.RoundTripper`, `ghclient` takes one, `main.go` is the only place that knows both. This is the load-bearing seam.
+- **Every pin in `go.mod` is [ADR-0013](docs/adr/0013-dependency-pins.md), and three of them are load-bearing.** Bubble Tea v2 is `charm.land/bubbletea/v2`, never `github.com/charmbracelet/bubbletea`, which is a live v1 that compiles. Cassettes need **go-vcr v4**: v3's matcher ignores headers, so local-store AC5 passes vacuously. `go get -u` is not a routine chore here.
 - **go-gh's cache is TTL-only and never revalidates.** `EnableCache: false` does not disable it. Only `CacheTTL: 0` does. Our RoundTripper does the revalidating.
 - **The Budget is a share of the primary limit and never throttles a Purge.** The two limits are different currencies. [ADR-0007](docs/adr/0007-adaptive-delete-throttle.md).
 - **There is no server-side `conclusion` parameter.** Measured: `?conclusion=failure` returns every Run, because the API ignores it. Never send it.
