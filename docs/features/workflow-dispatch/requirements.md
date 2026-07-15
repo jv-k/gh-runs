@@ -56,13 +56,15 @@ Dispatch a Workflow from a typed form generated from that Workflow's YAML at the
 
 **R20.** Provide a non-interactive Dispatch. [ADR-0002](../../adr/0002-go-gh-with-dual-distribution.md) ships a standalone binary, and a user without `gh` installed has no `gh workflow run` to fall back on. Command and flag spelling belong to [cli-surface](../cli-surface/requirements.md).
 
-**R21.** Render the generated form to a frame from held state alone, with no live terminal and no network, and verify that frame with golden-file tests covering one control of each type R6 declares: free text for `string`, a toggle for `boolean`, a select for `choice` and for `environment`, and numeric entry for `number`. The form is generated from YAML the tool did not write and cannot predict, so the painted frame is the only evidence R6's mapping held. A golden over `cli/cli`'s `deployment.yml` fixes the four-control case this document is specified against, and R10's promise that a `choice` is a select rather than free text is a claim about a widget, which is a thing only a rendering test can check.
+**R21.** Render the generated form to a frame from held state alone, with no live terminal and no network, and verify that frame with golden-file tests covering one control of each type R6 declares: free text for `string`, a toggle for `boolean`, a select for `choice` and for `environment`, and numeric entry for `number`. The form is generated from YAML the tool did not write and cannot predict, so the painted frame is the only evidence R6's mapping held. A golden over the checked-in `deployment.yml` fixture fixes the five-control case this document is specified against, and R10's promise that a `choice` is a select rather than free text is a claim about a widget, which is a thing only a rendering test can check.
 
 ## Acceptance criteria
 
 **AC1: The ref comes first.** No form is rendered, and no Contents request is issued, before a ref is selected. Selecting a second ref for a Workflow whose inputs differ between two branches produces two visibly different forms.
 
-**AC2: The measured form generates four typed controls.** Rendering the form for `cli/cli`'s `deployment.yml` produces exactly four controls: `tag_name` as free text marked required, `platforms` as free text pre-filled with its declared default, `release` as a toggle, and `environment` as a select pre-filled with `production` and populated from the repository's environments. Rendering it issues exactly one Contents request and exactly one environments request. Rendering a form for a Workflow declaring no `environment` input issues zero environments requests.
+**AC2: The form generates one typed control per declared input.** Rendering the form for a **held YAML fixture** produces exactly one control per input the YAML declares, of the type R6's table maps, and no others. Rendering it issues exactly one Contents request, and exactly one environments request when the YAML declares an `environment` input. A fixture declaring no `environment` input issues zero environments requests.
+
+**The count comes from the fixture, never from a live third-party file.** An earlier form of this criterion asserted that `cli/cli`'s `deployment.yml` declares "exactly four controls". It declares **five**: `tag_name`, `environment`, `platforms`, `release`, and `dry_run`, which upstream added after the measurement. The criterion was falsified by someone else's commit, which is the failure mode of pinning an acceptance test to a repository we do not control. The fixture is checked in. `cli/cli` is where it came from, not what it tests against.
 
 **AC3: Required and `choice` constraints bind.** Submitting that form with `tag_name` empty is refused by the form and issues no request. A `choice` input cannot be submitted with a value outside its `options` by any interaction the form offers.
 
@@ -72,20 +74,23 @@ Dispatch a Workflow from a typed form generated from that Workflow's YAML at the
 
 **AC6: The gate costs no request.** Dispatch is unavailable for an archived repository and for one where `permissions.push` is false, determined with no API request beyond the repository listing that already ran. A Workflow in state `deleted` offers no Dispatch.
 
-**AC7: Goldens hold the generated form.** Rendering the form for `cli/cli`'s `deployment.yml` from held state, with no terminal and no network, reproduces the stored golden byte for byte: `tag_name` as free text marked required, `platforms` as free text pre-filled with its default, `release` as a toggle, and `environment` as a select pre-filled with `production`. A further golden covers a Workflow declaring `choice` and `number` inputs, rendering a select over the declared `options` and a numeric entry, and one declaring an unrecognised type, rendering free text labelled as unrecognised. Changing any control's type fails its golden.
+**AC7: Goldens hold the generated form.** Rendering the form from the held `deployment.yml` fixture, with no terminal and no network, reproduces the stored golden byte for byte: `tag_name` as free text marked required, `platforms` as free text pre-filled with its default, `release` and `dry_run` as toggles each pre-filled with their declared `true`, and `environment` as a select pre-filled with `production`. A further golden covers a Workflow declaring `choice` and `number` inputs, rendering a select over the declared `options` and a numeric entry, and one declaring an unrecognised type, rendering free text labelled as unrecognised. Changing any control's type fails its golden.
 
 ## Constraints
 
 The Workflow object's keys are **exactly** `badge_url, created_at, html_url, id, name, node_id, path, state, updated_at, url` (measured). There is no `inputs` and no list of declared events. This single fact forces R1, R2 and R5: the YAML is the only source of the input schema, it must be fetched via the Contents API, and it must be fetched **at the target ref**, because inputs can differ per branch.
 
-The real example the form is specified against, from `cli/cli`'s `deployment.yml`:
+The real example the form is specified against, copied from `cli/cli`'s `deployment.yml` **into a checked-in fixture**. It is a snapshot of a file we do not own, and it drifts: this table read four inputs until upstream added a fifth.
 
 | Input | Type | Notes |
 |---|---|---|
 | `tag_name` | `string` | required |
-| `platforms` | `string` | has a `default` |
-| `release` | `boolean` | n/a |
 | `environment` | `environment` | `default: production`. Needs the environments call |
+| `platforms` | `string` | has a `default` |
+| `release` | `boolean` | `default: true` |
+| `dry_run` | `boolean` | `default: true`. Added upstream after the original measurement |
+
+Five inputs, five controls, three of R6's five types. Neither `choice` nor `number` appears here, which is why AC7 carries a second fixture for those.
 
 | Fact | Source | Consequence |
 |---|---|---|

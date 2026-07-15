@@ -1,6 +1,6 @@
 # Purges are stateless, and the filter is the job state
 
-A Purge of roughly 18,000 Runs takes about 100 minutes at the delete ceiling, so it cannot be a modal you wait on. Rather than build a job store, we exploit the fact that **deletion is naturally idempotent**. Re-run the same Purge and the already-deleted Runs are simply no longer in the result set. The filter *is* the durable state.
+A Purge of roughly 18,000 Runs takes about **155 minutes** in the normal case, and as long as ~10 hours if the throttle spends the run at its floor ([rate-governor](../features/rate-governor/requirements.md) R20). It cannot be a modal you wait on. Rather than build a job store, we exploit the fact that **deletion is naturally idempotent**. Re-run the same Purge and the already-deleted Runs are simply no longer in the result set. The filter *is* the durable state.
 
 Resuming means running the same Purge again. It is self-correcting after a crash, a quit, or a kill.
 

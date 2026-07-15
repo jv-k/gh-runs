@@ -30,7 +30,7 @@ The local store persists ETags, last-seen payloads and discovery results across 
 
 ### Correctness
 
-**R8.** The HTTP layer must perform true ETag revalidation: send `If-None-Match`, and distinguish a 304 from a 200 to the local store and to the [rate-governor](../rate-governor/requirements.md). A time-based cache that serves an entry without revalidating it does not satisfy this requirement, no matter how fresh the entry is. go-gh's client is exactly such a cache (open question 1, resolved), so R8 is met only by the transport R19 requires.
+**R8.** The HTTP layer must perform true ETag revalidation: send `If-None-Match`, and distinguish a 304 from a 200 to the local store and to the [rate-governor](../rate-governor/requirements.md). A time-based cache that serves an entry without revalidating it does not satisfy this requirement, no matter how fresh the entry is. go-gh's client is exactly such a cache (open question 1, resolved), so R8 is met only by the transport R19 requires. The distinction R8 demands is drawn **below** R19b's reconstitution, where both this component and the governor still see the real status code. Above it, nothing does, and nothing should.
 
 **R9.** A freshness lifetime must not be exposed as a user setting, by flag or config key. With ETag revalidation being both free and correct, a TTL could only ever make data staler than revalidating it would. There is no value of the knob that improves on asking.
 
@@ -50,7 +50,7 @@ The local store persists ETags, last-seen payloads and discovery results across 
 
 **R15.** The local store's disk footprint must be bounded, per repository and in total, and must not grow without limit across sessions.
 
-**R16.** The local store must bound what it stores per repository to the window the Feed actually paints, not to the repository's Run history. The reference repository has 28,707 Runs. Nothing about painting a Feed requires holding them.
+**R16.** The local store must bound what it stores per repository to the window the Feed actually paints, not to the repository's Run history. The reference repository holds ~28,700 Runs. Nothing about painting a Feed requires holding them.
 
 ### Seams
 
@@ -62,7 +62,15 @@ The local store persists ETags, last-seen payloads and discovery results across 
 
 **R19.** The tool must supply its own `http.RoundTripper` as `api.ClientOptions.Transport`, and must leave go-gh's own cache off by setting `CacheTTL: 0`. `EnableCache: false` does **not** disable it: the cache RoundTripper is installed unconditionally, and `EnableCache` only defaults `CacheTTL` to 24h, so `EnableCache: false, CacheTTL: 5 * time.Second` still caches. Our transport must never run underneath go-gh's cache, which sits above it and short-circuits before it runs, and which treats a 304 as cacheable (`isCacheableResponse` is `StatusCode < 500 && StatusCode != 403`) and would store a bare empty-bodied 304 as the response.
 
-**R20.** Every ETag store key must compose the request URL, the `Accept` header and the `Authorization` header, as go-gh's own `cacheKey` does. Keying on the URL alone leaks across tokens and across Accept headers: a second account, or a request for a different media type, would revalidate against an entry that was never its own.
+**R19a.** The transport must take a `base http.RoundTripper` as a constructor parameter and must dial through it. `api.ClientOptions.Transport` **replaces** `http.DefaultTransport` rather than wrapping it, so ours is the innermost RoundTripper in go-gh's stack and has nothing beneath it unless it is given one. `http.DefaultTransport` is what production passes. A cassette is what a test passes, and that parameter is R18's only injection point. See [ADR-0012](../../adr/0012-transport-chain-and-the-client-surface.md), which also fixes where the [rate-governor](../rate-governor/requirements.md) nests inside it.
+
+**R19b.** The transport must **reconstitute a 200** from a 304 before returning it to go-gh: the persisted payload as the body, the fresh response's rate-limit headers and `Link`, and the stored `ETag` and entity headers. A bare 304 must never leave this component. go-gh treats every non-2xx as an error on **every** surface it offers, `Request` included (`success := resp.StatusCode >= 200 && resp.StatusCode < 300`), so a 304 handed upward surfaces to the caller as `*api.HTTPError` reading "HTTP 304". A conditional request that worked would read as a failed one. [ADR-0012](../../adr/0012-transport-chain-and-the-client-surface.md) fixes which headers win.
+
+**R20.** Every ETag store key must be a **cryptographic hash** over the request method, the request URL, the `Accept` header, the `Authorization` header and the request body. **The key must never contain the raw `Authorization` header, or any other recoverable form of the token.** The store writes its keys to disk, and a key composed by concatenation would persist the user's token in a filename. Hash, never compose.
+
+Keying on the URL alone is the failure this guards against in the other direction: it leaks across tokens and across Accept headers, so a second account, or a request for a different media type, would revalidate against an entry that was never its own.
+
+go-gh's own `cacheKey` is the reference, and it does exactly this: SHA256 over `Method`, `URL`, `Accept`, `Authorization` and the body, rendered as hex. Note that it folds in **`Method` and the body**, which an earlier wording of this requirement omitted while claiming to mirror it. Both belong. A GET and a DELETE of one URL are different requests, and a POST body is part of what identifies one.
 
 ## Acceptance criteria
 
@@ -94,6 +102,8 @@ The local store persists ETags, last-seen payloads and discovery results across 
 
 **AC14: Host-qualified keys.** Every persisted key carries a host component, and no key can be constructed without one. A fixture asserting the key shape fails if `owner/name` is ever persisted bare.
 
+**AC14a: No token reaches the disk.** Given a request carrying `Authorization: Bearer <token>`, the token's characters appear in no key, no filename and no file the store writes. Grepping the whole state directory for the token's value after a full session returns nothing. Two requests differing only in their `Authorization` header produce different keys, and two differing only in method (GET against DELETE of one URL) do too (R20).
+
 **AC15: Bounded growth.** Across repeated sessions over the reference account's ~26 repositories with Runs, the on-disk footprint stays under the stated bound and does not grow monotonically with session count.
 
 **AC16: No TTL knob.** No flag or config key sets a cache TTL or a freshness lifetime.
@@ -118,9 +128,9 @@ The local store persists ETags, last-seen payloads and discovery results across 
 
 1. **Resolved: go-gh's client is TTL-only and never revalidates.** The check was the one this question named: issue a request, issue it again, and look at whether the second carried `If-None-Match`. It did not. Verified three ways. `pkg/api/cache.go` returns on a cache hit without ever calling the inner RoundTripper, and freshness is file mtime against a TTL, which is the entire policy. A grep across the whole v2 module for `etag`, `if-none-match`, `if-modified-since`, `StatusNotModified` and `revalidat` returns zero matches, tests included, and go.sum carries no caching library. Empirically, real go-gh v2.9.0 with `EnableCache: true, CacheTTL: 30s` against a counting server serving an ETag: two identical GETs produced 1 network hit and 0 requests carrying `If-None-Match`, where a revalidating cache would show 2. R8 stands and is unaffected. What changed is that it is met by R19's transport of our own rather than by the client, which is verified end to end: `If-None-Match` reached the wire, the server returned 304, the body was reconstituted from the local store, and the caller saw a normal 200. The remedy is contained but not small, and it is now a build requirement rather than an open question ([ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)).
 
-2. **Concurrent access is undecided.** Nothing prevents two gh-runs processes from running at once, and [ADR-0006](../../adr/0006-stateless-bulk-jobs.md)'s stateless Purge actively invites it. Running a 100-minute Purge in one terminal while browsing the Feed in another is a normal thing to do, not an abuse. Both processes revalidate, and both write. Whether the local store is single-writer, locked, partitioned by process, or simply last-write-wins has not been decided. R13 bounds the damage (a corrupt cache is discarded and rebuilt), but bounding the damage is not the same as not causing it, and "your Feed got slower because your Purge trampled its ETags" is a real outcome.
+2. **Concurrent access is undecided.** Nothing prevents two gh-runs processes from running at once, and [ADR-0006](../../adr/0006-stateless-bulk-jobs.md)'s stateless Purge actively invites it. Running a ~155-minute Purge in one terminal while browsing the Feed in another is a normal thing to do, not an abuse. Both processes revalidate, and both write. Whether the local store is single-writer, locked, partitioned by process, or simply last-write-wins has not been decided. R13 bounds the damage (a corrupt cache is discarded and rebuilt), but bounding the damage is not the same as not causing it, and "your Feed got slower because your Purge trampled its ETags" is a real outcome.
 
-3. **Whether last-known Budget state should be persisted is undecided.** Without it, a cold start immediately after exhaustion fans out into a limit it already knew about and learns nothing it had not already been told. With it, the tool refuses to make requests on the strength of a possibly-stale number it can only confirm by making the request the number exists to prevent. The trade is real in both directions and the canon does not settle it.
+3. **Whether the last-known Budget Readout should be persisted is undecided.** Without it, a cold start immediately after exhaustion fans out into a limit it already knew about and learns nothing it had not already been told. With it, the tool refuses to make requests on the strength of a possibly-stale number it can only confirm by making the request the number exists to prevent. The trade is real in both directions and the canon does not settle it.
 
 4. **The eviction policy is UNKNOWN.** R15 requires a bound and does not name one, nor whether entries fall out by age, by count, by bytes, or when a repository leaves the poll set. A repository dropped from discovery's classification is the obvious candidate and is not obviously correct: it may reappear at the next re-probe.
 
@@ -135,6 +145,7 @@ The local store persists ETags, last-seen payloads and discovery results across 
 - [ADR-0009: Repo identity is host-qualified](../../adr/0009-host-qualified-repo-identity.md) (R14)
 - [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) (R16's window, open question 5)
 - [ADR-0002: Build on go-gh, ship as both a gh extension and a standalone binary](../../adr/0002-go-gh-with-dual-distribution.md) (the client open question 1 interrogated, and which R19 now wraps)
+- [ADR-0012: The transport chain, and what ghclient may expose](../../adr/0012-transport-chain-and-the-client-surface.md) (R19a's base, R19b's reconstitution, and where the governor nests)
 - [polling-scheduler](../polling-scheduler/requirements.md) (consumes R1's ETags, shares open question 1's fallout)
 - [rate-governor](../rate-governor/requirements.md) (consumes R8's 304/200 distinction for R7 of that document)
 - [repo-discovery](../repo-discovery/requirements.md) (R2 persists its results, R1 persists the ETags its conditional re-probe needs)

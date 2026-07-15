@@ -4,17 +4,25 @@
 
 ## Purpose
 
-Answer one question (what is consuming this repository's Actions storage) and reclaim it in place. The answer is Caches, which outweigh Artifacts by ~160× on the reference repository, so this is a single bytes-first view led by Caches rather than an Artifact browser.
+Answer one question (what is consuming this repository's Actions storage) and reclaim it in place. The answer is Caches, and the reason is not the one it first looks like.
+
+**Artifacts are the bigger number and the smaller problem.** Measured on `cli/cli` by summing all 581 Artifacts rather than sampling: Artifacts hold 15.55 GB against the Caches' 10.59 GB, so on raw bytes Artifacts **win**. But 279 of the 581 (48%) are expired, and they hold 15.50 GB of that 15.55 GB. Deleting an expired Artifact reclaims nothing. Live Artifacts total **47.68 MB**, which 10.59 GB of Caches genuinely dwarfs by ~220×.
+
+So this is a single bytes-first view led by Caches rather than an Artifact browser. Caches lead because **an expired Artifact's bytes are already gone**, not because Artifacts are small. A view that sorted on raw `size_in_bytes` and stopped thinking would put 15.5 GB of tombstones at the top and offer to reclaim nothing at all, which is exactly what R9, R10 and R11 exist to prevent.
 
 ## Requirements
 
 ### Totals and honesty
 
-**R1.** Display the repository's Cache totals from the cache-usage endpoint's `active_caches_size_in_bytes` and `active_caches_count`. Both arrive in one request. Neither may be recomputed by summing an enumerated list.
+**R0.** This view MUST operate under **either scope**, `all-repos` or `this-repo`, and MUST default to `all-repos` ([settings](../settings/requirements.md) R19). Both code paths must exist and both must be correct. Under `all-repos` the view fans out one cache-usage request per repository over [ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md)'s machinery and leads with a per-repository rollup, because "which of my 163 repositories is hoarding Caches?" is the question this view exists to answer and a single-repository view cannot answer it at all. Under `this-repo` it presents one repository. Every requirement below reads "the repository" as **each repository in scope**, and every byte count must stay honest under either.
+
+**R1.** Display each in-scope repository's Cache totals from the cache-usage endpoint's `active_caches_size_in_bytes` and `active_caches_count`. Both arrive in one request per repository. Neither may be recomputed by summing an enumerated list. Under `all-repos`, the rollup's total MUST be the sum of those per-repository figures and MUST NOT be derived any other way.
 
 **R2.** Reconcile the enumerated Cache list against R1's totals. When the enumeration does not account for `active_caches_count` entries or `active_caches_size_in_bytes` bytes, label the list incomplete and continue to present R1's figures as the repository's totals. The free total is this view's truth oracle: it is what makes the list checkable without anyone having established whether a cap applies here.
 
-**R3.** Sum the Artifact total from a complete enumeration, or label it an estimate. There is no Artifact equivalent of R1 in the canon, and the PRD's ~80 MB is extrapolated from 100 of 557 Artifacts rather than measured. Caches are exact to the byte for free. Artifacts are neither.
+**R3.** Sum the Artifact total from a complete enumeration, or label it an estimate. There is no Artifact equivalent of R1. Caches are exact to the byte for free. Artifacts are neither.
+
+**This requirement has now been vindicated by the exact failure it warns about.** An earlier ~80 MB figure in the canon was extrapolated from 100 of 557 Artifacts. Enumerating all 581 produced **15.55 GB**. The sample was wrong by ~194×, and it was wrong because expired Artifacts are not evenly distributed and the first page is the newest. Extrapolation is not a cheap approximation here. It is a different answer.
 
 ### The list
 
@@ -26,7 +34,7 @@ Answer one question (what is consuming this repository's Actions storage) and re
 
 **R7.** Show `last_accessed_at` on every Cache row. Staleness is what makes a Cache safe to delete, and it must be readable without opening anything.
 
-**R8.** Offer a filter to Artifacts alone. Under R4's sort all 96 Caches precede nearly all 557 Artifacts, which would otherwise put R13's download out of reach.
+**R8.** Offer a filter to Artifacts alone. Under R4's sort the Caches precede nearly all the Artifacts (83 against 581, measured), which would otherwise put R13's download out of reach. Expired Artifacts make this worse rather than better: 279 tombstones still report their original size, so they sort high on bytes they no longer hold.
 
 ### Expired Artifacts
 
@@ -56,7 +64,7 @@ Answer one question (what is consuming this repository's Actions storage) and re
 
 **R19.** Keep rows still while the cursor is in the list. A refresh must not reorder beneath it.
 
-**R20.** Gate deletion on `permissions.push && !archived`, using the fields repository discovery already carries at no extra request. Distinguish an archived repository, which is permanently read-only, from one merely lacking push: an archived repository's 12.8 GB can never be reclaimed, and saying so is not the same as reporting a permission that might change.
+**R20.** Gate deletion on `permissions.push && !archived`, using the fields repository discovery already carries at no extra request. Distinguish an archived repository, which is permanently read-only, from one merely lacking push: an archived repository's 10.59 GB can never be reclaimed, and saying so is not the same as reporting a permission that might change.
 
 **R21.** Treat the API as the final authority. A 403 can arrive despite `permissions.push: true` because fine-grained PATs expose no scopes. Record it and continue rather than treating it as a fault.
 
@@ -72,9 +80,9 @@ Answer one question (what is consuming this repository's Actions storage) and re
 
 ## Acceptance criteria
 
-**AC1: The totals come from one request.** Opening the view for `cli/cli` displays 12,823,331,523 bytes and 96 Caches, and exactly one request produces both figures.
+**AC1: The totals come from one request.** Given a cache-usage fixture reporting `active_caches_size_in_bytes` and `active_caches_count`, the view displays exactly those two values, and exactly one request produces both. **The assertion reads the fixture, never a constant.** An earlier form of this criterion hardcoded 12,823,331,523 bytes and 96 Caches as a golden, which live measurement has since moved to 10,587,236,096 and 83, and which would move again next week: `cli/cli`'s storage is not ours and does not hold still. What this criterion pins is that the view reports the endpoint's figures unaltered and computes neither ([PRD](../../PRD.md) on point-in-time counts).
 
-**AC2: An incomplete list is labelled.** Given a stub whose cache-usage reports 96 Caches while enumeration yields 40, the view labels the list incomplete and still shows 96 as the repository's Cache count.
+**AC2: An incomplete list is labelled.** Given a stub whose cache-usage reports N Caches while enumeration yields fewer, the view labels the list incomplete and still shows N as the repository's Cache count. N comes from the fixture.
 
 **AC3: The Artifact total is summed or labelled.** Any Artifact total the view presents is either summed from a complete enumeration or labelled an estimate. No total is extrapolated from a sample and presented plainly.
 
@@ -84,7 +92,7 @@ Answer one question (what is consuming this repository's Actions storage) and re
 
 **AC6: No row rounds to zero.** A 145,212-byte Artifact and a 302,460,229-byte Cache in the same list both render a non-zero size.
 
-**AC7: Expired Artifacts are tombstones and reclaim nothing.** In a 100-Artifact sample containing 10 with `expired: true`, exactly 10 rows render as tombstones, and the reclaimable total equals the summed `size_in_bytes` of the other 90 plus the Caches, unchanged whether the stub reports the expired Artifacts' size as their original value or as zero.
+**AC7: Expired Artifacts are tombstones and reclaim nothing.** Given a fixture of 581 Artifacts of which 279 carry `expired: true`, exactly 279 rows render as tombstones, and the reclaimable total equals the summed `size_in_bytes` of the other 302 plus the Caches, unchanged whether the stub reports the expired Artifacts' size as their original value or as zero. On the measured data that total is 47.68 MB of Artifacts against 10.59 GB of Caches, and a naive sum would report 15.55 GB of Artifacts, over 300× the truth. This is the criterion that catches it.
 
 **AC8: An expired Artifact confirms at zero bytes.** Confirming deletion of an expired Artifact shows a reclaim figure of zero bytes.
 
@@ -108,14 +116,20 @@ Answer one question (what is consuming this repository's Actions storage) and re
 
 ## Constraints
 
-Measured on `cli/cli`:
+Measured on `cli/cli`. These are point-in-time and drift ([PRD](../../PRD.md)). No test may hardcode one.
 
 | | Count | Storage |
 |---|---|---|
-| Caches | 96 | 12,823,331,523 bytes (12.8 GB), exact, one request |
-| Artifacts | 557 | ~80 MB, extrapolated from 14,521,232 bytes per 100 sampled, ~145 KB each |
+| Caches | 83 | 10,587,236,096 bytes (10.59 GB), exact, one request |
+| Artifacts, all | 581 | 15,548,177,058 bytes (15.55 GB), summed across 6 pages |
+| Artifacts, expired | 279 (48%) | 15.50 GB, reclaimable: **zero** |
+| Artifacts, live | 302 | **47.68 MB** |
 
-Caches outweigh Artifacts by ~160×. The storage story is Caches. Artifacts are a rounding error. The three largest Caches are near-duplicates burning ~302 MB apiece:
+**Read that table in the right order.** Artifacts hold more bytes than Caches. They also hold almost nothing worth deleting: 48% of them are tombstones, and those tombstones are 99.7% of the Artifact bytes. Against the 47.68 MB a person can actually reclaim from Artifacts, 10.59 GB of Caches is ~220×. The storage story is Caches, and the argument runs through **expiry**, never through size.
+
+Note what the earlier canon got right by luck. It claimed Caches beat Artifacts ~160× on the strength of a ~80 MB Artifact estimate that was wrong by ~194× and had the sign of the raw comparison backwards. The conclusion survived. The reasoning did not, and R3 is what caught it.
+
+The three largest Caches are near-duplicates burning ~302 MB apiece:
 
 ```
 setup-go-macOS-arm64-go-1.26.4-d79741d50   302,460,229
@@ -130,7 +144,7 @@ setup-go-macOS-arm64-go-1.26.5-20b85b5b8   302,421,029
 | Caches are deletable by key or by id | Measured | R16 chooses id |
 | A Cache is scoped to a repository **and a ref** | [CONTEXT.md](../../CONTEXT.md) | A key is not obviously unique. R16 and Open questions |
 | Artifacts expose `size_in_bytes`, `expired`, `expires_at`, `created_at` | Measured | R9, R10, R12 |
-| 10 of 100 sampled Artifacts were already expired | Measured | Tombstones are the common case, not an edge case |
+| **279 of 581 Artifacts are expired (48%)** | Measured across a full enumeration, not sampled | Tombstones are not the common case, they are nearly half the list, and they hold 15.50 GB of its 15.55 GB. An earlier 10-of-100 sample read this as 10% |
 | **Deleting an expired Artifact reclaims nothing** | Measured | R9–R11. The bytes are already gone and the record is a tombstone |
 | **An expired Artifact still reports its original `size_in_bytes`** | Measured, 30 of 30, none zero | R10. The number outlives the bytes, so a reclaimable total that sums naively is wrong by exactly the tombstones |
 | Artifacts auto-expire on a retention policy without user action | Measured | R12. The artifact half of this view is largely busywork. The cache half is where a real problem lives |
@@ -144,11 +158,11 @@ setup-go-macOS-arm64-go-1.26.5-20b85b5b8   302,421,029
 
 ## Open questions
 
-**UNKNOWN: is the per-repository cache size limit readable by a non-admin?** Displaying "12.8 GB / limit" would turn a number into a judgement, and R1's total is otherwise context-free. Do not invent the limit: if no endpoint reachable by a non-admin token returns it, the view shows the total alone.
+**UNKNOWN: is the per-repository cache size limit readable by a non-admin?** Displaying "10.59 GB / limit" would turn a number into a judgement, and R1's total is otherwise context-free. Do not invent the limit: if no endpoint reachable by a non-admin token returns it, the view shows the total alone.
 
 **UNKNOWN: does deleting by key remove every Cache sharing that key?** [CONTEXT.md](../../CONTEXT.md) defines a Cache as scoped to a repository *and a ref*, so one key may correspond to several Caches across refs. R16 targets the id precisely because the blast radius of a key-targeted delete is unmeasured. Measure before offering key-targeted deletion anywhere.
 
-**UNKNOWN: does the 1,000-result cap apply to Cache or Artifact listing?** [ADR-0005](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) measured it on Run listing under a filter. At 96 and 557 neither sample came near it. R2 makes the Cache list honest either way, but no equivalent oracle protects R3's Artifact total.
+**UNKNOWN: does the 1,000-result cap apply to Cache or Artifact listing?** [ADR-0005](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) measured it on Run listing under a filter. At 83 and 581 neither came near it, and the Artifact enumeration paginated to 6 pages without truncating. R2 makes the Cache list honest either way, but no equivalent oracle protects R3's Artifact total.
 
 **UNKNOWN: does `active_caches_size_in_bytes` reflect a deletion immediately?** R24 adjusts the total locally by the deleted rows' sizes. Whether a subsequent refresh agrees, or lags, is unverified. A total that jumps back up after a successful reclaim reads as a bug.
 
@@ -156,9 +170,11 @@ setup-go-macOS-arm64-go-1.26.5-20b85b5b8   302,421,029
 
 **UNKNOWN: do these endpoints support ETag revalidation?** [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)'s free 304s were measured against a Run listing. This view is opened and refreshed deliberately rather than polled, so nothing here depends on the answer.
 
-**Resolved: both, and the person chooses. The cross-repo rollup is the default.** "Which of my 163 repositories is hoarding Caches?" is the question this view exists to answer, and the per-repo view cannot answer it at all, so the rollup leads. It is affordable at one request per repository over the fan-out [ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md) already builds, and `active_caches_size_in_bytes` is exact and free per repository (PRD). `this-repo` stays available as a scope for the case where you are cleaning one repository deliberately. [settings](../settings/requirements.md) R19 owns the setting and defines what `this-repo` resolves to. Both code paths must exist, and every byte count must stay honest under either scope.
+**Resolved: both, and the person chooses. The cross-repo rollup is the default.** "Which of my 163 repositories is hoarding Caches?" is the question this view exists to answer, and the per-repo view cannot answer it at all, so the rollup leads. It is affordable at one request per repository over the fan-out [ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md) already builds, and `active_caches_size_in_bytes` is exact and free per repository (PRD). `this-repo` stays available as a scope for the case where you are cleaning one repository deliberately. [settings](../settings/requirements.md) R19 owns the setting and defines what `this-repo` resolves to.
 
-**Undecided: should multi-row deletion reuse a Purge's failure contract wholesale?** [purge](../purge/requirements.md) R18–R22 define 404-as-success, rate-limit-is-not-failure, and a 50-failure circuit breaker. R22 adopts the first. The other two are written for an operation lasting hours. 96 Caches is a minute's work, and whether the machinery is worth its weight here is unasked.
+**R0 now carries this into the requirements, which is where it was missing.** This resolution said "both code paths must exist" while R1 and the Purpose line specified one, describing a single repository's totals throughout. A decision recorded only in an open question is a decision an implementer reads last, and this one changes the shape of the view's top-level state. R0 is the normative form. Rows 5 and 20 below still read "the repository" and now mean each repository in scope.
+
+**Undecided: should multi-row deletion reuse a Purge's failure contract wholesale?** [purge](../purge/requirements.md) R18–R22 define 404-as-success, rate-limit-is-not-failure, and a 50-failure circuit breaker. R22 adopts the first. The other two are written for an operation lasting hours. 83 Caches is a minute's work, and whether the machinery is worth its weight here is unasked.
 
 ## Related
 

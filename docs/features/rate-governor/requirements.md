@@ -6,6 +6,8 @@
 
 The governor owns all write throughput and all Budget accounting: it reads the rate-limit headers that arrive free on every response, paces every write to what the account actually tolerates, and backs off before GitHub decides to stop us. It exists because the penalty for guessing wrong is a block on the user's account, not a retry.
 
+It is an `http.RoundTripper`, nested under [local-store](../local-store/requirements.md)'s and above the network ([ADR-0012](../../adr/0012-transport-chain-and-the-client-surface.md)). That is not an implementation detail. It is the only layer where the headers R5 needs still exist.
+
 ## Requirements
 
 ### Ownership
@@ -16,17 +18,19 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **R3.** The governor must be account-scoped and global, not per repository. The Budget is a property of the token, not of a repository, so a per-repository throttle would multiply its own rate by the number of repositories a Purge happens to span. One cross-repo Purge is one throttle. (This settles [purge](../purge/requirements.md) open question 7.)
 
-**R4.** The governor must pace writes but must not schedule reads. It publishes Budget state. The [polling-scheduler](../polling-scheduler/requirements.md) sets its own intervals from it. The division is deliberate: read frequency is a function of tiers and poll-set size that only the scheduler knows, while write throughput is a single global rate.
+**R4.** The governor must pace writes but must not schedule reads. It publishes the Budget Readout. The [polling-scheduler](../polling-scheduler/requirements.md) sets its own intervals from it. The division is deliberate: read frequency is a function of tiers and poll-set size that only the scheduler knows, while write throughput is a single global rate.
 
 ### Reading the Budget
 
-**R5.** The governor must read `x-ratelimit-remaining` and `x-ratelimit-reset` from every response it sees. They arrive on every response at no cost and are currently discarded. The entire Budget model is available for free and is simply not being picked up.
+**R5.** The governor must read `x-ratelimit-remaining` and `x-ratelimit-reset` at the **transport layer**, from every response returning from the network, and must not attempt to read them above go-gh's client. The governor is an `http.RoundTripper` nested inside [local-store](../local-store/requirements.md) R19's, per [ADR-0012](../../adr/0012-transport-chain-and-the-client-surface.md). This is not a preference. go-gh's `Get` and `Do` return an error alone and discard the `*http.Response`, so a governor sitting above the client sees no headers at all and this requirement is unimplementable there. At the transport layer the headers arrive on every response at no cost, and are currently discarded. The entire Budget model is available for free and is simply not being picked up.
+
+**R5a.** The governor must take its primary-limit accounting from the response headers and must **never** seed or correct it from `/rate_limit`. The two disagree. Measured: `/rate_limit`'s `core` bucket sat frozen at `used: 90` for minutes while the header counter on the same resource climbed 62 to 78, with near-identical reset times. It reads **higher** than the headers, so it is not a lagging snapshot that catches up, and R7 accounts `used`. Any code seeding that baseline from `/rate_limit` starts wrong by 12 to 36 and stays wrong. `/rate_limit` is free (three back-to-back calls did not advance it), which makes it tempting and does not make it right.
 
 **R6.** The governor must treat the headers as authoritative and its own projection as provisional. A token shared with CI has less headroom than the limit suggests, and the account's consumption includes traffic this tool never issued. So a local tally can only ever be a lower bound between responses.
 
 **R7.** The governor must account a conditional request returning 304 as costing zero primary allowance and a 200 as costing one. Measured by interleaving unconditional and conditional requests against one endpoint: `used` advanced by exactly one per round (120 → 121 → 122), attributable entirely to the 200.
 
-**R8.** The governor must publish, to any component that asks: remaining Budget, the reset time, whether consumption is under pressure, and whether it is exhausted. [live-run-feed](../live-run-feed/requirements.md) R30 and [polling-scheduler](../polling-scheduler/requirements.md) R16 consume this to say "resumes 14:32" rather than going quietly stale.
+**R8.** The governor must publish a **Budget Readout** ([CONTEXT.md](../../CONTEXT.md)) to any component that asks: remaining allowance, the reset time, whether consumption is under pressure, and whether it is exhausted. The Readout is an observation and the Budget is a policy input, and the two must not be conflated in code any more than in prose. [live-run-feed](../live-run-feed/requirements.md) R30 and [polling-scheduler](../polling-scheduler/requirements.md) R16 consume the Readout to say "resumes 14:32" rather than going quietly stale.
 
 **R9.** The governor must derive the resumption time from `x-ratelimit-reset` where the response supplies it, and from `Retry-After` where a rate-limit response supplies that. Where neither is available it must report exhaustion without a time rather than inventing one.
 
@@ -34,7 +38,19 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **R10.** The governor must start writes at the documented-safe rate of 1.0 per second and ramp upward only while responses stay clean. The ramp is **additive increase, multiplicative decrease**: add 0.25/sec after every 20 consecutive clean responses, and halve the current rate on any rate-limit response, re-ramping from the halved rate. Open question 5 records why AIMD and not something else.
 
-**R11.** The governor must ramp toward the points ceiling (~180 writes/min, ~3/sec, from DELETE at 5 points against ~900 points/min) and must stop at **2.5/sec**, retaining that headroom rather than converging on the ceiling. It must not fall below a **floor of 0.5/sec**, so that a run of backoffs slows the writes rather than stalling them. The ~3/sec ceiling is derived from the more permissive of two published limits that disagree by 3×. Treating it as the whole truth is what a fixed-rate design would do, and the reason to reject one.
+**R11.** The governor's write ceiling must be **dynamic**, computed against the secondary pool that reads and writes actually share:
+
+```text
+ceiling (deletes/min) = (900 - observed read points per minute) / 5
+```
+
+floored at **0.5/sec** and capped at **2.5/sec**. Note the unit: the expression yields deletes per **minute**. Divide by 60 for the per-second rate the ramp carries, or read it directly as `(900 - reads) / 300` deletes per second.
+
+The reads figure is not an estimate. R1 already makes the governor account every request the tool issues, scheduler polls included, so it already holds the number. With the Feed at [polling-scheduler](../polling-scheduler/requirements.md) R11's 312 points/min the ceiling is ~117 deletes/min, which is **~1.96/sec**. With no reads in flight it is 180/min, and R11's 2.5/sec cap binds first.
+
+The cap and the floor are unchanged and are the ramp's own limits rather than the pool's. 2.5/sec holds ~17% back from the points model's ~180/min. The floor keeps a run of backoffs slowing the writes rather than stalling them.
+
+**A static ceiling was wrong, and by enough to matter.** At 2.5/sec a Purge spends 750 points/min (150 deletes x 5). The Feed spends 312. Their sum is 1,062 against a pool of ~900, and [purge](../purge/requirements.md) R14 **requires** the Feed to keep updating while a Purge runs, so that collision is the normal case and not an edge one. R10's additive increase crosses the wall about four steps in, at 2.0/sec. The published points model is a budget for the whole token, not a private allowance for deletion, and a ceiling that ignored the reads was spending the same points twice.
 
 **R12.** The governor must back off hard on any 403, any 429, and any `Retry-After`, and must honour a `Retry-After` interval where one is supplied.
 
@@ -44,7 +60,7 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **R15.** The governor must adapt to the account it is running against rather than to a compiled constant. Enterprise Cloud has 3× the primary allowance, GitHub Apps scale differently, and a token shared with CI has less than it appears. Any fixed number is wrong for somebody, and the governor is the only party in a position to observe which.
 
-**R16.** The governor must not assume the point cost of any write it has not measured. Only DELETE has been measured, at 5 points. Where a cost is unknown the governor must pace conservatively rather than extrapolate. See open question 3.
+**R16.** The governor must not assume the point cost of any write the points model does not document. **Only DELETE has a documented cost, at 5 points.** Nothing here is measured, and it cannot be: measuring a point cost means tripping the secondary limit to see where it lands, which PRD risk R4 permanently forbids. Every points figure in this document rests on GitHub's **published** model, re-verified as current (~900 points/min, DELETE at 5 points, still live). Where a cost is undocumented the governor must pace conservatively rather than extrapolate. See open question 3.
 
 ### What is not configurable
 
@@ -52,15 +68,19 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **R18.** Requests-per-second, concurrency and backoff parameters must likewise not be exposed. The single permitted user-facing knob is intent: what share of the Budget gh-runs may spend. That is a question answerable from the user's own context, unlike one that requires the points model, their token tier and their repo count.
 
-**R19.** The governor must honour the intent-level Budget share over reads alone, and must never let it throttle a Purge. The Budget is a share of the **primary** limit, which is observable and is what polling spends. A Purge's throughput is bound by the **secondary** limit, which exposes no counter and is a different pool. The two are not the same currency, so a share of one says nothing about the other. A Purge running under a 25% Budget deletes at the governor's full ramped rate. See [ADR-0007](../../adr/0007-adaptive-delete-throttle.md), which settles this on measurement.
+**R19.** The governor must honour the intent-level Budget share over reads alone, and must never let it throttle a Purge. The Budget is a share of the **primary** limit, which is observable and is what polling spends. A Purge's throughput is bound by the **secondary** limit, which exposes no counter of its own. A share of the primary limit says nothing about the secondary one, so a Purge running under a 25% Budget deletes at the governor's full ramped rate.
+
+**This is independence on the Budget, not independence outright.** Polling and purging do share the secondary pool, which is exactly what R11's dynamic ceiling exists to arbitrate. The two mechanisms answer different questions and must not be collapsed into one: the Budget is a policy the user sets over their primary allowance, while the ceiling is an arithmetic fact about a secondary pool nobody can read. See [ADR-0007](../../adr/0007-adaptive-delete-throttle.md).
 
 ### Delivery and seams
 
-**R20.** The governor must pace a Purge of 18,260 Runs to completion without being rate limited and without manual babysitting. At the prose-advised rate that is ~5 hours. At the points ceiling it is ~100 minutes. Adaptive lands between and self-tunes.
+**R20.** The governor must pace a Purge of 18,258 Runs to completion without being rate limited and without manual babysitting. Stated against the rates this governor can actually reach: **~2 hours** at R11's 2.5/sec cap (150/min), **~10 hours** at its 0.5/sec floor (30/min), and **~155 minutes** in the normal case, where the Feed is running and R11's dynamic ceiling settles near 1.96/sec. Adaptive lands inside that band and self-tunes.
+
+The published-limit band of ~100 minutes to ~5 hours is a different claim about different numbers, and it appears in this document's Constraints table where it belongs. The governor reaches neither end of it: the points model's ~180/min is above R11's cap, and the prose's ~60/min is above R11's floor.
 
 **R21.** All of the governor's timing (the inter-write interval, the ramp's dwell, every backoff and every reset wait) must come from an injected clock. This is the highest-value target for that seam in the whole project: ramp and backoff logic is pure timing, and a test that sleeps through it is a test nobody runs.
 
-**R22.** Tests of the ramp and backoff must be deterministic and instant. A test of R20's 18,260-Run Purge must complete in milliseconds of real time while virtual time advances across hours, and no test may sleep through a real interval.
+**R22.** Tests of the ramp and backoff must be deterministic and instant. A test of R20's 18,258-Run Purge must complete in milliseconds of real time while virtual time advances across hours, and no test may sleep through a real interval.
 
 **R23.** The governor must be exercisable end-to-end against recorded HTTP fixtures, with no live network, including recorded 403, 429 and `Retry-After` responses and the interleaved 200/304 measurement from [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md). Cassettes replay true payloads, which is what catches the API drifting. A hand-written fake would encode our beliefs about rate limiting and stay green while reality moved. And this API has real surprises.
 
@@ -68,9 +88,11 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **AC1: Cold start rate.** From cold, the first write is issued at ~1/second. The interval is measured on the injected clock and no test sleeps.
 
-**AC2: The AIMD ramp.** Replayed against a cassette and the injected clock, with no test sleeping. 20 consecutive clean responses step the rate from 1.0/sec to 1.25/sec, and 19 do not. A 403 arriving mid-stream halves the current rate on the spot, and the ramp restarts its count from the halved rate. Across the whole replay the rate never exceeds the 2.5/sec ceiling and never falls below the 0.5/sec floor, and no 60s window of virtual time reaches the ~180 points ceiling.
+**AC2: The AIMD ramp.** Replayed against a cassette and the injected clock, with no test sleeping. 20 consecutive clean responses step the rate from 1.0/sec to 1.25/sec, and 19 do not. A 403 arriving mid-stream halves the current rate on the spot, and the ramp restarts its count from the halved rate. Across the whole replay the rate never exceeds R11's 2.5/sec cap and never falls below its 0.5/sec floor. **No 60s window of virtual time spends more than ~900 points in total, counting reads at 1 point and DELETEs at 5.** That total is the claim worth checking. The old form of this criterion asserted the rate stayed under "the ~180 points ceiling", which was wrong twice over: 180 is writes per minute rather than points, and R11's cap already holds writes at 150/min, so nothing could ever have failed it.
 
-**AC3: Purge at reference scale.** A cassette of 18,260 successful DELETEs completes in milliseconds of real time, advancing virtual time across the run. No 60s window of virtual time exceeds the ceiling.
+**AC2a: The ceiling tracks the reads.** Replayed with the scheduler polling 26 repositories at 5s (312 points/min), the ramp stops at ~1.96/sec rather than at 2.5/sec, and no 60s window exceeds ~900 total points. Replayed with the same cassette and no reads in flight, the same ramp reaches R11's 2.5/sec cap and stops there. The observed ceiling differs between the two runs, and the governor is given no configuration to tell them apart.
+
+**AC3: Purge at reference scale.** A cassette of 18,258 successful DELETEs completes in milliseconds of real time, advancing virtual time across the run. No 60s window of virtual time spends more than ~900 points in total, and at no instant does the issue rate exceed R11's dynamic ceiling for the reads observed in that window.
 
 **AC4: Backoff on 429.** Given a 429 with `Retry-After: 60`, no write is issued until virtual time has advanced 60s, the affected Run is re-attempted, and the operation's failure count remains 0.
 
@@ -86,7 +108,9 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **AC10: Exhaustion without a time.** Given exhaustion with neither `x-ratelimit-reset` nor `Retry-After`, the governor publishes exhaustion with no time. It does not synthesise one.
 
-**AC11: Pressure gates the readout.** With consumption nominal, the governor reports no pressure and no Budget readout is rendered anywhere. Below the pressure threshold, it reports pressure.
+**AC11: Pressure gates the Readout.** With consumption nominal, the governor reports no pressure and no Budget Readout is rendered anywhere. Below the pressure threshold, it reports pressure.
+
+**AC11a: `/rate_limit` is never the source.** Across every replay in this suite, the governor issues zero requests to `/rate_limit`, and its published primary accounting is reproducible from the response headers alone. Given a cassette in which `/rate_limit` reports `used: 90` while the headers report `used: 62` climbing to 78, the Readout follows the headers (R5a).
 
 **AC12: One global throttle.** A Purge spanning 3 repositories issues writes at the same aggregate rate as a Purge of the same size confined to 1. The rate does not scale with repository count.
 
@@ -98,26 +122,34 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **GitHub gives two answers for how fast you may write, and they disagree by 3×:**
 
-| Source | Rule | Implied ceiling | An 18,260-Run Purge |
+| Source | Rule | Implied ceiling | An 18,258-Run Purge |
 |---|---|---|---|
 | Points model | DELETE costs 5 points against ~900 points/min | ~180/min | ~100 minutes |
 | Written guidance | wait at least one second between writes | ~60/min | ~5 hours |
 
+**Both rows are documented rather than measured**, and the distinction is load-bearing. Neither number came from an experiment, because establishing a point cost by observation means driving the account into the secondary limit to find its edge, which PRD risk R4 forbids permanently. They are GitHub's published model, re-verified as current: ~900 points/min, DELETE at 5 points, still live. The word "measured" was applied to this table in error and is corrected throughout.
+
+**The band in the last column is the published one, and this governor reaches neither end of it.** R11's cap holds writes at 150/min against the model's 180, and R11's floor sits at 30/min against the prose's 60. R20 states the reachable band. Where a document means these two published limits and their disagreement, it must say so.
+
 That disagreement is the entire reason this component is adaptive rather than a constant ([ADR-0007](../../adr/0007-adaptive-delete-throttle.md)). Neither number can be dismissed: the points model is GitHub's own arithmetic, and the prose is GitHub's own advice.
+
+**Reads and writes spend the same ~900 points/min.** GET costs 1 point ([polling-scheduler](../polling-scheduler/requirements.md) R11), DELETE costs 5, and the pool is one pool. A Feed at 312 points/min plus a Purge at R11's 2.5/sec cap (750 points/min) totals 1,062 against ~900, and [purge](../purge/requirements.md) R14 requires the Feed to keep running throughout. That is why R11's ceiling is dynamic. The Budget's independence from a Purge (R19) is a fact about the **primary** limit and has never been a claim about this pool.
 
 **The penalty for being wrong is asymmetric.** Too slow costs the user time. Too fast costs them a block on their account. That asymmetry is why R10 starts at the documented-safe rate and ramps, rather than starting at the ceiling and backing off.
 
-**`x-ratelimit-remaining` and `x-ratelimit-reset` arrive on every response at no cost**, and are currently discarded. The Budget model is free.
+**`x-ratelimit-remaining` and `x-ratelimit-reset` arrive on every response at no cost**, and are currently discarded. The Budget model is free. They are reachable only below go-gh's client, which returns an error and drops the response ([ADR-0012](../../adr/0012-transport-chain-and-the-client-surface.md)). R5 is a requirement on a RoundTripper, not on a caller.
+
+**`/rate_limit` disagrees with the headers and reads high.** Measured: `core` frozen at `used: 90` for minutes while the header counter on the same resource climbed 62 to 78, resets near-identical. A frozen number that reads **above** the truth is not a lagging snapshot, and R7 accounts `used`, so seeding from it starts the baseline wrong by 12 to 36. `/rate_limit` is free (three back-to-back calls did not advance it), which is what makes R5a's prohibition worth writing down rather than obvious.
 
 **A 304 costs zero primary allowance. A 200 costs one.** Measured by interleaving: `used` 120 → 121 → 122, the increment belonging entirely to the 200 ([ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)). We assume conservatively that 304s do count against the **secondary** limit (PRD risk R4).
 
-**Only DELETE's point cost has been measured.** Cancel, force-cancel, re-run and Dispatch have not.
+**Only DELETE's point cost is documented.** Cancel, force-cancel, re-run and Dispatch are not. None of the four can be measured either, for R16's reason.
 
 **Enterprise Cloud has 3× the primary allowance**, GitHub Apps scale differently, and a token shared with CI has less headroom than its limit suggests. There is no fixed number that is right for every account.
 
 **v1 chose `sleep 0.25`**, ~4 writes/sec, faster than *both* published numbers. It works on small repositories and would be blocked on a large one. That is the failure mode this component replaces.
 
-**A Purge cannot be a modal**, because at reference scale it runs for 100 minutes to 5 hours. The governor's pacing is what makes that duration a background fact rather than a hostage situation.
+**A Purge cannot be a modal**, because at reference scale this governor runs it for ~155 minutes in the normal case, and for as long as ~10 hours at R11's floor (R20). The governor's pacing is what makes that duration a background fact rather than a hostage situation.
 
 ## Open questions
 
@@ -129,13 +161,25 @@ That disagreement is the entire reason this component is adaptive rather than a 
 
     **`x-ratelimit-remaining` is not the discriminator, and the temptation to use it is a trap.** Those headers describe the **primary** limit only (PRD). A secondary-limit 403 can arrive with a completely healthy primary remaining, exactly as the authorization 403 above did. The two are indistinguishable on that header.
 
-    **The rule: a 403 or 429 is an authorization outcome only when it matches the measured authorization shape.** Everything else is rate limiting. `retry-after` present means rate limiting outright. This is asymmetric on purpose. Misreading a rate limit as authorization keeps issuing and risks the account block this component exists to avoid, while misreading authorization as a rate limit costs one backoff before the retry fails the same way and resolves. Default to backing off. Verify the shape against a live secondary limit only if one is ever hit in the wild, never by provoking one.
+    **The rule: a 403 or 429 is an authorization outcome only when it matches the measured authorization shape.** Everything else is rate limiting. `retry-after` present means rate limiting outright. This is asymmetric on purpose: misreading a rate limit as authorization keeps issuing and risks the account block this component exists to avoid. Default to backing off. Verify the shape against a live secondary limit only if one is ever hit in the wild, never by provoking one.
 
-2. **Whether the secondary limit is observable at all is UNKNOWN, and much of the design depends on the answer.** The interleaved measurement behind R7 tracked *primary* consumption, and nothing in the canon establishes that any header reports remaining *secondary* points. Nor does it establish, strictly, which limit `x-ratelimit-remaining` describes when both are in play. If none does, then all secondary accounting (including every number in [polling-scheduler](../polling-scheduler/requirements.md) R11) is a projection from our own issued requests and the points model, computed by a client that cannot see the other consumers of the same token, and the only feedback signal is the 403 or 429 that means we already overshot. That is precisely why R11's headroom must be real and R12's backoff must be hard. Verify what a rate-limit response carries.
+    **The rule needs a bound, because without one the safe direction is an infinite loop.** An earlier wording of this question claimed that misreading authorization as a rate limit "costs one backoff before the retry fails the same way and resolves". That was false, and [repo-discovery](../repo-discovery/requirements.md) open question 2 said so correctly: it "stalls a Purge behind a backoff that will never clear". Trace it. R12 backs off on any 403. R13 forbids counting a rate limit as a failure, so [purge](../purge/requirements.md) R21's circuit breaker never advances. R11's floor keeps issuing at 0.5/sec forever. Nothing resolves, because an authorization 403 has nothing to wait for. And [purge](../purge/requirements.md) R13 makes this the **expected** case rather than a corner: a 403 despite `push: true` is what a fine-grained PAT does. The safe-by-default rule, unbounded, hammers GitHub with 403s at 0.5/sec indefinitely, which is the account block this component exists to prevent.
 
-3. **The point cost of cancel, force-cancel, re-run and Dispatch is UNKNOWN.** Only DELETE was measured, at 5 points. R16 requires conservative pacing in the absence of measurement, but "conservative" has no number until someone measures. Raised by [run-lifecycle](../run-lifecycle/requirements.md) open question 3 and owned here.
+    **The bound: after three consecutive rate-limit classifications on the same Run, reclassify as an authorization failure.** The Run is then [purge](../purge/requirements.md) R20's to skip and record, the Purge continues, and the counter resets on any clean response.
 
-4. **Resolved: the ramp stops at 2.5/sec against a measured ~3/sec, and never drops below 0.5/sec.** R11 required headroom and did not size it. Open question 5's ramp sizes it: 2.5/sec is 150/min against the ~180/min the points model allows, so ~17% of the ceiling is held back. The floor of 0.5/sec is the other end of the same decision, because a multiplicative decrease with nothing under it converges on a stall. Neither number is load-bearing on its own, and that is the point of choosing a control law over a constant: AIMD approaches the account's real tolerance from below, so 2.5/sec caps the search rather than naming a target to converge on. R10 and R11 carry the numbers. AC2 verifies them.
+    **Three, because three is what backoff has to give.** R10 halves on each rate-limit response, so three consecutive halvings carry the rate from R11's cap to its floor (2.5 to 1.25 to 0.625, then floored at 0.5). A fourth backoff cannot slow anything further, so past that point the classification is buying nothing at all. A genuine secondary limit clears within the interval GitHub supplies, and a genuine authorization 403 never clears. When three backoffs and their waits have not changed the answer, the remaining explanation is authorization. The asymmetry survives: three wasted backoffs on a real rate limit is a cheap mistake, and it is still the direction we default to.
+
+2. **Resolved: the secondary limit is not observable, and the design already assumed so everywhere else.** This question called it UNKNOWN while three other places in the canon treated it as settled. The [PRD](../../PRD.md) carries it as a constraint that shaped a decision. [ADR-0007](../../adr/0007-adaptive-delete-throttle.md) states the measurement outright: responses carry `x-ratelimit-limit`, `-remaining`, `-used`, `-reset` and `-resource` for the **primary** limit only, and `/rate_limit` exposes `core`, `graphql`, `search`, `code_search`, `audit_log`, `scim` and friends, and **none of them describe the secondary limit**. R19 and open question 7 both rest on that answer. The question was the outlier, not the canon.
+
+    **What follows is exactly what the design already does.** All secondary accounting (R11's ceiling included, and every number in [polling-scheduler](../polling-scheduler/requirements.md) R11) is a projection from our own issued requests against the published points model, computed by a client that cannot see the other consumers of the same token. The only feedback is the 403 or 429 that means we already overshot. That is why R11's headroom must be real, why R12's backoff must be hard, and why open question 5 chose a control law rather than a constant.
+
+    **One narrow thing stays genuinely unverified**, and it is not this question: what a live secondary-limit response actually carries. Open question 1 covers it, resolves the discrimination rule by body shape rather than by header, and declines to provoke one.
+
+3. **The point cost of cancel, force-cancel, re-run and Dispatch is UNKNOWN.** Only DELETE has a **documented** cost, at 5 points, and nothing here was ever measured: a point cost is establishable only by tripping the secondary limit, which PRD risk R4 forbids permanently. So this question cannot be closed by measurement, and R16 requires conservative pacing in its absence. What would close it is documentation: if GitHub publishes a cost for the other four, that is the answer. Until then "conservative" has no number. Raised by [run-lifecycle](../run-lifecycle/requirements.md) open question 3 and owned here.
+
+4. **Resolved: the ramp caps at 2.5/sec against a documented ~3/sec, and never drops below 0.5/sec.** R11 required headroom and did not size it. Open question 5's ramp sizes it: 2.5/sec is 150/min against the ~180/min the published points model allows, so ~17% is held back. The floor of 0.5/sec is the other end of the same decision, because a multiplicative decrease with nothing under it converges on a stall. Neither number is load-bearing on its own, and that is the point of choosing a control law over a constant: AIMD approaches the account's real tolerance from below, so 2.5/sec caps the search rather than naming a target to converge on. R10 and R11 carry the numbers. AC2 verifies them.
+
+    Two corrections since. The ~3/sec is **documented, never measured**, and calling it measured was wrong: it comes from the published points model, and measuring it would mean tripping the limit PRD risk R4 forbids. And 2.5/sec is now a **cap on a dynamic ceiling** rather than the ceiling itself, because reads and writes share the secondary pool and a Purge runs while the Feed polls. R11 carries the arithmetic.
 
 5. **Resolved: the ramp is AIMD, additive increase and multiplicative decrease.** Start at 1.0 deletes/sec. Add 0.25/sec after every 20 consecutive clean responses. Halve the current rate on a rate-limit response and re-ramp from there. Ceiling 2.5/sec, floor 0.5/sec.
 
@@ -152,10 +196,11 @@ That disagreement is the entire reason this component is adaptive rather than a 
 ## Related
 
 - [ADR-0007: Adaptive delete throttle, not a fixed rate](../../adr/0007-adaptive-delete-throttle.md). R10, R11, R12, R17, R21.
+- [ADR-0012: The transport chain, and what ghclient may expose](../../adr/0012-transport-chain-and-the-client-surface.md). Why R5 is a RoundTripper's requirement and not a caller's, and where this component sits in the chain.
 - [ADR-0004: Liveness via conditional ETag polling](../../adr/0004-conditional-polling-for-liveness.md). R7's measurement. Why the secondary limit binds.
 - [ADR-0006: Purges are stateless, the filter is the job state](../../adr/0006-stateless-bulk-jobs.md). R20's duration is survivable because a resume is free.
 - [purge](../purge/requirements.md). R2 paces its R17. R13 implements its R19. R3 settles its open question 7.
-- [polling-scheduler](../polling-scheduler/requirements.md). Consumes R8's Budget state. R4 draws the line between them.
+- [polling-scheduler](../polling-scheduler/requirements.md). Consumes R8's Budget Readout. R4 draws the line between them, and R11 prices its reads into the write ceiling.
 - [repo-discovery](../repo-discovery/requirements.md). Its probe burst is accounted here. Shares open question 1.
 - [run-lifecycle](../run-lifecycle/requirements.md). Paced by R2. Owns open question 3's origin.
 - [cli-surface](../cli-surface/requirements.md). Its R14 throttle is this component.

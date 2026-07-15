@@ -62,5 +62,9 @@ Recovering repository storage by deleting Caches and Artifacts.
 _Avoid_: Cleanup, garbage collection
 
 **Budget**:
-The share of a person's primary GitHub API rate allowance that this tool is permitted to spend.
-_Avoid_: Quota, rate limit (the rate limit is GitHub's. The Budget is the portion we are allowed.)
+The share of a person's primary GitHub API rate allowance that this tool is permitted to spend. A policy the person sets, and an **input**.
+_Avoid_: Quota, rate limit (the rate limit is GitHub's. The Budget is the portion we are allowed.), Budget state (see below)
+
+**Budget Readout**:
+What the rate governor publishes about the primary limit at a moment: remaining allowance, reset time, whether consumption is under pressure, and whether it is exhausted. An **observation**, and never a policy.
+_Avoid_: Budget state (it names the Readout with the Budget's word, and the two are opposites: one is what we are allowed to spend, the other is what is left. Code that conflates them will eventually throttle on the wrong number.)

@@ -51,9 +51,11 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 **R12.** Poll interval must not be exposed as a user setting, by flag, config key or keybinding. Choosing it correctly requires the token tier, the repo count and the points model. The scheduler has all three and the user has none. The only knob that may exist is intent (what share of the Budget gh-runs may spend), which is a question answerable from the user's own context.
 
-**R13.** The scheduler must scale against the Budget actually remaining, including consumption it did not itself issue. A Purge's crawl, a Purge's deletes, and any other consumer of the same token draw on the same account-scoped allowance, so the scheduler must take its figure from the [rate-governor](../rate-governor/requirements.md) rather than from a tally of its own requests.
+**R13.** The scheduler must scale against the allowance actually remaining, including consumption it did not itself issue, taking its figure from the [rate-governor](../rate-governor/requirements.md)'s Budget Readout rather than from a tally of its own requests. A Purge's crawl and any other consumer of the same token spend the same **primary** allowance this scheduler does.
 
-**R14.** The scheduler must not parse rate-limit headers, maintain its own Budget accounting, or throttle writes. It consumes Budget state from the rate-governor, which owns all three.
+**A Purge's deletes are the exception, and the distinction is not a quibble.** They spend the **secondary** pool, and the Budget is a share of the primary limit ([rate-governor](../rate-governor/requirements.md) R19), so a Purge's writes never draw down the allowance R15 demotes against. Reads and writes do still share the secondary pool, which is what rate-governor R11's dynamic ceiling arbitrates, and it arbitrates it by slowing the **Purge** against this scheduler's observed read rate rather than the reverse. So R13 is a requirement about primary consumption. This scheduler never demotes because a Purge is deleting.
+
+**R14.** The scheduler must not parse rate-limit headers, maintain its own Budget accounting, or throttle writes. It consumes the **Budget Readout** ([CONTEXT.md](../../CONTEXT.md)) from the rate-governor, which owns all three. The Readout is a reading of what is left. The Budget is the share the user permitted. The scheduler consumes the first and honours the second, and must not confuse them.
 
 **R15.** Under Budget pressure the scheduler must demote tiers automatically, before anything breaks, rather than continuing until it is refused. Demotion must sacrifice the least visible work first: the slow background tier degrades before the on-screen medium tier, which degrades before the fast tier tracking a live Run.
 
@@ -115,6 +117,8 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 **The binding constraint is therefore the secondary limit, not the primary one**: ~900 points/min, GET = 1 point. This is why the scheduler tiers and auto-scales rather than exposing an interval, and it is why R11's table is the shape of this feature.
 
+**That pool is shared with deletion, and this scheduler wins.** A Purge spends 5 points per DELETE from the same ~900, so R11's 312 points/min is not free of a Purge's throughput, it is subtracted from it. [rate-governor](../rate-governor/requirements.md) R11 makes the write ceiling a function of the reads this scheduler is observed to issue, `(900 - reads) / 5` deletes per minute, which is ~117/min (~1.96/sec) at 312. The Feed's liveness is not negotiated down to let a Purge finish faster.
+
 **We assume 304s do count against the secondary limit** (PRD risk R4). The primary exemption does not imply a secondary one, and confirming it would mean deliberately tripping a limit and risking a block on the user's account. Every number in R11 is computed on the pessimistic assumption.
 
 **There is no cross-repository Run query.** Not in REST, not in GraphQL, not in `search` ([ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md)). Liveness across N repositories is N requests per round, which is why the poll set's size is an input to the interval.
@@ -151,10 +155,10 @@ The scheduler decides which repositories are revalidated and how often, so that 
 - [ADR-0003: Multi-repo Feed via client-side fan-out](../../adr/0003-multi-repo-via-client-side-fanout.md). R17's fan-out.
 - [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md). What is being polled.
 - [ADR-0007: Adaptive delete throttle, not a fixed rate](../../adr/0007-adaptive-delete-throttle.md). R12's intent-not-mechanism principle.
-- [rate-governor](../rate-governor/requirements.md) owns the Budget state R13–R16 consume.
+- [rate-governor](../rate-governor/requirements.md) owns the Budget Readout R13–R16 consume, and its R11 prices this scheduler's reads into the Purge's write ceiling.
 - [repo-discovery](../repo-discovery/requirements.md) supplies R2's poll set.
 - [local-store](../local-store/requirements.md) supplies R1's ETags, and its R19 owns the transport PRD risk R2 resolved into.
 - [live-run-feed](../live-run-feed/requirements.md): R8 meets its R27 and R16 meets its R30.
 - [run-detail](../run-detail/requirements.md) consumes R9's debounce and R5's fast tier.
-- [purge](../purge/requirements.md): open question 5.
+- [purge](../purge/requirements.md): its open question 8, which this feature's open question 5 owns. Purge's open question 5 is the `rel="next"` terminal signal and is a different question entirely.
 - [settings](../settings/requirements.md) owns the intent-level share R12 permits.

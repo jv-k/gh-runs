@@ -12,7 +12,7 @@ Interrupt someone, through their operating system, when something has happened t
 
 **R1.** Derive every notification from a Feed state transition. Notifications must issue no request of their own, spend no Budget, and never fetch to enrich a notification's contents.
 
-**R2.** Establish a baseline at session start. The first observation of a repository's Runs in a session (whether from persisted state, a revalidation or a full fetch) must produce no notifications, and only transitions observed after that baseline may fire. [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md) requires ETags to persist across sessions, so a cold start routinely reveals everything that changed while the tool was closed. Without a baseline, launching in the morning produces a night's worth of toasts from a repository holding 28,707 Runs.
+**R2.** Establish a baseline at session start. The first observation of a repository's Runs in a session (whether from persisted state, a revalidation or a full fetch) must produce no notifications, and only transitions observed after that baseline may fire. [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md) requires ETags to persist across sessions, so a cold start routinely reveals everything that changed while the tool was closed. Without a baseline, launching in the morning produces a night's worth of toasts from a repository holding ~28,700 Runs.
 
 **R3.** Fire at most one notification per transition, however many enabled events match it. A Run you triggered failing in a repository you can push to matches two events and is one thing that happened.
 
@@ -84,7 +84,7 @@ Interrupt someone, through their operating system, when something has happened t
 | A 304 costs zero primary rate limit, and the Feed already polls ~26 repositories | [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md) | R1 is free. Notifications add no polling and no Budget |
 | Dispatch returns 204 with no Run ID. Correlation is best-effort and racy by construction | PRD, [workflow-dispatch](../workflow-dispatch/requirements.md) R16–R19 | R6. The Dispatch event is only as reliable as a correlation the canon labels *probable* |
 | Reference scale: 163 repositories, ~26 with Runs, push access to 159 | PRD, decided design | R9. "Any failure you can push to" is a dozen a day for branches that are not yours |
-| The reference repository holds 28,707 Runs | PRD | R2's baseline is not a theoretical concern |
+| The reference repository holds ~28,700 Runs | PRD | R2's baseline is not a theoretical concern |
 | Repo permissions ride along free on `/user/repos` | PRD | R4's push-gated event costs no request to evaluate |
 | Settings are intent-level only | PRD scope, [ADR-0007](../../adr/0007-adaptive-delete-throttle.md) | R10 |
 | Three delivery backends (macOS, Linux, Windows) | | R11–R13 are a real subsystem. The platform surface is this feature's whole cost, and it buys nothing on the API side |
@@ -99,7 +99,7 @@ Interrupt someone, through their operating system, when something has happened t
 
 **UNKNOWN: does a re-run re-attribute a Run's actor?** Re-running adds an Attempt to the Run that already exists ([CONTEXT.md](../../CONTEXT.md)), so a Run you triggered and someone else re-ran is still one Run. Whether its actor still names you decides whether their failure interrupts you.
 
-**Undecided: do `timed_out` and `stale` count as failure?** R4 reads "failed" strictly as Conclusion `failure`. Someone asking to be told when their Run fails probably means a timeout too, while `cancelled` plainly must not fire. They cancelled it. The Conclusion enum holds eight values and R4 currently wires one.
+**Undecided: do `timed_out` and `stale` count as failure?** R4 reads "failed" strictly as Conclusion `failure`. Someone asking to be told when their Run fails probably means a timeout too, while `cancelled` plainly must not fire. They cancelled it. The Conclusion enum holds **nine** values ([CONTEXT.md](../../CONTEXT.md)) and R4 currently wires one. The count was eight here until `startup_failure` was measured onto the Conclusion side of the boundary and CONTEXT.md was corrected, which [cli-surface](../cli-surface/requirements.md) records: gh's 15-value `-s` enum is exactly six Statuses plus nine Conclusions, and the arithmetic closes with nothing left over. `startup_failure` is a ninth candidate for this question, and a strong one.
 
 **Undecided: should the Dispatch event exclude Runs blocked on a human?** Status reaching `completed` is the only signal the event has, and a `completed` Run can be one that stopped awaiting approval rather than one that finished. Reading Conclusion `action_required` as "not actually done" would fix it, at the cost of the Dispatch event knowing about approvals.
 

@@ -4,11 +4,13 @@
 
 ## Purpose
 
-List a repository's Workflows with their state, and enable or disable them. Because Runs outlive the Workflow that produced them, this surface is also the only honest source of Orphaned Runs, the cruft a cleanup tool exists to find.
+List Workflows with their state, across every repository or the one you are in, and enable or disable them. Because Runs outlive the Workflow that produced them, this surface is also the only honest source of Orphaned Runs, the cruft a cleanup tool exists to find.
 
 ## Requirements
 
-**R1.** List every Workflow in a repository, showing at minimum its name, its `path`, and its state.
+**R0.** This surface MUST operate under **either scope**, `all-repos` or `this-repo`, and MUST default to `all-repos` ([settings](../settings/requirements.md) R19). Both code paths must exist and both must be correct. `all-repos` is one request per repository over [ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md)'s existing fan-out, and it is what a tool whose thesis is cross-repo should open with. `this-repo` answers "which Workflows are disabled in the repo I am in", which a rollup answers badly. Every requirement below reads "a repository" as **each repository in scope**, and R1's list MUST carry the owning repository on every row under `all-repos`, exactly as [live-run-feed](../live-run-feed/requirements.md) R3 requires of the Feed and for the same reason.
+
+**R1.** List every Workflow in each repository in scope, showing at minimum its name, its `path`, and its state.
 
 **R2.** Display state using the API's own values and keep the three disabled states distinct from one another. `disabled_manually`, `disabled_inactivity` and `disabled_fork` have different causes and different remedies. Collapsing them to "disabled" destroys the only signal that says why.
 
@@ -50,7 +52,7 @@ List a repository's Workflows with their state, and enable or disable them. Beca
 
 **AC4: A `deleted` Workflow leads to its Orphaned Runs.** A Workflow in state `deleted` appears in the list, exposes neither enable nor disable, and exposes navigation to its Runs. Those Runs are labelled Orphaned Runs in the Feed. Identifying them issues no request against the repository's contents.
 
-**AC5: A capped count is labelled capped.** A per-Workflow Run count derived from a filtered listing that hits the cap is displayed as capped (for example "1,000 of ~18,260") and never as a bare total.
+**AC5: A capped count is labelled capped.** A per-Workflow Run count derived from a filtered listing that hits the cap is displayed as capped (for example "1,000 of ~18,258") and never as a bare total.
 
 **AC6: State and Status keep their own vocabulary.** Snapshot assertion on vocabulary: the string "Status" never appears against a Workflow row, and the string "state" never appears against a Run or Job row.
 
@@ -76,7 +78,7 @@ The list is described as inclusive, not exhaustive, which is why R3 exists.
 | Repo permissions and `archived` ride along free on `/user/repos` | PRD | Gating R6 costs nothing |
 | Archived repos are permanently read-only | PRD | Their Workflows can never be toggled and their Runs can never be cleaned |
 | Fine-grained PATs expose no `x-oauth-scopes` | PRD | Pre-flight checks are impossible. R7 |
-| Any filter caps listing at 1,000 while `total_count` reports 18,260 | [ADR-0005](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) | R15, "the tool never lies about counts" (PRD success criterion 6) |
+| Any filter caps listing at 1,000 while `total_count` reports 18,258 | [ADR-0005](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) | R15, "the tool never lies about counts" (PRD success criterion 6) |
 | No cross-repository Run query exists | [ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md) | A cross-repo Workflow view would be a fan-out too (see Open questions) |
 | `gh run list -w` excludes disabled Workflows without `-a` | gh's behaviour, per [ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md) | R16 |
 | 2.0.0 serves github.com only | [ADR-0009](../../adr/0009-host-qualified-repo-identity.md) | Repo identity is `host/owner/name` here as everywhere |
@@ -93,7 +95,9 @@ The list is described as inclusive, not exhaustive, which is why R3 exists.
 
 **UNKNOWN: how common are Orphaned Runs in the reference account?** The reference user has 163 repositories, ~26 with Runs (PRD). Whether any of them carries a `deleted` Workflow decides whether R11–R13 is a headline cleanup win or a rare curiosity, and there is currently no measured answer.
 
-**Resolved: both, and the person chooses. Cross-repository is the default.** The fan-out is affordable, being one request per repository over the machinery [ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md) already builds, and a cross-repo list is what a tool whose thesis is cross-repo should open with. But "which Workflows are disabled in the repo I am in" is a real question a rollup answers badly, so `this-repo` stays available as a scope rather than a tab. [settings](../settings/requirements.md) R19 owns the setting and defines what `this-repo` resolves to. Both code paths must exist, and the list must be correct under either scope.
+**Resolved: both, and the person chooses. Cross-repository is the default.** The fan-out is affordable, being one request per repository over the machinery [ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md) already builds, and a cross-repo list is what a tool whose thesis is cross-repo should open with. But "which Workflows are disabled in the repo I am in" is a real question a rollup answers badly, so `this-repo` stays available as a scope rather than a tab. [settings](../settings/requirements.md) R19 owns the setting and defines what `this-repo` resolves to.
+
+**R0 now carries this into the requirements.** This resolution said "both code paths must exist" while R1 and the Purpose line specified one, describing a single repository throughout. An implementer reads the requirements first and the open questions last, if at all, so the decision has to live in R0 or it does not live anywhere. The scope also changes R1's row shape, because a cross-repo list must name the owning repository on every row.
 
 **Undecided: does the CLI surface extend to `gh workflow`'s commands?** ADR-0008 enumerates `gh run`'s flags only, but its standalone-coherence argument applies just as well here: a Homebrew user without `gh` installed has no `gh workflow enable` to fall back on. Owned by [cli-surface](../cli-surface/requirements.md).
 
