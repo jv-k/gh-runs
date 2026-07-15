@@ -93,7 +93,9 @@ Interrupt someone, through their operating system, when something has happened t
 
 ## Open questions
 
-**UNKNOWN: how is the authenticated account's login resolved?** R4's "a Run you triggered" compares a Run's actor to the account. Repository discovery reads the authenticated account's repositories, so the identity exists somewhere in the chain, but the canon does not record where the login itself comes from. Belongs to [repo-discovery](../repo-discovery/requirements.md).
+**Resolved: `GET /user` returns `.login`.** One request, cacheable, and it resolves the account R4's "a Run you triggered" compares a Run's actor against. The question was whether the canon recorded a source for the login, not whether one was hard to find, and the answer is trivial. It belongs to [repo-discovery](../repo-discovery/requirements.md), which already reads the authenticated account's repositories and is where the account's identity is established for everything else.
+
+**Undecided: does the approval event's default-On survive R9's test?** [approvals](../approvals/requirements.md) records that the badge "counts Runs the account may have no standing to act on", and that its count is "wrong in both directions for two independent reasons": a lower bound on what exists (their R10's bounded window) and an overcount of what is actionable, because reviewer designation is not pre-flightable. R5 binds this event to that same predicate deliberately, so the notification inherits both errors rather than escaping them. An OS toast for a Run someone else must approve is an interruption the reader can do nothing with, which is what R9's "would I want to be interrupted for this?" asks about. The event stays On until someone measures how often the overcount fires against a real account. R9 requires every event in R4's table to clear that bar, and this one has not been shown to.
 
 **UNKNOWN: does a re-run re-attribute a Run's actor?** Re-running adds an Attempt to the Run that already exists ([CONTEXT.md](../../CONTEXT.md)), so a Run you triggered and someone else re-ran is still one Run. Whether its actor still names you decides whether their failure interrupts you.
 

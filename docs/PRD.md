@@ -69,7 +69,7 @@ These are empirical, measured against the live API and against the client we bui
 | **Fine-grained PATs expose no scopes.** `x-oauth-scopes` exists only for classic tokens. | Pre-flight permission checks are impossible for fine-grained tokens. The API is always the final authority; a 403 can arrive despite `push: true`. |
 | **go-gh cannot reach a keyring token without the gh binary.** It has no keyring code and no keyring dependency. Its only keyring path is shelling out to `gh auth token`, so with gh off PATH the reference token (which lives in the keyring, not `hosts.yml`) resolves empty, source `"default"`. | `GH_TOKEN` is required for users who do not have gh, and is documented as the contract. Anyone with gh keeps getting their token free through the shellout. → [ADR-0002](./adr/0002-go-gh-with-dual-distribution.md) |
 | **Dispatch inputs live only in YAML.** The Workflow object carries `path`, never `inputs`. `type: environment` needs a separate `/environments` call. | A typed Dispatch form must fetch and parse the YAML at the target ref. |
-| **Dispatch returns 204 with no Run ID.** | Correlating a Dispatch to its Run is best-effort polling on `event=workflow_dispatch` plus a timestamp, and is racy by construction. |
+| **Dispatch returns 204 with no Run ID. That measurement is superseded, and the replacement awaits live confirmation.** GitHub's current OpenAPI spec (v1.1.4, committed 2026-07-14) adds a `return_run_details: boolean` body parameter to "Create a workflow dispatch event". 204 is now documented as "Empty response when `return_run_details` parameter is `false`", and a 200 returns `{workflow_run_id, run_url, html_url}`, all three required, when it is `true`. The spec and the rendered docs agree independently. **Neither was verified by dispatching**, because a Dispatch is a write and was out of the measurement's remit. | Until one live dispatch confirms the 200 path, correlating a Dispatch to its Run stays best-effort polling on `event=workflow_dispatch` plus a timestamp, racy by construction. If the 200 path works, [workflow-dispatch](./features/workflow-dispatch/requirements.md) R16 to R19 delete outright rather than get hedged. |
 | **Live log streaming does not exist.** Logs are a zip (per Run) or plain text (per Job), delivered on completion. | Job and Step *status* can be live. Log *content* cannot. |
 
 ## Scope
@@ -83,6 +83,7 @@ These are empirical, measured against the live API and against the client we bui
 | Purge | Filtered bulk deletion, resumable by re-running the filter |
 | Run lifecycle | Cancel, force-cancel, re-run, re-run failed Jobs |
 | Log viewer | Per-Job, folded by `##[group]`, timestamps stripped by default |
+| Log deletion | Destroys a Run's logs and leaves the Run. Distinct from deleting the Run, and a write like any other: confirmed through the Purge's graduated friction, paced by the governor |
 | Workflow management | List, enable, disable |
 | Dispatch | Typed form generated from the Workflow's YAML |
 | Reclamation | Caches and Artifacts, bytes-first |

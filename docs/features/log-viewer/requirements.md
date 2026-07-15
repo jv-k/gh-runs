@@ -40,7 +40,7 @@ Read a Job's log inside the tool, rendered the way the web UI renders it (folded
 
 **R16.** Offer logs only for the Jobs of a Run's latest Attempt. A prior Attempt's log must not be offered, because a prior Attempt's Jobs are not served at all.
 
-**R17.** Provide log deletion as an operation distinct from deleting the Run, reachable by a different keystroke, separately confirmed, and gated on `permissions.push && !archived` for the repository. The confirmation must name both what is destroyed (the logs) and what survives (the Run and its metadata). Gating is advisory only: the API is the final authority, and a 403 must be reported as a permission failure rather than treated as a bug.
+**R17.** Provide log deletion as an operation distinct from deleting the Run, reachable by a different keystroke, separately confirmed, and gated on `permissions.push && !archived` for the repository. The confirmation must name both what is destroyed (the logs) and what survives (the Run and its metadata). Gating is advisory only: the API is the final authority, and a 403 must be reported as a permission failure rather than treated as a bug. Log deletion is a write, and it gets no dispensation for being small: it must route through the Purge's graduated confirmation, [purge](../purge/requirements.md) R4 to R9, exactly as [run-lifecycle](../run-lifecycle/requirements.md) R17 and [storage-reclamation](../storage-reclamation/requirements.md) R17 do. That means selection keyed by id, the set frozen when the modal opens, a displayed count, friction scaled to blast radius, and no path from a selection to a first DELETE that skips confirmation. It must also be paced by [rate-governor](../rate-governor/requirements.md) R2, which names it among the writes it owns. What this requirement adds on top is the wording, because "the logs die and the Run lives" is a distinction no generic confirmation draws.
 
 **R18.** Render an empty state (not a blank pane and not an error) when a Job's log has no content, whatever the cause: an in-progress Job, a Job that emitted no log content, or logs already deleted.
 
@@ -122,6 +122,8 @@ Note also that archive filenames are **lossily sanitised**: a space-slash-space 
 - [ADR-0004: Liveness via conditional ETag polling](../../adr/0004-conditional-polling-for-liveness.md). Why Status can be live while content cannot.
 - [ADR-0009: Host-qualified repo identity](../../adr/0009-host-qualified-repo-identity.md). Log URLs are host-derived. 2.0.0 is github.com only.
 - [run-detail](../run-detail/requirements.md) is the entry point. It owns Jobs, Steps and the Attempt badge.
-- [purge](../purge/requirements.md) covers deleting a Run, which R17's log deletion is deliberately not.
+- [purge](../purge/requirements.md) covers deleting a Run, which R17's log deletion is deliberately not. Its R4 to R9 graduated confirmation is what R17 routes through anyway.
+- [rate-governor](../rate-governor/requirements.md). Its R2 paces R17's log deletion, and names it among the writes it owns.
+- [run-lifecycle](../run-lifecycle/requirements.md) and [storage-reclamation](../storage-reclamation/requirements.md). Their R17s route through the same confirmation R17 does, for the same reason.
 - [repo-discovery](../repo-discovery/requirements.md) supplies the free `permissions` and `archived` that gate R17.
 - [settings](../settings/requirements.md). `NO_COLOR` and the intent-level settings boundary.

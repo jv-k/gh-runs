@@ -40,7 +40,7 @@ Dispatch a Workflow from a typed form generated from that Workflow's YAML at the
 
 **R12.** Never fall back to a flat key=value entry surface when the YAML cannot be fetched or parsed. Report an explicit failure naming the ref and the `path`. Degrading to untyped entry would restore exactly the memory work the typed form exists to remove.
 
-**R13.** Report the declared limits in the form rather than letting the API reject the payload opaquely: a Workflow declaring more input properties than the maximum, or a submission whose serialised inputs exceed the character limit, must be surfaced by the form. Both limits are UNKNOWN (see Constraints).
+**R13.** Report the declared limits in the form rather than letting the API reject the payload opaquely: a Workflow declaring more input properties than the maximum, or a submission whose serialised inputs exceed the character limit, must be surfaced by the form. The two limits do not carry equal weight, and the form must not pretend they do. **25 inputs is authoritative**: GitHub's own OpenAPI spec carries `maxProperties: 25` on this endpoint's `inputs`, so the schema enforces it. **65,535 characters is community-sourced and unverified**, absent from the official REST documentation for this endpoint, and must be surfaced as such rather than attributed to GitHub (see Constraints).
 
 **R14.** Gate Dispatch on `permissions.push && !archived` for the repository, and treat the API as the final authority. A 403 can arrive despite `permissions.push: true` because fine-grained PATs expose no scopes.
 
@@ -91,7 +91,8 @@ The real example the form is specified against, from `cli/cli`'s `deployment.yml
 |---|---|---|
 | `type: environment` requires a separate call to `/repos/{o}/{r}/environments` | Measured | R7. One extra request, and only when the type appears |
 | **Dispatch returns 204 with no Run ID** | Measured | R16–R19: correlation is best-effort and **racy by construction** |
-| Max 25 input properties. Total payload ≤ 65,535 chars | Research, **not directly verified (UNKNOWN)** | R13 is written to surface the limits, not to trust the numbers |
+| **Max 25 input properties** | GitHub's official OpenAPI spec, `maxProperties: 25` on `inputs` | R13 reports 25 as authoritative. The schema enforces it, so the API's rejection is predictable rather than opaque |
+| Total payload ≤ 65,535 chars | Community discussion 120093. **Not in the official REST docs for this endpoint (UNVERIFIED)** | R13 reports it labelled community-sourced. The official spec carries 65,535 for gist comments, check-run output and advisory descriptions, never for Dispatch inputs |
 | Repo permissions and `archived` ride along free on `/user/repos` | PRD | Gating R14 costs nothing |
 | Fine-grained PATs expose no `x-oauth-scopes` | PRD | Pre-flight checks are impossible. The API is final authority (R14) |
 | Archived repos are permanently read-only | PRD | They can never be dispatched to |
@@ -101,7 +102,11 @@ The real example the form is specified against, from `cli/cli`'s `deployment.yml
 
 ## Open questions
 
-**UNKNOWN: are the 25-property and 65,535-character limits real?** Both come from research and neither was verified against the API. R13 surfaces them defensively. If they are wrong, R13's thresholds are wrong and the API's rejection is the only true signal.
+**Resolved for the 25-input limit: it is real, and it is machine-enforced.** GitHub's official OpenAPI spec carries `maxProperties: 25` on this endpoint's `inputs` object, so the schema itself refuses a 26th. R13 now states it as authoritative rather than defensively.
+
+**UNKNOWN: where the 65,535-character limit comes from, and whether it applies here at all.** The two limits arrived together as "research" and only one of them survived being checked. 65,535 is not in the official REST documentation for this endpoint. The official spec carries that number for gist comments, check-run output and advisory descriptions, and never for Dispatch inputs. It traces to community discussion 120093 rather than to documentation. R13 must surface it as community-sourced and unverified rather than attribute it to GitHub, and the API's rejection stays the only true signal for it.
+
+**UNKNOWN, and it would delete R16 to R19: does `return_run_details` work?** GitHub's current OpenAPI spec (v1.1.4, committed 2026-07-14) adds a `return_run_details: boolean` body parameter to "Create a workflow dispatch event". With it `false`, the response is the 204 this document is built on. With it `true`, the documented response is **200 carrying `{workflow_run_id, run_url, html_url}`**, all three required. The spec and the rendered documentation agree independently, and **neither was verified by dispatching**, because a Dispatch is a write and was out of the measurement's remit. If it works, the Run ID arrives in the response itself: R16's "display no Run ID" is simply wrong, and R17 to R19's correlation poll, its probable-not-certain label, its ambiguity case and the entire race are deletable rather than hedgeable. That is the largest single simplification available to this feature. Confirming it needs exactly one live dispatch against a repository the user owns. R16 to R19 stand unchanged until someone runs it, because a documented response nobody has seen is not a measurement. The PRD's constraints table records the same supersession.
 
 **UNKNOWN: does the API accept a Dispatch for a Workflow in a `disabled_*` state?** Unmeasured. It decides whether [workflow-management](../workflow-management/requirements.md) should offer "enable, then dispatch" as one flow or two.
 

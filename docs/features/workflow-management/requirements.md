@@ -65,7 +65,7 @@ The Workflow object's keys are **exactly** `badge_url, created_at, html_url, id,
 | `active` | The Workflow runs on the events it declares | Disable |
 | `disabled_manually` | Turned off by a person | Enable |
 | `disabled_inactivity` | Turned off by GitHub for inactivity | Enable |
-| `disabled_fork` | Not enabled in this fork | UNKNOWN (see Open questions) |
+| `disabled_fork` | Not enabled in this fork. Never observed, and possibly unreachable through this endpoint: a fork with Actions un-enabled serves an empty list instead (see Open questions) | UNKNOWN (see Open questions) |
 | `deleted` | The YAML file is gone. Its Runs persist forever | Neither (R9) |
 
 The list is described as inclusive, not exhaustive, which is why R3 exists.
@@ -83,7 +83,7 @@ The list is described as inclusive, not exhaustive, which is why R3 exists.
 
 ## Open questions
 
-**UNKNOWN: can a `disabled_fork` Workflow be enabled by the same operation as `disabled_manually`?** Unmeasured. Until it is, the table above cannot say what R5 offers for that state.
+**UNKNOWN: can a `disabled_fork` Workflow be enabled by the same operation as `disabled_manually`?** Still unmeasured, and the state now looks unreachable through this endpoint. `disabled_fork` is in the official enum and was never observed across ~80 forks. The decisive finding is what a fork with Actions un-enabled actually serves: `{"total_count": 0, "workflows": []}`, despite carrying 8 to 24 workflow YAML files on disk (`lee-dohm/cli` and `openCEC/CEC-IDE` among them). The fork case arrives as an **empty list**, not as a `disabled_fork` row, so the table's UNKNOWN row may never paint at all. R3 is what carries this either way: the enumeration is inclusive rather than exhaustive, an unrecognised state renders verbatim, and a state that never arrives needs no handling. That is why the question does not block, and why it should not be answered by disabling Actions on a fork to find out.
 
 **UNKNOWN: is the `state` enumeration exhaustive?** The five values are the ones observed. R3 makes the answer non-blocking.
 

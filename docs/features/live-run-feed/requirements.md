@@ -26,7 +26,7 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 
 ### Ordering and stability
 
-**R8.** The Feed must sort Runs by `run_started_at` descending. It must not sort by `created_at`: the two were identical on 8/8 measured normal Runs and diverged only on a re-run, which is precisely the event that should resurface.
+**R8.** The Feed must sort Runs by `run_started_at` descending. It must not sort by `created_at`: the two were identical on 8/8 measured normal Runs and diverged only on a re-run, which is precisely the event that should resurface. Where `run_started_at` is null the Feed must fall back to `created_at`. Only Status `requested` may ever need that fallback, and no instance of one exists to check against (open question 3).
 
 **R9.** When a Run's Status or Conclusion changes, the Feed must repaint that Run's row in place, leaving its position and every other row's position unchanged.
 
@@ -156,7 +156,13 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 
 2. **Resolved: a Conclusion filter is not server-side. There is no such parameter, and the CLI's `--conclusion` flag is dropped.** Measured: `?conclusion=failure` and `?conclusion=bogusvalue` both returned all 28,710 Runs, exactly as no filter did. The API ignores the parameter rather than honouring or rejecting it. [cli-surface](../cli-surface/requirements.md) R5 drops the flag on that basis, and [ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md) records the correction. R23's Conclusion filter is unaffected and stays: it is a client-side predicate over Runs the Feed already holds, spends no Budget, and is bounded by a window R24 already labels honestly. What the measurement forbids is a *count* derived from post-filtering a capped set, which is the CLI's failure mode, not the Feed's.
 
-3. **Resolved for `queued`: `run_started_at` is populated, and R8's sort spine holds.** Measured against `home-assistant/core`, three Runs at Status `queued`, all three carrying a non-null `run_started_at`. R8 needs no fallback for the common case and the newest Runs sort correctly. Two details worth keeping. On two of the three, `run_started_at` equalled `created_at` exactly. On the third it was **37 minutes later than `created_at` while the Run was still `queued`**, so the field is not "when it began running" and must not be read as a start time. It is a sort key, which is all R8 asks of it. **Still unmeasured: `waiting`, `requested` and `pending`**, none of which were present at measurement time. R8 should carry a null-safe fallback to `created_at` for those three rather than assume, at the cost of one line.
+3. **Resolved: `run_started_at` is populated on every Status a sample exists for, and R8's sort spine holds.** Measured across three Statuses. `queued`, on `home-assistant/core`: 3 of 3 non-null. `waiting`, on `pytorch/pytorch`: **9 of 9** non-null. `pending`, on `grafana/grafana`: **5 of 5** non-null. On every `waiting` and `pending` Run the field equalled `created_at` exactly.
+
+    **`requested` has no sample anywhere: zero instances across ~88 repositories.** It is unmeasurable rather than merely unmeasured, and that zero is genuine absence rather than a filter the API quietly dropped. `status=bogusvalue` returns `total_count: 0` instead of everything, which proves the `status` parameter is honoured. Contrast `conclusion`, which is ignored and returns all 28,710 Runs (open question 2). A 0 from a parameter the server honours means the Runs are not there.
+
+    So R8's null-safe fallback to `created_at` is needed for `requested` alone, and it costs one line. R8 now carries it.
+
+    Two details worth keeping. On two of the three `queued` Runs, `run_started_at` equalled `created_at`. On the third it was **37 minutes later than `created_at` while the Run was still `queued`**, so the field is not "when it began running" and must not be read as a start time. It is a sort key, which is all R8 asks of it.
 
 4. **Does a re-run always advance `run_started_at`, and does re-running failed Jobs only behave the same way?** n = 1. R8's rationale requires the divergence to be *forward*. A re-run whose `run_started_at` stayed put would sink rather than surface. UNKNOWN whether this generalises, and the PRD scopes "re-run failed Jobs" as a separate operation whose effect on `run_started_at` has not been observed.
 

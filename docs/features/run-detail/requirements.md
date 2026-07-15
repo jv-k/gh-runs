@@ -14,7 +14,7 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 **R2.** The detail pane must render each Job's own Status and Conclusion as two separate fields, and must render an empty Conclusion for any Job whose Status is not `completed`.
 
-**R3.** The detail pane must render each Step's Status. Whether a Step also carries a Conclusion is unresolved (see Open questions), but if it does, R2's separation must hold for it too.
+**R3.** The detail pane must render each Step's own Status and Conclusion as two separate fields, and must render an empty Conclusion for any Step whose Status is not `completed`. A Step carries both: measured, a live Step reads `status: in_progress` with `conclusion: null`. R2's separation therefore extends to Step level, and the split runs Run, Job and Step alike.
 
 **R4.** The detail pane must render the Run's Attempt number as a badge attached to the Run's identity, whenever the Run has more than one Attempt. The badge must not be placed inside the Jobs list, where it would read as a property of a Job.
 
@@ -98,15 +98,15 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 ## Open questions
 
-1. **Do Steps arrive with the Jobs, or need their own request?** **UNKNOWN.** R1 requires Steps to be shown. The canon does not establish whether Step data is embedded in the Jobs payload or fetched per Job. If it is separate, showing Steps for a wide matrix Run multiplies the cost of every 3s refresh, and R10's debounce and R13's tier both need re-costing.
+1. **Resolved: Steps arrive inline with the Jobs, at no extra request.** `steps` is a key on every job object `/runs/{id}/jobs` returns, shaped `{number, name, status, conclusion, started_at, completed_at}`, and it rides on `in_progress` jobs as well as completed ones. R1's Steps are free. R10's debounce and R13's tier need no re-costing, and the wide-matrix worry this question raised does not arise from Steps at all: a matrix Run's cost is its Jobs' pagination (open question 3), not its Steps.
 
-2. **Does a Step carry a Conclusion?** **UNKNOWN.** CONTEXT grants a Job "its own Status and Conclusion" and says nothing of the kind for a Step. The PRD says only that "Job and Step *status* can be live". R3 therefore requires Step Status alone. If Steps do carry a Conclusion, R3 must extend and the Status/Conclusion separation must be enforced there too.
+2. **Resolved: a Step carries a Conclusion.** Measured on a live Job's `steps` array, where a Step reads `status: in_progress` with `conclusion: null`. That is the Run and Job model exactly, one field for where it is and one for how it came out, the second null until the first says `completed`. CONTEXT granted a Job "its own Status and Conclusion" and said nothing of a Step, and the PRD said only that "Job and Step *status* can be live". The payload settles it. R3 is rewritten to render both fields separately, so the Status/Conclusion split now runs Run, Job and Step.
 
-3. **Does the Jobs list paginate?** **UNKNOWN.** A large matrix Run may exceed one page. If it does, a 3s refresh of a wide Run is several requests rather than one, and R13's tier is more expensive than it looks.
+3. **Resolved: the Jobs list paginates, 30 per page by default and 100 at most.** Measured on a 38-job Run, which served 30 and a `Link` header carrying `rel="next"` at `page=2`. `per_page=200` clamps to 100 rather than erroring. R13's fast tier therefore costs one request per Run for any Run up to 100 Jobs, which was every Run in the sample. **Untested: the multi-page case.** No Run with more than 100 Jobs was found across ~160 scanned, so a Run wide enough to need a second page at `per_page=100` is a possibility rather than an observation, and the crawl that would handle it has nothing to be tested against.
 
 4. **What does a Run that has not started serve?** **UNKNOWN** whether a Run at Status `queued`, `waiting`, `requested` or `pending` returns an empty Jobs list, a partial one, or an error. This defines the pane's empty state and decides whether R13's fast tier has anything to render for the Runs most likely to be selected.
 
-5. **Is `run_attempt` on the Feed's list payload, or only on the single-Run payload?** **UNKNOWN.** If the list already carries it, R4's badge is free. If not, rendering the badge costs a request per selected Run and must be folded into R10's debounce rather than issued eagerly.
+5. **Resolved: `run_attempt` rides on the list payload, so R4's badge is free.** `/actions/runs` items carry `run_attempt` alongside `previous_attempt_url`, the field R7 presents as prior Attempt metadata. The badge costs no per-row request, needs no folding into R10's debounce, and is renderable the moment a row paints. That matters most at R17's re-run, where the badge going N to N+1 is the only evidence on screen that anything happened.
 
 6. **Should a Run parked at `waiting` refresh at the fast tier?** R13 refreshes whenever Status is not `completed`, but a Run awaiting a pending deployment can sit at `waiting` for days. Refreshing it every 3s for days is defensible only if 304s are as cheap as measured. For the secondary limit that is PRD risk R4, assumed to go the wrong way.
 

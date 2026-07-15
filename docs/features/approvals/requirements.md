@@ -87,9 +87,9 @@ Tell someone that a Run is blocked on a human decision, and let that decision be
 
 ## Open questions
 
-**UNKNOWN: where does the set of environment ids awaiting review come from?** R12 targets environment ids, and the canon records no request returning the environments a `waiting` Run is blocked on. [workflow-dispatch](../workflow-dispatch/requirements.md) R7 fetches a repository's environments for a `type: environment` input, but a repository's environments are not the subset a given Run awaits. Verify before R12 can be built.
+**Resolved: `/actions/runs/{id}/pending_deployments` returns them.** The question was where the ids come from, given that a repository's environments are not the subset a given Run awaits. This endpoint serves exactly that subset: `[{environment: {id, node_id, name, url, html_url}, wait_timer, wait_timer_started_at, current_user_can_approve, reviewers}]`. R12's ids arrive with the names to label them, and `current_user_can_approve` and `reviewers` ride along. It discriminates cleanly, returning `[]` on a completed Run rather than something ambiguous. Real sample: `pytorch/pytorch` run 29350572503, environment id 3734916060, named `scribe-protected`. **R12 can be built.** One caveat, recorded rather than glossed: every `waiting` Run observed carried exactly one environment, so R12's plural is unproven rather than disproven.
 
-**UNKNOWN: can one Run be blocked on several environments at once, and may one submission carry several ids?** R12 is written in the plural because the action targets ids, but the multiplicity is unmeasured.
+**UNKNOWN: can one Run be blocked on several environments at once, and may one submission carry several ids?** R12 is written in the plural because the action targets ids. All 9 `waiting` Runs observed carried exactly one environment, which fixes the common case and says nothing about the bound. The plural is the safe way to write it either way.
 
 **UNKNOWN: what Status and Conclusion does a Run reach after a rejected deployment review?** R15 assumes rejection moves the Run out of the predicate. If a rejected Run stays `waiting`, the badge never clears and R8 never fires.
 

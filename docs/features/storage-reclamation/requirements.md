@@ -32,7 +32,7 @@ Answer one question (what is consuming this repository's Actions storage) and re
 
 **R9.** Mark every Artifact whose `expired` field is true as a tombstone, and state on the row that deleting it reclaims nothing. The bytes are already gone. Only the record remains.
 
-**R10.** Exclude expired Artifacts from every figure the view presents as reclaimable. If an expired Artifact still reports a non-zero `size_in_bytes`, that number must not contribute to it.
+**R10.** Exclude expired Artifacts from every figure the view presents as reclaimable. An expired Artifact keeps reporting its original non-zero `size_in_bytes` (measured, 30 of 30), so the number is always sitting there to be added up by mistake, and it must never contribute to a reclaimable figure.
 
 **R11.** State a reclaim figure of zero bytes when confirming deletion of an expired Artifact.
 
@@ -132,6 +132,7 @@ setup-go-macOS-arm64-go-1.26.5-20b85b5b8   302,421,029
 | Artifacts expose `size_in_bytes`, `expired`, `expires_at`, `created_at` | Measured | R9, R10, R12 |
 | 10 of 100 sampled Artifacts were already expired | Measured | Tombstones are the common case, not an edge case |
 | **Deleting an expired Artifact reclaims nothing** | Measured | R9–R11. The bytes are already gone and the record is a tombstone |
+| **An expired Artifact still reports its original `size_in_bytes`** | Measured, 30 of 30, none zero | R10. The number outlives the bytes, so a reclaimable total that sums naively is wrong by exactly the tombstones |
 | Artifacts auto-expire on a retention policy without user action | Measured | R12. The artifact half of this view is largely busywork. The cache half is where a real problem lives |
 | An expired Artifact's download returns 410 Gone | Measured | R14 |
 | Repo permissions and `archived` ride along free on `/user/repos` | PRD | R20 costs nothing |
@@ -151,7 +152,7 @@ setup-go-macOS-arm64-go-1.26.5-20b85b5b8   302,421,029
 
 **UNKNOWN: does `active_caches_size_in_bytes` reflect a deletion immediately?** R24 adjusts the total locally by the deleted rows' sizes. Whether a subsequent refresh agrees, or lags, is unverified. A total that jumps back up after a successful reclaim reads as a bug.
 
-**UNKNOWN: does an expired Artifact still report its original `size_in_bytes`, or zero?** R10 is written to be correct either way, which is the only reason this is not blocking.
+**Resolved: an expired Artifact keeps its original `size_in_bytes`.** 30 of 30 sampled expired Artifacts reported a non-zero size and none reported zero: 23 on `kubernetes/kubernetes`, ranging 13,852 to 234,131 bytes, and 7 on `cli/cli` at ~258 to 259 KB apiece. R10 no longer needs to be correct either way, and it now states the measured case. The size is always present, and it is always a lie about what deleting the Artifact reclaims, which is precisely what R9's tombstone and R11's zero-byte confirmation exist to say out loud.
 
 **UNKNOWN: do these endpoints support ETag revalidation?** [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)'s free 304s were measured against a Run listing. This view is opened and refreshed deliberately rather than polled, so nothing here depends on the answer.
 

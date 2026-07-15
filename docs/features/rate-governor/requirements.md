@@ -12,7 +12,7 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **R1.** The governor must be the single authority for Budget accounting. Every request the tool issues must be accounted through it: discovery probes, scheduler polls, detail fetches, a Purge's crawl, and every write. No other component may parse rate-limit headers or maintain a parallel tally.
 
-**R2.** The governor must be the single authority for write throughput. Every write must be paced by it: Run deletion, cancel, force-cancel, re-run, Dispatch, Cache and Artifact deletion.
+**R2.** The governor must be the single authority for write throughput. Every write must be paced by it: Run deletion, log deletion ([log-viewer](../log-viewer/requirements.md) R17), cancel, force-cancel, re-run, Dispatch, Cache and Artifact deletion.
 
 **R3.** The governor must be account-scoped and global, not per repository. The Budget is a property of the token, not of a repository, so a per-repository throttle would multiply its own rate by the number of repositories a Purge happens to span. One cross-repo Purge is one throttle. (This settles [purge](../purge/requirements.md) open question 7.)
 
@@ -32,9 +32,9 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 ### Adaptive throttle
 
-**R10.** The governor must start writes at the documented-safe rate of one per second and ramp upward only while responses stay clean.
+**R10.** The governor must start writes at the documented-safe rate of 1.0 per second and ramp upward only while responses stay clean. The ramp is **additive increase, multiplicative decrease**: add 0.25/sec after every 20 consecutive clean responses, and halve the current rate on any rate-limit response, re-ramping from the halved rate. Open question 5 records why AIMD and not something else.
 
-**R11.** The governor must ramp toward the points ceiling (~180 writes/min, from DELETE at 5 points against ~900 points/min) and must retain headroom below it rather than converging on it. That ceiling is derived from the more permissive of two published limits that disagree by 3×. Treating it as the whole truth is what a fixed-rate design would do, and the reason to reject one.
+**R11.** The governor must ramp toward the points ceiling (~180 writes/min, ~3/sec, from DELETE at 5 points against ~900 points/min) and must stop at **2.5/sec**, retaining that headroom rather than converging on the ceiling. It must not fall below a **floor of 0.5/sec**, so that a run of backoffs slows the writes rather than stalling them. The ~3/sec ceiling is derived from the more permissive of two published limits that disagree by 3×. Treating it as the whole truth is what a fixed-rate design would do, and the reason to reject one.
 
 **R12.** The governor must back off hard on any 403, any 429, and any `Retry-After`, and must honour a `Retry-After` interval where one is supplied.
 
@@ -68,7 +68,7 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **AC1: Cold start rate.** From cold, the first write is issued at ~1/second. The interval is measured on the injected clock and no test sleeps.
 
-**AC2: Ramp.** After a run of consecutive clean responses, the issue rate is strictly higher than 1/second. Across any 60s window of virtual time, the number of writes issued never reaches the ~180 points ceiling, and never exceeds it.
+**AC2: The AIMD ramp.** Replayed against a cassette and the injected clock, with no test sleeping. 20 consecutive clean responses step the rate from 1.0/sec to 1.25/sec, and 19 do not. A 403 arriving mid-stream halves the current rate on the spot, and the ramp restarts its count from the halved rate. Across the whole replay the rate never exceeds the 2.5/sec ceiling and never falls below the 0.5/sec floor, and no 60s window of virtual time reaches the ~180 points ceiling.
 
 **AC3: Purge at reference scale.** A cassette of 18,260 successful DELETEs completes in milliseconds of real time, advancing virtual time across the run. No 60s window of virtual time exceeds the ceiling.
 
@@ -135,9 +135,15 @@ That disagreement is the entire reason this component is adaptive rather than a 
 
 3. **The point cost of cancel, force-cancel, re-run and Dispatch is UNKNOWN.** Only DELETE was measured, at 5 points. R16 requires conservative pacing in the absence of measurement, but "conservative" has no number until someone measures. Raised by [run-lifecycle](../run-lifecycle/requirements.md) open question 3 and owned here.
 
-4. **How much headroom to retain below ~180/min is UNKNOWN.** R11 requires headroom and does not size it. Too little and the ramp's whole purpose (never discovering the ceiling the hard way) is defeated. Too much and the governor is a slower fixed rate wearing an adaptive costume.
+4. **Resolved: the ramp stops at 2.5/sec against a measured ~3/sec, and never drops below 0.5/sec.** R11 required headroom and did not size it. Open question 5's ramp sizes it: 2.5/sec is 150/min against the ~180/min the points model allows, so ~17% of the ceiling is held back. The floor of 0.5/sec is the other end of the same decision, because a multiplicative decrease with nothing under it converges on a stall. Neither number is load-bearing on its own, and that is the point of choosing a control law over a constant: AIMD approaches the account's real tolerance from below, so 2.5/sec caps the search rather than naming a target to converge on. R10 and R11 carry the numbers. AC2 verifies them.
 
-5. **The ramp's shape is UNKNOWN.** How many clean responses before increasing, by how much, and how far to drop on a backoff. The canon fixes the endpoints (start at 1/sec, ramp toward the ceiling, back off hard) and nothing between them.
+5. **Resolved: the ramp is AIMD, additive increase and multiplicative decrease.** Start at 1.0 deletes/sec. Add 0.25/sec after every 20 consecutive clean responses. Halve the current rate on a rate-limit response and re-ramp from there. Ceiling 2.5/sec, floor 0.5/sec.
+
+    **AIMD is the control law TCP uses for this exact problem**: an unobservable ceiling where overshoot is expensive. That is open question 2's situation restated. The secondary limit exposes no counter, so the only feedback is the 403 that means we already overshot, and a governor that cannot see the wall must feel for it.
+
+    **It converges, it climbs slowly, and it retreats fast.** Those three properties are what the asymmetry in the Constraints section asks for. Overshoot costs one halving and a re-ramp. It does not cost a blocked account. Additive increase means the cost of probing is bounded and linear, while multiplicative decrease means the cost of being wrong is paid once and immediately.
+
+    **The endpoints were already canon** (start at 1/sec, ramp toward the ceiling, back off hard) and the shape between them was not. R10 and R11 now carry it, and AC2 pins the behaviour against a cassette and the injected clock rather than against prose.
 
 6. **The pressure threshold at which the Budget readout appears is UNKNOWN.** R8 and [live-run-feed](../live-run-feed/requirements.md) R29 require silence when consumption is nominal and a readout under pressure. No number separates the two.
 
