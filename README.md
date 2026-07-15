@@ -1,40 +1,32 @@
-# ▶️ 👉🏻 🗑 Delete Workflow Runs 
+# gh-runs
 
-Easily mass-delete GitHub Workflow runs from your GitHub remote repository via the command line.
+**A live GitHub Actions dashboard across your repositories, where deletion is one operation.**
 
-Conventiently select multiple entries to be deleted at once from a navigable list.
+## Status
 
-It uses the GitHub API, and requires gh (GitHub CLI) and jq (JSON processor).
+v2 is in development, and nothing is installable from this branch yet.
 
-![](demo.gif)
+The design is settled and written down. [docs/PRD.md](docs/PRD.md) is the product definition, [docs/adr/](docs/adr/) records the decisions behind it, and [docs/CONTEXT.md](docs/CONTEXT.md) defines the terms both use.
 
-## QuickStart
+When it ships, it will install as a `gh` extension, through Homebrew, or with `go install`.
 
-1. Install pre-requisites [GitHub CLI](https://github.com/cli/cli), [jq](https://github.com/stedolan/jq), and [fzf](https://github.com/junegunn/fzf) for example on `MacOS`:
-    ```sh
-    $ brew install gh jq fzf
-    ```
+## Looking for v1?
 
-2. Install `delete-workflow-runs` globally:
-    ```sh
-    $ npm i -g delete-workflow-runs
-    ```
-3. Authenticate to GitHub via `gh` client:
-    ```sh
-    $ gh auth login
-    ```
-    Follow the prompts in the terminal wizard to authenticate.
+v1 was `delete-workflow-runs`: a bash script that piped a filtered run list into `fzf --multi` and deleted whatever you selected. v2 keeps that capability and subordinates it to the live feed.
 
-4. Navigate to the directory of the repository that you wish to delete workflow runs from, then run:
-    ```sh
-    $ delete-workflow-runs
-    ```
-5. Use the `<up>` and `<down>` keys to navigate the list of workflow runs, and select the ones to be deleted with `<tab>`.
+- **Source:** the [`v1.0.7`](https://github.com/jv-k/gh-runs/tree/v1.0.7) tag
+- **npm:** `delete-workflow-runs@1.0.7`, still installable and no longer maintained
 
-6. Press `<enter>` to delete the runs from your GitHub remote.
+![Terminal recording of the v1 script selecting workflow runs in fzf and deleting them](demo.gif)
 
 ## Contributing
+
 I'd love you to contribute to `gh-runs`, [pull requests](https://github.com/jv-k/gh-runs/issues/new/choose) are welcome for submitting issues and bugs!
 
+## Support
+
+If you find this useful, see [DONATE.md](DONATE.md).
+
 ## License
+
 The scripts and documentation in this project are released under the [MIT license](https://github.com/jv-k/gh-runs/blob/main/LICENSE).
