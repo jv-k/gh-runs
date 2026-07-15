@@ -1,0 +1,72 @@
+name: Go CI
+
+# Build, vet, test and lint the Go module.
+#
+# The repo has no Go code yet. Every real job is gated on go.mod existing at the root, so
+# this workflow is green on the current docs-only tree and starts enforcing the moment
+# go.mod lands. A gated-out job reports as skipped, which is neutral rather than failed.
+#
+# The Go toolchain comes from go.mod via go-version-file. That keeps this workflow and the
+# release workflow on one version, set in one place.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect Go module
+    runs-on: ubuntu-latest
+    outputs:
+      has_go: ${{ steps.check.outputs.has_go }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        name: Look for go.mod
+        run: |
+          if [ -f go.mod ]; then
+            echo "has_go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_go=false" >> "$GITHUB_OUTPUT"
+            echo "No go.mod at the repo root. Build and lint were skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  build:
+    name: Build, vet and test
+    needs: detect
+    if: needs.detect.outputs.has_go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      # The polling scheduler and rate governor are concurrent, so tests run under -race.
+      - name: Test
+        run: go test -race ./...
+
+  lint:
+    name: golangci-lint
+    needs: detect
+    if: needs.detect.outputs.has_go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # golangci-lint-action keeps its own cache, so setup-go does not need one here.
+          cache: false
+      - uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.12.2

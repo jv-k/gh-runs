@@ -19,6 +19,16 @@ on:
       - "deslopper.config.json"
       - ".deslopper-version"
       - ".github/workflows/writing-style.yml"
+  # A direct push to main never opens a PR, so without this the gate is bypassed.
+  push:
+    branches:
+      - main
+    paths:
+      - "**/*.md"
+      - "**/*.markdown"
+      - "deslopper.config.json"
+      - ".deslopper-version"
+      - ".github/workflows/writing-style.yml"
 
 permissions:
   contents: read

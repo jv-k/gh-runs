@@ -1,0 +1,39 @@
+name: Release
+
+# Cross-compiles the extension and publishes the binaries to a GitHub release on a v* tag.
+#
+# cli/gh-extension-precompile is the supported path, not goreleaser. gh picks a release asset
+# with HasSuffix(name, "{GOOS}-{GOARCH}"), plus ".exe" on Windows. This action writes its
+# binaries to dist/{goos}-{goarch}, which matches. Goreleaser's stock naming title-cases the
+# OS and joins with underscores, so it never matches, and it ships a release that looks
+# complete and installs nowhere. See docs/adr/0002-go-gh-with-dual-distribution.md.
+#
+# Prerelease needs no configuration here. The action marks the release as a prerelease when
+# the tag contains a hyphen, so v2.0.0-alpha.0 is a prerelease and v2.0.0 is stable. That is
+# the semver prerelease rule, and it is what keeps the alpha safe: gh extension install
+# resolves an unpinned install through repos/{owner}/{repo}/releases/latest, which skips
+# prereleases. Testers opt in with:
+#
+#   gh extension install jv-k/gh-runs --pin v2.0.0-alpha.0
+#
+# The action has no prerelease input, so the tag name is the only control. A tag without a
+# hyphen publishes as stable and becomes the default install for everyone.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cli/gh-extension-precompile@v2.2.0
+        with:
+          # One Go version for CI and for the shipped binaries.
+          go_version_file: go.mod
