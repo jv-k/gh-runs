@@ -1,0 +1,30 @@
+# golangci-lint v2. The version is pinned in .github/workflows/go-ci.yml.
+#
+# The default set (errcheck, govet, ineffassign, staticcheck, unused) carries most of the
+# weight. Everything added here is added because this specific product has a failure mode
+# the default set cannot see.
+
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    # Every request goes through our own http.RoundTripper (local-store R19), and the
+    # polling scheduler issues one every few seconds for as long as the tool runs. An
+    # unclosed response body leaks a connection on a loop with no end.
+    - bodyclose
+
+    # A 403 is discriminated by its body, not its status (rate-governor open question 1).
+    # Comparing a wrapped error with == rather than errors.Is is how that discrimination
+    # silently stops working, and the failure mode is treating a rate limit as an
+    # authorization error and grinding on into a block.
+    - errorlint
+
+    # Cassettes assert against recorded API field names. A typo in a struct tag is a
+    # silent nil, not a compile error.
+    - misspell
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
