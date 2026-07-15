@@ -6,9 +6,7 @@ The asymmetry is the point. Host is **one struct field now** versus **a migratio
 
 ## Considered Options
 
-**Full multi-host in 2.0.0.** Real value for anyone living in both github.com and a corporate GHES. Rejected because it means building per-host auth, separate rate Budgets and cross-host discovery against exactly one host we can actually test, while GHES API versions lag github.com by months.
-
-**Ignore host entirely.** Simplest model and no dead abstraction. Rejected because it makes GHES a migration rather than a feature, and because of the flag surface below.
+**Full multi-host in 2.0.0**, which a host field that nothing yet reads openly invites. Real value for anyone living in both github.com and a corporate GHES. Rejected because it means building per-host auth, separate rate Budgets and cross-host discovery against exactly one host we can actually test, while GHES API versions lag github.com by months.
 
 ## Consequences
 

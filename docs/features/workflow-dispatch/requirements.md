@@ -56,19 +56,23 @@ Dispatch a Workflow from a typed form generated from that Workflow's YAML at the
 
 **R20.** Provide a non-interactive Dispatch. [ADR-0002](../../adr/0002-go-gh-with-dual-distribution.md) ships a standalone binary, and a user without `gh` installed has no `gh workflow run` to fall back on. Command and flag spelling belong to [cli-surface](../cli-surface/requirements.md).
 
+**R21.** Render the generated form to a frame from held state alone, with no live terminal and no network, and verify that frame with golden-file tests covering one control of each type R6 declares: free text for `string`, a toggle for `boolean`, a select for `choice` and for `environment`, and numeric entry for `number`. The form is generated from YAML the tool did not write and cannot predict, so the painted frame is the only evidence R6's mapping held. A golden over `cli/cli`'s `deployment.yml` fixes the four-control case this document is specified against, and R10's promise that a `choice` is a select rather than free text is a claim about a widget, which is a thing only a rendering test can check.
+
 ## Acceptance criteria
 
-No form is rendered, and no Contents request is issued, before a ref is selected. Selecting a second ref for a Workflow whose inputs differ between two branches produces two visibly different forms.
+**AC1: The ref comes first.** No form is rendered, and no Contents request is issued, before a ref is selected. Selecting a second ref for a Workflow whose inputs differ between two branches produces two visibly different forms.
 
-Rendering the form for `cli/cli`'s `deployment.yml` produces exactly four controls: `tag_name` as free text marked required, `platforms` as free text pre-filled with its declared default, `release` as a toggle, and `environment` as a select pre-filled with `production` and populated from the repository's environments. Rendering it issues exactly one Contents request and exactly one environments request. Rendering a form for a Workflow declaring no `environment` input issues zero environments requests.
+**AC2: The measured form generates four typed controls.** Rendering the form for `cli/cli`'s `deployment.yml` produces exactly four controls: `tag_name` as free text marked required, `platforms` as free text pre-filled with its declared default, `release` as a toggle, and `environment` as a select pre-filled with `production` and populated from the repository's environments. Rendering it issues exactly one Contents request and exactly one environments request. Rendering a form for a Workflow declaring no `environment` input issues zero environments requests.
 
-Submitting that form with `tag_name` empty is refused by the form and issues no request. A `choice` input cannot be submitted with a value outside its `options` by any interaction the form offers.
+**AC3: Required and `choice` constraints bind.** Submitting that form with `tag_name` empty is refused by the form and issues no request. A `choice` input cannot be submitted with a value outside its `options` by any interaction the form offers.
 
-A Workflow whose YAML cannot be parsed produces an error naming the ref and the `path`, and no key=value entry surface appears anywhere in the product.
+**AC4: No untyped fallback exists.** A Workflow whose YAML cannot be parsed produces an error naming the ref and the `path`, and no key=value entry surface appears anywhere in the product.
 
-On a 204, the UI reports the Dispatch accepted and shows no Run ID. Where a correlated Run is found it is labelled probable. Where two candidates match the window, the UI states the ambiguity rather than selecting one. Where none is found before the window closes, the Dispatch is still reported as accepted.
+**AC5: Correlation is probable, never certain.** On a 204, the UI reports the Dispatch accepted and shows no Run ID. Where a correlated Run is found it is labelled probable. Where two candidates match the window, the UI states the ambiguity rather than selecting one. Where none is found before the window closes, the Dispatch is still reported as accepted.
 
-Dispatch is unavailable for an archived repository and for one where `permissions.push` is false, determined with no API request beyond the repository listing that already ran. A Workflow in state `deleted` offers no Dispatch.
+**AC6: The gate costs no request.** Dispatch is unavailable for an archived repository and for one where `permissions.push` is false, determined with no API request beyond the repository listing that already ran. A Workflow in state `deleted` offers no Dispatch.
+
+**AC7: Goldens hold the generated form.** Rendering the form for `cli/cli`'s `deployment.yml` from held state, with no terminal and no network, reproduces the stored golden byte for byte: `tag_name` as free text marked required, `platforms` as free text pre-filled with its default, `release` as a toggle, and `environment` as a select pre-filled with `production`. A further golden covers a Workflow declaring `choice` and `number` inputs, rendering a select over the declared `options` and a numeric entry, and one declaring an unrecognised type, rendering free text labelled as unrecognised. Changing any control's type fails its golden.
 
 ## Constraints
 

@@ -72,24 +72,41 @@ A Purge deletes every Run matching a filter, across one or more repositories, at
 
 ## Acceptance criteria
 
-1. Given a frozen set of 47 Runs drawn from 3 repositories, the confirm modal shows the number 47 and three per-repository rows whose counts sum to 47.
-2. Given a confirmed Purge, when a Run matching the same filter is invoked before the first DELETE is issued, exactly the 47 frozen Run IDs are attempted and the new Run is not.
-3. Given a confirmed Purge, when the Feed re-sorts or removes rows mid-flight, the sequence of Run IDs sent to DELETE is unchanged.
-4. Given a repository whose filtered listing reports `total_count: 18260`, a Purge on that filter reports a matched count derived from the unfiltered crawl, and that count is neither 1,000 nor 18,260 unless the crawl independently produces it. No pagination loop terminates on the first empty filtered page.
-5. Given a repository of 28,707 Runs, the crawl issues on the order of 287 list requests and reaches Runs beyond result 1,000.
-6. Given a single-repository frozen set below the threshold, `y` starts the Purge. `n`, Esc, and Enter on the default abort it with zero DELETE requests issued.
-7. Given a frozen set spanning 2 or more repositories, `y` does not start the Purge. Only the exact count string does, and a wrong number leaves the DELETE count at zero.
-8. Given a configuration setting the threshold above its hard upper bound, a frozen set at the bound still requires the count to be typed.
-9. In the TUI, no configuration, flag or key sequence produces a path from a selection to a first DELETE without an intervening confirm interaction. In the CLI, no configuration and no environment variable produces a Purge that issues a DELETE without `--yes` present on the command line.
-10. Given a Purge in flight, the Feed still applies polled updates and still accepts cursor movement and view changes.
-11. Given cancellation after N deletions, no DELETE is issued after at most one in-flight request completes, the summary reports N, and no file is created on disk.
-12. Given a DELETE that returns 404, the summary counts it under successes and not under failures.
-13. Given 49 consecutive failures followed by one success followed by 49 more failures, the Purge does not stop. Given 50 consecutive failures, it stops, issues no further DELETE, and the summary names the circuit-break.
-14. Given a sustained sequence of rate-limit responses, none appears in the summary's failure groups, none advances the consecutive-failure counter, and the throttle's issue rate falls.
-15. Given a frozen set of 47 Runs of which 3 are in repositories with `push: false` or `archived: true`, the modal states that 3 of 47 will be skipped, 44 DELETE requests are issued, and the 3 are counted as skipped rather than failed.
-16. Given a frozen set containing Runs whose Status is `in_progress`, no DELETE and no cancel request is issued for them, and each is recorded as skipped with a reason.
-17. Given a Purge that deleted 500 Runs and then quit, re-running the same Purge reports a matched count reduced by roughly those 500, shows no resume prompt, and reports only the deletions performed by the new pass.
-18. Given failures spanning two distinct reasons, the summary shows two groups with per-reason counts, and the retry keystroke issues exactly as many requests as there are recorded failures.
+**AC1: The breakdown sums to the total.** Given a frozen set of 47 Runs drawn from 3 repositories, the confirm modal shows the number 47 and three per-repository rows whose counts sum to 47.
+
+**AC2: The frozen set ignores arrivals.** Given a confirmed Purge, when a Run matching the same filter is invoked before the first DELETE is issued, exactly the 47 frozen Run IDs are attempted and the new Run is not.
+
+**AC3: Re-sorting does not move the target.** Given a confirmed Purge, when the Feed re-sorts or removes rows mid-flight, the sequence of Run IDs sent to DELETE is unchanged.
+
+**AC4: The count comes from the crawl.** Given a repository whose filtered listing reports `total_count: 18260`, a Purge on that filter reports a matched count derived from the unfiltered crawl, and that count is neither 1,000 nor 18,260 unless the crawl independently produces it. No pagination loop terminates on the first empty filtered page.
+
+**AC5: The crawl reaches past the cap.** Given a repository of 28,707 Runs, the crawl issues on the order of 287 list requests and reaches Runs beyond result 1,000.
+
+**AC6: A small set confirms with `y`/`N`.** Given a single-repository frozen set below the threshold, `y` starts the Purge. `n`, Esc, and Enter on the default abort it with zero DELETE requests issued.
+
+**AC7: A cross-repository set requires the count.** Given a frozen set spanning 2 or more repositories, `y` does not start the Purge. Only the exact count string does, and a wrong number leaves the DELETE count at zero.
+
+**AC8: Friction has a floor.** Given a configuration setting the threshold above its hard upper bound, a frozen set at the bound still requires the count to be typed.
+
+**AC9: No path skips confirmation.** In the TUI, no configuration, flag or key sequence produces a path from a selection to a first DELETE without an intervening confirm interaction. In the CLI, no configuration and no environment variable produces a Purge that issues a DELETE without `--yes` present on the command line.
+
+**AC10: A Purge is not modal.** Given a Purge in flight, the Feed still applies polled updates and still accepts cursor movement and view changes.
+
+**AC11: Cancellation stops promptly and writes nothing.** Given cancellation after N deletions, no DELETE is issued after at most one in-flight request completes, the summary reports N, and no file is created on disk.
+
+**AC12: A 404 is success.** Given a DELETE that returns 404, the summary counts it under successes and not under failures.
+
+**AC13: The circuit breaker counts consecutively.** Given 49 consecutive failures followed by one success followed by 49 more failures, the Purge does not stop. Given 50 consecutive failures, it stops, issues no further DELETE, and the summary names the circuit-break.
+
+**AC14: A rate limit is not a failure.** Given a sustained sequence of rate-limit responses, none appears in the summary's failure groups, none advances the consecutive-failure counter, and the throttle's issue rate falls.
+
+**AC15: Ineligible Runs are skipped, not attempted.** Given a frozen set of 47 Runs of which 3 are in repositories with `push: false` or `archived: true`, the modal states that 3 of 47 will be skipped, 44 DELETE requests are issued, and the 3 are counted as skipped rather than failed.
+
+**AC16: In-progress Runs are skipped, not cancelled.** Given a frozen set containing Runs whose Status is `in_progress`, no DELETE and no cancel request is issued for them, and each is recorded as skipped with a reason.
+
+**AC17: Re-running is the resume.** Given a Purge that deleted 500 Runs and then quit, re-running the same Purge reports a matched count reduced by roughly those 500, shows no resume prompt, and reports only the deletions performed by the new pass.
+
+**AC18: The summary groups failures and retries only those.** Given failures spanning two distinct reasons, the summary shows two groups with per-reason counts, and the retry keystroke issues exactly as many requests as there are recorded failures.
 
 ## Constraints
 

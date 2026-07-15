@@ -50,19 +50,33 @@ Settings **expose intent, never mechanism**. A setting earns its place only if a
 
 **R17.** The TUI's Settings view and the config file MUST be the same settings. A change made in the view MUST persist to the file, and MUST NOT discard comments, key order, or keys the running version does not recognise.
 
+**R18.** The Settings view MUST render to a frame from held state alone, with no live terminal and no network, and that frame MUST be verified by golden-file tests. One of those goldens MUST assert that none of R13's rejected settings appears in the rendered view. R13's claim is that they are absent, not hidden, and absence is the one claim prose cannot keep: a view built by walking a schema grows a row the moment someone adds a key, and R14's diagnostic fires on a key that was *typed*, never on one this view offers. No other requirement here would catch it.
+
 ## Acceptance criteria
 
-- With `$XDG_CONFIG_HOME` set to a temporary directory containing no config file, the tool starts, and every setting reports its default. Writing an empty `config.yml` changes nothing.
-- With `$XDG_CONFIG_HOME` set, no file is created under `~/.config/gh-runs/`. No ETag, repository list, or window state ever appears inside `config.yml`.
-- A config file setting the default launch filter, overridden by the equivalent flag, yields the flag's value. With the flag absent it yields the config's value, and with both absent, the default.
-- The keybinding profile accepts exactly `vim` and `standard`. Any other value, including `mac` or `windows`, is rejected with a diagnostic listing the two valid values.
-- Excluding a repository removes it from the Feed and results in zero HTTP requests to it across a full polling cycle.
-- The Budget setting's schema admits no unit of time and no unit of requests. There is no config key, flag, or environment variable whose value is a poll interval, a delete rate, a cache TTL, or a concurrency level (R13).
-- Setting `poll_interval: 5` in `config.yml` starts normally and emits a diagnostic containing that key's reason from R13: that choosing it requires the token tier, repo count and points model. The same holds for the other four. Setting `some_future_key: 1` emits a generic unknown-key diagnostic and also starts normally.
-- Setting the confirm threshold above the hard maximum clamps it to the maximum and emits a diagnostic. Deleting a set larger than the effective threshold requires typing the count. No config file and no environment variable produces a state in which a bulk deletion proceeds with no confirmation at all: in the TUI the modal still opens, and in the CLI `--yes` is still required on the command line.
-- With `NO_COLOR` set to any value, including the empty string, output contains no ANSI escape sequences, whatever the theme setting says.
-- With colour stripped, every Status and Conclusion in the Feed remains distinguishable by text alone. As it happens, v1's `SKIP`/`GOOD`/`FAIL` labels already satisfied this.
-- Editing a setting in the TUI and quitting leaves `config.yml` changed in that key only, with unrelated comments and key order intact.
+**AC1: No config file is a valid config.** With `$XDG_CONFIG_HOME` set to a temporary directory containing no config file, the tool starts, and every setting reports its default. Writing an empty `config.yml` changes nothing.
+
+**AC2: State never enters the config file.** With `$XDG_CONFIG_HOME` set, no file is created under `~/.config/gh-runs/`. No ETag, repository list, or window state ever appears inside `config.yml`.
+
+**AC3: Precedence holds.** A config file setting the default launch filter, overridden by the equivalent flag, yields the flag's value. With the flag absent it yields the config's value, and with both absent, the default.
+
+**AC4: Exactly two keybinding profiles.** The keybinding profile accepts exactly `vim` and `standard`. Any other value, including `mac` or `windows`, is rejected with a diagnostic listing the two valid values.
+
+**AC5: Exclusion reaches the network.** Excluding a repository removes it from the Feed and results in zero HTTP requests to it across a full polling cycle.
+
+**AC6: The Budget knob is intent, not mechanism.** The Budget setting's schema admits no unit of time and no unit of requests. There is no config key, flag, or environment variable whose value is a poll interval, a delete rate, a cache TTL, or a concurrency level (R13).
+
+**AC7: A rejected key gets its own reason.** Setting `poll_interval: 5` in `config.yml` starts normally and emits a diagnostic containing that key's reason from R13: that choosing it requires the token tier, repo count and points model. The same holds for the other four. Setting `some_future_key: 1` emits a generic unknown-key diagnostic and also starts normally.
+
+**AC8: The confirm threshold is clamped.** Setting the confirm threshold above the hard maximum clamps it to the maximum and emits a diagnostic. Deleting a set larger than the effective threshold requires typing the count. No config file and no environment variable produces a state in which a bulk deletion proceeds with no confirmation at all: in the TUI the modal still opens, and in the CLI `--yes` is still required on the command line.
+
+**AC9: `NO_COLOR` beats the theme.** With `NO_COLOR` set to any value, including the empty string, output contains no ANSI escape sequences, whatever the theme setting says.
+
+**AC10: Meaning survives monochrome.** With colour stripped, every Status and Conclusion in the Feed remains distinguishable by text alone. As it happens, v1's `SKIP`/`GOOD`/`FAIL` labels already satisfied this.
+
+**AC11: The view writes the file without damage.** Editing a setting in the TUI and quitting leaves `config.yml` changed in that key only, with unrelated comments and key order intact.
+
+**AC12: Goldens hold the Settings view.** Rendering the Settings view from held state, with no terminal and no network, reproduces the stored golden byte for byte. The golden contains no row, label, field or help text for a poll interval, deletes per second, a cache TTL, a concurrency level, or a stored setting that skips confirmation. Adding any of the five to the view fails it.
 
 ## Constraints
 

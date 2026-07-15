@@ -29,6 +29,24 @@ It runs near the secondary rate limit on a fast connection, has no retry, silent
 
 People who own or contribute to enough repositories that Actions activity stops being observable by hand, and who accumulate Runs, Caches and Artifacts faster than they clean them. The reference user has **163 repositories, roughly 26 with Runs**. The reference repository has **28,707 Runs** and **12.8 GB of Caches**.
 
+## Stack
+
+Go, rendered with **Bubble Tea** and **Lipgloss**. The Elm-style model/update/view loop and first-class async commands are what a Feed of tiered pollers wants, and gh-dash is the proof it carries this exact domain. tview was the real alternative and lost on the async story: mixing API polling into a callback toolkit is clunkier than a message loop, and theming is harder. gocui and raw tcell would mean hand-rolling lists, viewports and key handling that bubbles supplies.
+
+None of that is surprising enough to warrant an ADR (see [adr/](./adr/) on the three-part test), which is why it lives here. It is recorded because it is the one stack decision a reader would otherwise have to infer.
+
+The client is go-gh, which is a different question and does warrant one. See [ADR-0002](./adr/0002-go-gh-with-dual-distribution.md).
+
+## Testing
+
+Three seams, designed in from day one rather than retrofitted:
+
+| Seam | Why |
+|---|---|
+| **Recorded HTTP fixtures** | Cassettes replay what the API actually said, so tests catch drift. Hand-written fakes encode what we believe and stay green while reality moves. This API has real surprises, and every one of them is in the table below. |
+| **Injected clock** | The polling scheduler and rate governor are timing-dependent. Their tests must be deterministic and instant, never sleeping through a real interval. |
+| **Golden files** | TUI rendering. A live Feed's correctness is largely what it puts on screen, and nothing else in this list can see that. |
+
 ## Constraints that shape everything
 
 These are empirical, measured against the live API and against the client we build on. Every one of them changed a design decision.

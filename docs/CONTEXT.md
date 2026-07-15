@@ -7,7 +7,7 @@ Watching GitHub Actions runs across a person's repositories as they happen, and 
 ### GitHub Actions
 
 **Workflow**:
-An automation definition stored as YAML in a repository. Its Runs outlive it. A Workflow whose file is removed enters a `deleted` state rather than disappearing.
+An automation definition stored as YAML in a repository. Its Runs outlive it.
 _Avoid_: Action, pipeline (an Action is a reusable Step. A pipeline is another product's word.)
 
 **Run**:
@@ -23,7 +23,7 @@ How a Run ended: `success`, `failure`, `cancelled`, `skipped`, `timed_out`, `neu
 _Avoid_: Result, outcome, and above all Status. Status and Conclusion are two different fields, and conflating them is the defining bug of the tools that came before this one.
 
 **Attempt**:
-One execution of a Run. Re-running never creates a Run. It adds an Attempt to the Run that already exists.
+One execution of a Run. Re-running never creates a Run, only another Attempt on the one that already exists.
 _Avoid_: Retry, rerun (a re-run is the act. An Attempt is what the act produces.)
 
 **Job**:
@@ -45,7 +45,7 @@ Triggering a Workflow by hand, supplying the typed inputs that Workflow declares
 _Avoid_: Trigger, invoke, workflow_dispatch (that's the event's name, not the domain's word)
 
 **Orphaned Run**:
-A Run whose Workflow is in the `deleted` state. Its history persists indefinitely, with nothing remaining that could ever produce another.
+A Run whose Workflow file has been removed, leaving that Workflow in a `deleted` state rather than gone. Its history persists indefinitely, with nothing remaining that could ever produce another.
 
 ### gh-runs
 
@@ -62,5 +62,5 @@ Recovering repository storage by deleting Caches and Artifacts.
 _Avoid_: Cleanup, garbage collection
 
 **Budget**:
-The share of a person's primary GitHub API rate allowance that this tool is permitted to spend. Only the primary allowance is observable, so only it can be budgeted.
+The share of a person's primary GitHub API rate allowance that this tool is permitted to spend.
 _Avoid_: Quota, rate limit (the rate limit is GitHub's. The Budget is the portion we are allowed.)

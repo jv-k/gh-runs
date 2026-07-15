@@ -46,23 +46,27 @@ Read a Job's log inside the tool, rendered the way the web UI renders it (folded
 
 **R19.** Never emit raw terminal control sequences from log content to the terminal. Whether they are interpreted or stripped is an open question. That they must not corrupt the display is not.
 
+**R20.** Render to a frame from held log content alone, with no live terminal and no network, and verify that frame with golden-file tests. The goldens must cover at minimum: the BOM stripped from the first line (R3), the 29-character timestamp prefix absent by default and byte-identically restored when toggled (R4), `##[group]`/`##[endgroup]` spans folded and labelled (R5), and `##[error]` and `##[warning]` lines styled apart from ordinary lines and from each other (R7). Every one of those is a byte-level transformation of text the API sent, applied to content the tool did not author and cannot predict. A golden compares exactly that, and it is the only check here that would notice a fold quietly swallowing a line or a prefix returning one character short.
+
 ## Acceptance criteria
 
-Opening a Job issues exactly one request for that Job's log and zero requests for the run-level archive. Opening a Run detail without opening a Job issues no log request at all.
+**AC1: One request per Job opened.** Opening a Job issues exactly one request for that Job's log and zero requests for the run-level archive. Opening a Run detail without opening a Job issues no log request at all.
 
-Rendering the measured 4,153-byte trivial Job log produces a view in which no line contains U+FEFF at any offset, 12 folds are present, 2 lines are styled as warnings, and the literal strings `##[group]`, `##[endgroup]` and `##[warning]` appear nowhere in the rendered view.
+**AC2: The measured log renders clean.** Rendering the measured 4,153-byte trivial Job log produces a view in which no line contains U+FEFF at any offset, 12 folds are present, 2 lines are styled as warnings, and the literal strings `##[group]`, `##[endgroup]` and `##[warning]` appear nowhere in the rendered view.
 
-With the default timestamp setting, no rendered line begins with an ISO-8601 timestamp. Toggling timestamps on and diffing against the raw response shows the prefix restored character-for-character. Toggling twice returns to the stripped view.
+**AC3: Timestamps strip by default and restore exactly.** With the default timestamp setting, no rendered line begins with an ISO-8601 timestamp. Toggling timestamps on and diffing against the raw response shows the prefix restored character-for-character. Toggling twice returns to the stripped view.
 
-With `NO_COLOR` set, a snapshot of the same log still distinguishes the 2 warning lines from ordinary lines by text content alone.
+**AC4: Legible without colour.** With `NO_COLOR` set, a snapshot of the same log still distinguishes the 2 warning lines from ordinary lines by text content alone.
 
-The whole-Run export produces a zip on disk. No code path that renders a log requests the run-level archive, and no rendered Job or Step name is a substring of an archive filename.
+**AC5: The archive is export-only.** The whole-Run export produces a zip on disk. No code path that renders a log requests the run-level archive, and no rendered Job or Step name is a substring of an archive filename.
 
-Deleting a Run's logs leaves that Run listable in the Feed. The confirmation text for deleting logs and the confirmation text for deleting a Run are different, and no single keystroke performs both.
+**AC6: Deleting logs is not deleting the Run.** Deleting a Run's logs leaves that Run listable in the Feed. The confirmation text for deleting logs and the confirmation text for deleting a Run are different, and no single keystroke performs both.
 
-A Job with no log content renders the empty state. A download in progress shows an indeterminate indicator and no percentage. Two successive fetches of the same Job's log issue two requests to the API endpoint and reuse no URL between them.
+**AC7: Empty state, indeterminate progress, no URL reuse.** A Job with no log content renders the empty state. A download in progress shows an indeterminate indicator and no percentage. Two successive fetches of the same Job's log issue two requests to the API endpoint and reuse no URL between them.
 
-A Run with more than one Attempt offers logs for the latest Attempt's Jobs only, and offers no path to a prior Attempt's logs.
+**AC8: Only the latest Attempt's logs.** A Run with more than one Attempt offers logs for the latest Attempt's Jobs only, and offers no path to a prior Attempt's logs.
+
+**AC9: Goldens hold the rendered log.** Rendering the measured 4,153-byte Job log from held content, with no terminal and no network, reproduces the stored golden byte for byte. Separate goldens fix the default view (no U+FEFF, no timestamp prefix, 12 folds collapsed and labelled), the timestamps-on view, a fold expanded, and a log carrying `##[error]` and `##[warning]` lines styled apart from ordinary lines and from each other. Changing any of those transformations fails its golden.
 
 ## Constraints
 

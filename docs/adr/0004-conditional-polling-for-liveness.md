@@ -1,6 +1,6 @@
 # Liveness via conditional ETag polling
 
-The Feed must show Runs invoked elsewhere without interaction. GitHub offers no push mechanism a local TUI can use, so liveness means polling. What makes it affordable is that **conditional requests returning 304 cost nothing against the primary rate limit**.
+The Feed must show Runs invoked elsewhere without interaction. GitHub offers no push mechanism a local TUI can use: webhooks need a publicly reachable endpoint, and the web UI's live updates run on an internal socket with no public equivalent. So liveness means polling. What makes it affordable is that **conditional requests returning 304 cost nothing against the primary rate limit**.
 
 Measured directly, interleaving unconditional and conditional requests against the same endpoint:
 
@@ -10,15 +10,7 @@ round2:  uncond 200 used=121  |  cond 304 used=121
 round3:  uncond 200 used=122  |  cond 304 used=122
 ```
 
-`used` advances by exactly one per round, and that one belongs entirely to the 200. Polling roughly 26 repositories every few seconds is therefore about 3,600 requests an hour consuming approximately zero budget while idle. Only repositories that actually changed cost anything.
-
-## Considered Options
-
-**Webhooks.** They need a publicly reachable endpoint. A non-starter for a local TUI.
-
-**SSE or websockets.** The web UI's live updates run on an internal socket with no public equivalent.
-
-**Unconditional polling.** 26 repos × 12/min = 18,720 requests an hour against a 5,000/hour limit. Impossible.
+`used` advances by exactly one per round, and that one belongs entirely to the 200. Polling roughly 26 repositories every few seconds is therefore about 3,600 requests an hour consuming approximately zero budget while idle. Only repositories that actually changed cost anything. Unconditional polling is impossible at any useful rate: 26 repos × 12/min = 18,720 requests an hour against a 5,000/hour limit.
 
 ## Consequences
 

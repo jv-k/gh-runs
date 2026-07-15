@@ -92,6 +92,10 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 
 **R35.** When launched inside a git repository whose remote resolves to a host other than github.com, the Feed must reject the host explicitly. It must not silently fall back to github.com or attribute Runs to the wrong host. Repository identity is host-qualified (`host/owner/name`) throughout.
 
+### Seams
+
+**R36.** The Feed must render to a frame from held state alone, with no live terminal and no network, and that frame must be verified by golden-file tests. The goldens must cover four things at minimum. Row rendering, with Status and Conclusion in their own cells and an empty Conclusion below `completed` (R4, R5, R6). R24's honest cap label ("1,000 of ~18,260"). The action states R17, R18 and R21 distinguish, which are offered, read-only, not yet known, and permanently read-only. And R11's deferred-insertion affordance ("3 new runs"). Those four are the claims this document argues hardest for, and each is a property of the painted frame rather than of the model behind it: a test over held state can prove Conclusion is null, and only a golden proves the cell is empty. They are also the four a refactor can undo without failing anything else here.
+
 ## Acceptance criteria
 
 **AC1: Row stability.** With the cursor in the list, the Run ID at a given row index is identical between two consecutive frames unless the user moved the cursor, refreshed explicitly, changed the filter, or applied deferred changes. A poll result alone never changes it.
@@ -129,6 +133,8 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 **AC17: Unsupported host.** Launched inside a git repository whose remote is a GHES host, the Feed states the host is unsupported and lists no Runs under that repository's name.
 
 **AC18: Keybindings.** Exactly two profiles are selectable. No binding in either uses Cmd. Ctrl+C quits in both.
+
+**AC19: Goldens hold the Feed's frame.** Rendering a recorded frame from held state, with no terminal and no network, reproduces the stored golden byte for byte. Four separate goldens fix the cases R36 names. A row at Status `in_progress` with an empty Conclusion cell, alongside one at `completed` carrying its Conclusion. A capped view labelled "1,000 of ~18,260", nowhere carrying a bare 18,260. The same row rendered with its destructive action offered, read-only, not yet known, and permanently read-only, each visibly different from the others. A deferred state whose affordance reads "3 new runs". Changing any of them fails its golden.
 
 ## Constraints
 

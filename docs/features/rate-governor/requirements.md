@@ -66,33 +66,33 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 ## Acceptance criteria
 
-**AC1. Cold start rate.** From cold, the first write is issued at ~1/second. The interval is measured on the injected clock and no test sleeps.
+**AC1: Cold start rate.** From cold, the first write is issued at ~1/second. The interval is measured on the injected clock and no test sleeps.
 
-**AC2. Ramp.** After a run of consecutive clean responses, the issue rate is strictly higher than 1/second. Across any 60s window of virtual time, the number of writes issued never reaches the ~180 points ceiling, and never exceeds it.
+**AC2: Ramp.** After a run of consecutive clean responses, the issue rate is strictly higher than 1/second. Across any 60s window of virtual time, the number of writes issued never reaches the ~180 points ceiling, and never exceeds it.
 
-**AC3. Purge at reference scale.** A cassette of 18,260 successful DELETEs completes in milliseconds of real time, advancing virtual time across the run. No 60s window of virtual time exceeds the ceiling.
+**AC3: Purge at reference scale.** A cassette of 18,260 successful DELETEs completes in milliseconds of real time, advancing virtual time across the run. No 60s window of virtual time exceeds the ceiling.
 
-**AC4. Backoff on 429.** Given a 429 with `Retry-After: 60`, no write is issued until virtual time has advanced 60s, the affected Run is re-attempted, and the operation's failure count remains 0.
+**AC4: Backoff on 429.** Given a 429 with `Retry-After: 60`, no write is issued until virtual time has advanced 60s, the affected Run is re-attempted, and the operation's failure count remains 0.
 
-**AC5. Backoff on 403.** Given a 403 carrying rate-limit signals, the issue rate falls, the request is re-attempted, and it is not recorded as a failure.
+**AC5: Backoff on 403.** Given a 403 carrying rate-limit signals, the issue rate falls, the request is re-attempted, and it is not recorded as a failure.
 
-**AC6. Rate limits are not failures.** Given a sustained sequence of rate-limit responses, none is reported as a failure to any consumer, and R14's classification marks each as a rate-limit response.
+**AC6: Rate limits are not failures.** Given a sustained sequence of rate-limit responses, none is reported as a failure to any consumer, and R14's classification marks each as a rate-limit response.
 
-**AC7. Header authority.** Given responses whose `x-ratelimit-remaining` falls faster than the governor's own tally predicts (traffic from another consumer of the same token), the published remaining Budget matches the header, not the tally.
+**AC7: Header authority.** Given responses whose `x-ratelimit-remaining` falls faster than the governor's own tally predicts (traffic from another consumer of the same token), the published remaining Budget matches the header, not the tally.
 
-**AC8. 304 is free.** Replaying ADR-0004's interleaved measurement, the governor's primary accounting advances by exactly one per round, attributable to the 200. Each 304 advances it by zero.
+**AC8: 304 is free.** Replaying ADR-0004's interleaved measurement, the governor's primary accounting advances by exactly one per round, attributable to the 200. Each 304 advances it by zero.
 
-**AC9. Exhaustion.** Given `x-ratelimit-remaining: 0` and `x-ratelimit-reset` at 14:32, the governor publishes exhaustion with a resumption time of 14:32, and issues nothing until virtual time passes it.
+**AC9: Exhaustion.** Given `x-ratelimit-remaining: 0` and `x-ratelimit-reset` at 14:32, the governor publishes exhaustion with a resumption time of 14:32, and issues nothing until virtual time passes it.
 
-**AC10. Exhaustion without a time.** Given exhaustion with neither `x-ratelimit-reset` nor `Retry-After`, the governor publishes exhaustion with no time. It does not synthesise one.
+**AC10: Exhaustion without a time.** Given exhaustion with neither `x-ratelimit-reset` nor `Retry-After`, the governor publishes exhaustion with no time. It does not synthesise one.
 
-**AC11. Pressure gates the readout.** With consumption nominal, the governor reports no pressure and no Budget readout is rendered anywhere. Below the pressure threshold, it reports pressure.
+**AC11: Pressure gates the readout.** With consumption nominal, the governor reports no pressure and no Budget readout is rendered anywhere. Below the pressure threshold, it reports pressure.
 
-**AC12. One global throttle.** A Purge spanning 3 repositories issues writes at the same aggregate rate as a Purge of the same size confined to 1. The rate does not scale with repository count.
+**AC12: One global throttle.** A Purge spanning 3 repositories issues writes at the same aggregate rate as a Purge of the same size confined to 1. The rate does not scale with repository count.
 
-**AC13. Nothing to turn up.** No flag, config key or environment variable sets deletes-per-second, requests-per-second, concurrency, or any backoff parameter. Setting the intent-level Budget share changes the observed rate. Nothing sets the rate itself.
+**AC13: Nothing to turn up.** No flag, config key or environment variable sets deletes-per-second, requests-per-second, concurrency, or any backoff parameter. Setting the intent-level Budget share changes the observed rate. Nothing sets the rate itself.
 
-**AC14. Reads and writes share one Budget.** A configured Budget share is respected across a workload mixing polls and writes, not per class.
+**AC14: Reads and writes share one Budget.** A configured Budget share is respected across a workload mixing polls and writes, not per class.
 
 ## Constraints
 

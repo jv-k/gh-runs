@@ -66,39 +66,41 @@ R14 is where go-gh's `repository.Current()` trap lands, so it must not be met by
 
 ## Acceptance criteria
 
-**AC1. Enumeration cost.** Against a cassette of the reference account, discovery issues exactly two enumeration requests and yields 163 repositories. A third page is never requested.
+**AC1: Enumeration cost.** Against a cassette of the reference account, discovery issues exactly two enumeration requests and yields 163 repositories. A third page is never requested.
 
-**AC2. Classification.** Given a cassette in which 26 of 163 repositories return a non-empty Run list, the published poll set is exactly those 26. The other 137 appear in no poll set at any tier.
+**AC2: Classification.** Given a cassette in which 26 of 163 repositories return a non-empty Run list, the published poll set is exactly those 26. The other 137 appear in no poll set at any tier.
 
-**AC3. Probe cost.** The full pass issues exactly one probe request per enumerated repository: 163 probes, 165 requests including enumeration.
+**AC3: Probe cost.** The full pass issues exactly one probe request per enumerated repository: 163 probes, 165 requests including enumeration.
 
-**AC4. Orphaned Runs are discovered.** Given a repository whose Workflow list contains only Workflows in the `deleted` state, and whose Run list is non-empty, discovery classifies it as having Runs and it enters the poll set. No code-search request is issued by any code path.
+**AC4: Orphaned Runs are discovered.** Given a repository whose Workflow list contains only Workflows in the `deleted` state, and whose Run list is non-empty, discovery classifies it as having Runs and it enters the poll set. No code-search request is issued by any code path.
 
-**AC5. Unfiltered probe.** No probe request carries a filter parameter, and no classification is derived from `total_count`.
+**AC5: Unfiltered probe.** No probe request carries a filter parameter, and no classification is derived from `total_count`.
 
-**AC6. Archived is probed and marked.** A repository with `archived: true` is probed, its Runs are published, and its capability is marked permanently read-only rather than merely refused.
+**AC6: Archived is probed and marked.** A repository with `archived: true` is probed, its Runs are published, and its capability is marked permanently read-only rather than merely refused.
 
-**AC7. Capability is free.** Across the whole pass, the number of requests issued to learn `permissions`, `archived` or `disabled` for any repository is zero.
+**AC7: Capability is free.** Across the whole pass, the number of requests issued to learn `permissions`, `archived` or `disabled` for any repository is zero.
 
-**AC8. Not yet known.** Before enumeration returns, the fast-path repository's capability reads as not-yet-known, and is not reported as permitted, refused, or inferred from its Runs having listed.
+**AC8: Not yet known.** Before enumeration returns, the fast-path repository's capability reads as not-yet-known, and is not reported as permitted, refused, or inferred from its Runs having listed.
 
-**AC9. Advisory, not authoritative.** Given `permissions.push: true` and a cassette returning 403 on a destructive request, the 403 is surfaced as an outcome of that request. Discovery's record is not treated as evidence that the 403 is impossible.
+**AC9: Advisory, not authoritative.** Given `permissions.push: true` and a cassette returning 403 on a destructive request, the 403 is surfaced as an outcome of that request. Discovery's record is not treated as evidence that the 403 is impossible.
 
-**AC10. Conditional re-probe is free.** Given persisted ETags and a cassette returning 304 for all 163 probes, the primary limit's `used` counter does not advance and the poll set is unchanged. Given one repository that has acquired its first Run and returns 200, only that repository is added to the poll set.
+**AC10: Conditional re-probe is free.** Given persisted ETags and a cassette returning 304 for all 163 probes, the primary limit's `used` counter does not advance and the poll set is unchanged. Given one repository that has acquired its first Run and returns 200, only that repository is added to the poll set.
 
-**AC11. Fast path.** Launched inside a git repository, the local repository is yielded and its Runs are painted after exactly one Run-listing request, before the remaining ~162 probes have completed.
+**AC11: Fast path.** Launched inside a git repository, the local repository is yielded and its Runs are painted after exactly one Run-listing request, before the remaining ~162 probes have completed.
 
-**AC12. Incremental publication.** Results are observable for repositories that have responded while other probes are still in flight. Consumers are not blocked on the final probe.
+**AC12: Incremental publication.** Results are observable for repositories that have responded while other probes are still in flight. Consumers are not blocked on the final probe.
 
-**AC13. Bounded concurrency.** At no instant are more than the configured number of probe requests in flight. No user-facing setting alters that bound.
+**AC13: Bounded concurrency.** At no instant are more than the configured number of probe requests in flight. No user-facing setting alters that bound.
 
-**AC14. Host qualification.** Every persisted and published key carries a host component. No key can be constructed without one. A repository resolving to a host other than github.com is rejected explicitly and contributes no entry.
+**AC14: Host qualification.** Every persisted and published key carries a host component. No key can be constructed without one. A repository resolving to a host other than github.com is rejected explicitly and contributes no entry.
 
-**AC15. Deterministic refresh.** A test of the scheduled re-probe advances the injected clock and completes without sleeping.
+**AC15: Deterministic refresh.** A test of the scheduled re-probe advances the injected clock and completes without sleeping.
 
 ## Constraints
 
 **Reference scale is 163 repositories, ~26 with Runs.** `/user/repos` paginates at 100, so enumeration is two requests. The probe pass is ~163 requests (under 4% of the 5,000/hour primary allowance) and ~4s at concurrency 10. That is the cost of a discovery pass, paid once and then revalidated for free (R12). It is not the cost of the steady state.
+
+**Auto-discovery was an override, not the recommendation.** The product owner was recommended cwd plus an explicit config list of repositories, on the argument that fan-out stays bounded and the account cares about ~10 repositories rather than 163, and chose auto-discovery from `/user/repos` instead. The ~163-repository probe pass above is the cost of that choice, and it is a decision rather than an oversight.
 
 **There is no `has_actions` field.** The measured field set is `has_issues`, `has_discussions`, `has_pages`, `has_wiki`, `has_projects`, `has_downloads`, `has_pull_requests`. You cannot tell from the list, which is why probing exists.
 

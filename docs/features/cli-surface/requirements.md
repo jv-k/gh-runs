@@ -62,20 +62,33 @@
 
 ## Acceptance criteria
 
-- `gh runs` with no arguments, on a TTY, opens the TUI. The same command with stdout redirected to a file exits non-zero with a diagnostic and writes no escape sequences.
-- For each flag in R2, `gh runs list <flag>` and `gh run list <flag>` accept the same argument forms. Neither rejects an input the other accepts. `gh runs list` with no `-L` fetches at most 20 Runs.
-- `gh runs list -s failure` returns Runs whose Conclusion is `failure` (Status-field mismatch notwithstanding). `gh runs list -s in_progress` returns Runs whose Status is `in_progress`. Both succeed.
-- `gh runs list --conclusion failure` is rejected as an unknown flag. No command issues a request carrying a `conclusion` query parameter.
-- `gh runs list -s faliure` is rejected by name, client-side, and issues zero HTTP requests. It does not list every Run in the repository.
-- `gh runs list --json databaseId,status,conclusion -q '.[].databaseId'` emits a bare list of IDs, byte-identical in shape to the same invocation against `gh run list`.
-- `gh runs list -R ghe.corp/o/r`, `GH_REPO=ghe.corp/o/r gh runs list`, and `GH_HOST=ghe.corp gh runs list` each print a message naming `ghe.corp` and stating the host is unsupported, exit non-zero, and issue zero HTTP requests. `gh runs list -R github.com/cli/cli` behaves identically to `gh runs list -R cli/cli`.
-- A Purge invoked without `--yes` deletes nothing and exits non-zero, whatever the config file contains. No config key makes `--yes` optional, and none supplies it.
-- `--dry-run` over a filter matching N Runs reports N, issues no DELETE, and exits 0. Removing `--dry-run` and adding `--yes` deletes exactly the same N.
-- A Purge over a set containing an `in_progress` Run reports it as skipped, not failed, and the command still exits 0 if all completed Runs were deleted.
-- A DELETE returning 404 does not increment the failure count and does not change the exit code.
-- A Purge against a repository with more than 1,000 matching Runs deletes matches beyond the first 1,000. It does not halt at the first empty filtered page.
-- Sending SIGINT mid-Purge exits 2 and prints how to resume. Re-running the identical command deletes only the Runs that remain.
-- With no credentials resolvable, any command requiring auth exits 4, not 1.
+**AC1: The TUI needs a TTY.** `gh runs` with no arguments, on a TTY, opens the TUI. The same command with stdout redirected to a file exits non-zero with a diagnostic and writes no escape sequences.
+
+**AC2: Flag parity with `gh run list`.** For each flag in R2, `gh runs list <flag>` and `gh run list <flag>` accept the same argument forms. Neither rejects an input the other accepts. `gh runs list` with no `-L` fetches at most 20 Runs.
+
+**AC3: `-s` spans both fields.** `gh runs list -s failure` returns Runs whose Conclusion is `failure` (Status-field mismatch notwithstanding). `gh runs list -s in_progress` returns Runs whose Status is `in_progress`. Both succeed.
+
+**AC4: `--conclusion` does not exist.** `gh runs list --conclusion failure` is rejected as an unknown flag. No command issues a request carrying a `conclusion` query parameter.
+
+**AC5: A typo is caught before the wire.** `gh runs list -s faliure` is rejected by name, client-side, and issues zero HTTP requests. It does not list every Run in the repository.
+
+**AC6: `--json` and `-q` match gh.** `gh runs list --json databaseId,status,conclusion -q '.[].databaseId'` emits a bare list of IDs, byte-identical in shape to the same invocation against `gh run list`.
+
+**AC7: An unsupported host is rejected offline.** `gh runs list -R ghe.corp/o/r`, `GH_REPO=ghe.corp/o/r gh runs list`, and `GH_HOST=ghe.corp gh runs list` each print a message naming `ghe.corp` and stating the host is unsupported, exit non-zero, and issue zero HTTP requests. `gh runs list -R github.com/cli/cli` behaves identically to `gh runs list -R cli/cli`.
+
+**AC8: `--yes` is never waivable.** A Purge invoked without `--yes` deletes nothing and exits non-zero, whatever the config file contains. No config key makes `--yes` optional, and none supplies it.
+
+**AC9: `--dry-run` resolves the same set.** `--dry-run` over a filter matching N Runs reports N, issues no DELETE, and exits 0. Removing `--dry-run` and adding `--yes` deletes exactly the same N.
+
+**AC10: An in-progress Run is skipped, not failed.** A Purge over a set containing an `in_progress` Run reports it as skipped, not failed, and the command still exits 0 if all completed Runs were deleted.
+
+**AC11: A 404 on DELETE is success.** A DELETE returning 404 does not increment the failure count and does not change the exit code.
+
+**AC12: A Purge reaches past the cap.** A Purge against a repository with more than 1,000 matching Runs deletes matches beyond the first 1,000. It does not halt at the first empty filtered page.
+
+**AC13: Interruption exits 2 and resumes.** Sending SIGINT mid-Purge exits 2 and prints how to resume. Re-running the identical command deletes only the Runs that remain.
+
+**AC14: Auth failure exits 4.** With no credentials resolvable, any command requiring auth exits 4, not 1.
 
 ## Constraints
 

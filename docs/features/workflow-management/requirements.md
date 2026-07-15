@@ -42,19 +42,19 @@ List a repository's Workflows with their state, and enable or disable them. Beca
 
 ## Acceptance criteria
 
-A repository with Workflows in several states renders each state distinctly: a `disabled_inactivity` Workflow is never displayed as `disabled_manually` and never as a bare "disabled". A Workflow whose state is a value not in the table below renders that value as text and does not crash or fall back to `active`.
+**AC1: Each state renders distinctly and verbatim.** A repository with Workflows in several states renders each state distinctly: a `disabled_inactivity` Workflow is never displayed as `disabled_manually` and never as a bare "disabled". A Workflow whose state is a value not in the table below renders that value as text and does not crash or fall back to `active`.
 
-For an archived repository, or one where `permissions.push` is false, the enable and disable actions are unavailable with a stated reason, and determining that issues no API request beyond the repository listing that already ran.
+**AC2: The gate costs no request.** For an archived repository, or one where `permissions.push` is false, the enable and disable actions are unavailable with a stated reason, and determining that issues no API request beyond the repository listing that already ran.
 
-Toggling a Workflow and re-reading the list shows the state the API reports. A 403 on a toggle leaves the displayed state unchanged and surfaces the failure to the user.
+**AC3: The API's state is the displayed state.** Toggling a Workflow and re-reading the list shows the state the API reports. A 403 on a toggle leaves the displayed state unchanged and surfaces the failure to the user.
 
-A Workflow in state `deleted` appears in the list, exposes neither enable nor disable, and exposes navigation to its Runs. Those Runs are labelled Orphaned Runs in the Feed. Identifying them issues no request against the repository's contents.
+**AC4: A `deleted` Workflow leads to its Orphaned Runs.** A Workflow in state `deleted` appears in the list, exposes neither enable nor disable, and exposes navigation to its Runs. Those Runs are labelled Orphaned Runs in the Feed. Identifying them issues no request against the repository's contents.
 
-A per-Workflow Run count derived from a filtered listing that hits the cap is displayed as capped (for example "1,000 of ~18,260") and never as a bare total.
+**AC5: A capped count is labelled capped.** A per-Workflow Run count derived from a filtered listing that hits the cap is displayed as capped (for example "1,000 of ~18,260") and never as a bare total.
 
-Snapshot assertion on vocabulary: the string "Status" never appears against a Workflow row, and the string "state" never appears against a Run or Job row.
+**AC6: State and Status keep their own vocabulary.** Snapshot assertion on vocabulary: the string "Status" never appears against a Workflow row, and the string "state" never appears against a Run or Job row.
 
-`gh runs list -w <name>` without `-a` returns the same set of Runs as `gh run list -w <name>` does for the same repository and filter.
+**AC7: `-w` matches gh without `-a`.** `gh runs list -w <name>` without `-a` returns the same set of Runs as `gh run list -w <name>` does for the same repository and filter.
 
 ## Constraints
 

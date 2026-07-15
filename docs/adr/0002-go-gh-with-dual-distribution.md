@@ -6,8 +6,6 @@ Every v1 user already has `gh` installed, because v1 required it. We build on `g
 
 **google/go-github, standalone.** Drops the gh association, but we would implement token discovery ourselves: environment variables, then config, then keyring, then device-flow OAuth. That is a lot of security-sensitive code written to avoid a dependency our users already have.
 
-**Pure gh extension.** Simplest, but surrenders Homebrew and `go install` as channels.
-
 **npm, as v1 used.** A Go binary on npm requires a postinstall that downloads a platform binary. That is an anti-pattern which reliably breaks behind corporate proxies and offline installs, and the audience is 179 downloads a month. v1.0.7 stays published and functional instead.
 
 ## Consequences
@@ -37,11 +35,9 @@ This does not weaken the decision above. go-gh still supplies the client, host r
 
 **`repository.Current()` carries a trap.** It shells out to **git**, not gh, and needs git on PATH or `GH_REPO` set. But it calls `auth.KnownHosts()`, which reads only environment variables and `hosts.yml`, never the keyring. On a machine where gh was never installed, `Current()` fails with "none of the git remotes point to a known GitHub host" even though git works and the remote is plainly github.com. Setting `GH_TOKEN` populates `KnownHosts()` and fixes it.
 
-Three remedies were rejected.
+Two remedies were rejected.
 
 **Vendor `zalando/go-keyring`** and read gh's entry at service name `"gh:" + hostname`. Verified working on the reference machine with no GUI prompt. Rejected because it only helps someone who *had* gh and removed it: a true standalone user never had gh, so there is no keyring entry to find. It also couples us to gh's `internal/` storage scheme, which is not a public interface and can change without notice, and on headless Linux it needs a D-Bus Secret Service that is often absent.
-
-**Our own device-flow OAuth.** Rejected: it is precisely the security-sensitive work this ADR chose go-gh to avoid.
 
 **Drop standalone and ship the gh extension alone.** Rejected: it abandons Homebrew and `go install`, and knocks a leg out from under ADR-0008.
 

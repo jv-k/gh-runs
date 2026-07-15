@@ -8,13 +8,7 @@ Resuming means running the same Purge again. It is self-correcting after a crash
 
 **Persisted job queue.** Write the resolved run-ID list and progress to disk, then offer to resume exactly. Gives accurate cross-session progress and an audit trail, at the cost of a job store, schema versioning, and reconciliation for IDs that vanished underneath you. That rebuilds, badly, what the filter provides free.
 
-**Detached background daemon.** The terminal is never hostage, but it costs process lifecycle, IPC, log files and orphan cleanup, and it creates a second way for a destructive operation to run unsupervised.
-
-**In-session only, no resume.** Simplest contract, but it means babysitting a terminal for an hour and a half.
-
 ## Consequences
-
-No job store, no schema migration, no reconciliation, and no way for persisted state to disagree with reality.
 
 The costs are real and accepted. Resuming pays a re-crawl, and cumulative progress across sessions is not shown, so a resumed Purge reports only what *this* pass did.
 

@@ -13,15 +13,9 @@ Two arguments carry this, and neither is "the pipeline is inadequate":
 1. **Standalone coherence.** [ADR-0002](./0002-go-gh-with-dual-distribution.md) ships a standalone binary. Telling a Homebrew user to "use `gh run` for one-shots" is not available to someone who does not have gh. The binary must be self-sufficient, or the channel is a lie. **Risk R1 threatened precisely this argument, and it is now resolved in the argument's favour.** go-gh cannot reach a keyring token without gh, so a user without gh supplies `GH_TOKEN`: the binary needs no gh, only a token, and standalone is a product rather than a shim. This argument stands as written.
 2. **The filter engine exists anyway.** The Feed must parse and apply branch, status, workflow, actor, event and date filters regardless. Flags are a thin adapter over domain logic that has to exist, not a parallel product.
 
-## Considered Options
-
-**TUI only.** Smallest surface. Point people at `gh run` and `gh api`, and say so in the README rather than competing badly. Rejected on argument 1.
-
-**Own syntax.** Cleanest internal model, but it creates a genuinely second syntax to learn, at which point the overlap objection stands.
-
 ## Consequences
 
-Compatibility is a **stated requirement, not an accident**. `gh run list` to `gh runs list` must be muscle memory. Superset, never divergence.
+Compatibility is a **stated requirement, not an accident**. `gh run list` to `gh runs list` must be muscle memory. A cleaner syntax of our own was available and rejected: a second syntax to learn is exactly the cost the overlap objection accuses us of, and mirroring gh is what answers it. Superset, never divergence.
 
 **Correction: `--conclusion` was proposed as the flagship example of that principle, and it does not survive measurement.** During design it was argued that gh's `-s/--status` "conflates" Status and Conclusion, and that we would keep that permissive behaviour for compatibility while adding a precise `--conclusion` flag gh lacks. Measured against the live API:
 

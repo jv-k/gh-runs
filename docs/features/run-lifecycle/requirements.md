@@ -68,23 +68,39 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 ## Acceptance criteria
 
-1. Given a Run with `run_attempt: 1`, Status `completed` and Conclusion `failure`, when it is re-run, the Feed's row count is unchanged, no row is added, and the row bearing that Run ID shows Attempt 2.
-2. Given the same re-run, that row shows Status `queued`, shows no Conclusion, and specifically does not still show `failure`.
-3. Given the same re-run, that row moves to the top of the Feed's default ordering while retaining its original Run ID.
-4. Given a Run with Status `completed` and Conclusion `cancelled`, no surface renders `cancelled` in a Status field, and no surface renders `completed` in a Conclusion field.
-5. Given a cancel returning 202, the row does not display Conclusion `cancelled` before a poll has observed the transition. It displays a cancellation-requested indicator.
-6. Given a cancel returning 409, no error dialog is raised, the message states the Run is not cancelable, and force-cancel is offered.
-7. Given a Run in a repository with `push: false`, all four operations are unavailable, a reason is shown, and no request is issued. The same holds with `archived: true`, and the reason distinguishes the two.
-8. Given a multi-selection of 47 Runs across 3 repositories, of which 3 are in read-only repositories, the modal states that 3 of 47 will be skipped and shows three per-repository rows summing to 47, and 44 requests are issued.
-9. Given a bulk cancel over a frozen set spanning 2 repositories, `y` does not start it and only the exact count string does.
-10. Given a bulk re-run over a small single-repository frozen set, the confirm modal still opens and `y` starts it. Given the same set cross-repository, the count must be typed.
-11. Given a single-Run cancel, a `y`/`N` prompt appears before any request. Given a single-Run re-run, none does.
-12. Given a frozen set for cancel in which one Run completes between freeze and request, the resulting 409 appears under skips, not under failures, and the consecutive-failure counter does not advance.
-13. Given a re-run against a Run that has been deleted, the 404 is recorded as a failure. Given a cancel against the same Run, the 404 is recorded as a skip.
-14. Given a re-run invoked with the debug-logging option enabled, the issued request carries it. Given the default path, it does not.
-15. Given a Run old enough to fall outside any suspected age limit, re-run is still offered, a request is still issued, and any rejection is reported using the API's stated reason.
-16. No surface exposes a control that navigates to a prior Attempt's Jobs or Steps.
-17. Given a bulk lifecycle operation in flight, the Feed continues to update and the operation is cancellable, matching the Purge's behaviour.
+**AC1: A re-run adds no row.** Given a Run with `run_attempt: 1`, Status `completed` and Conclusion `failure`, when it is re-run, the Feed's row count is unchanged, no row is added, and the row bearing that Run ID shows Attempt 2.
+
+**AC2: A re-run clears the prior Conclusion.** Given the same re-run, that row shows Status `queued`, shows no Conclusion, and specifically does not still show `failure`.
+
+**AC3: A re-run rises to the top as the same Run.** Given the same re-run, that row moves to the top of the Feed's default ordering while retaining its original Run ID.
+
+**AC4: `cancelled` is never a Status.** Given a Run with Status `completed` and Conclusion `cancelled`, no surface renders `cancelled` in a Status field, and no surface renders `completed` in a Conclusion field.
+
+**AC5: A 202 is a request, not an outcome.** Given a cancel returning 202, the row does not display Conclusion `cancelled` before a poll has observed the transition. It displays a cancellation-requested indicator.
+
+**AC6: A 409 offers force-cancel.** Given a cancel returning 409, no error dialog is raised, the message states the Run is not cancelable, and force-cancel is offered.
+
+**AC7: The gate states its reason.** Given a Run in a repository with `push: false`, all four operations are unavailable, a reason is shown, and no request is issued. The same holds with `archived: true`, and the reason distinguishes the two.
+
+**AC8: The breakdown sums and the skips are stated.** Given a multi-selection of 47 Runs across 3 repositories, of which 3 are in read-only repositories, the modal states that 3 of 47 will be skipped and shows three per-repository rows summing to 47, and 44 requests are issued.
+
+**AC9: A cross-repository set requires the count.** Given a bulk cancel over a frozen set spanning 2 repositories, `y` does not start it and only the exact count string does.
+
+**AC10: Bulk re-run still confirms.** Given a bulk re-run over a small single-repository frozen set, the confirm modal still opens and `y` starts it. Given the same set cross-repository, the count must be typed.
+
+**AC11: The single-Run asymmetry.** Given a single-Run cancel, a `y`/`N` prompt appears before any request. Given a single-Run re-run, none does.
+
+**AC12: A raced 409 is a skip.** Given a frozen set for cancel in which one Run completes between freeze and request, the resulting 409 appears under skips, not under failures, and the consecutive-failure counter does not advance.
+
+**AC13: A 404 reads by the requested end state.** Given a re-run against a Run that has been deleted, the 404 is recorded as a failure. Given a cancel against the same Run, the 404 is recorded as a skip.
+
+**AC14: Debug logging is opt-in.** Given a re-run invoked with the debug-logging option enabled, the issued request carries it. Given the default path, it does not.
+
+**AC15: Age does not pre-gate a re-run.** Given a Run old enough to fall outside any suspected age limit, re-run is still offered, a request is still issued, and any rejection is reported using the API's stated reason.
+
+**AC16: Attempt is a badge, never a view.** No surface exposes a control that navigates to a prior Attempt's Jobs or Steps.
+
+**AC17: Bulk lifecycle is not modal.** Given a bulk lifecycle operation in flight, the Feed continues to update and the operation is cancellable, matching the Purge's behaviour.
 
 ## Constraints
 

@@ -4,7 +4,9 @@ The Feed spans every repository with Runs, discovered automatically from the acc
 
 ## Considered Options
 
-This is not a preference. It was verified by introspection, and there is no alternative.
+**One repository at a time**, resolved from the cwd git remote, with `-R owner/repo` to retarget. This is what v1 did, what `gh` itself does, and what was recommended. **The product owner overrode it**, wanting a live dashboard across every repository with Runs, which a cwd-scoped tool cannot be. That override is what buys the complexity in this ADR. A single-repo tool needs no fan-out, no merge layer, and meets the 1,000 cap only as one repository's own ceiling. Because no cross-repository query exists, choosing multi-repo is what forces all three, and they are the price of the scope rather than facts about the API.
+
+The scope was a preference. The mechanism, once multi-repo is settled, is not. It was verified by introspection, and there is no alternative.
 
 **GraphQL.** `Repository` exposes no workflow or actions field. The only near-match, `interactionAbility`, is a false positive. The `WorkflowRun` type exists but is reachable only via `CheckSuite`, and it lacks `status` and `conclusion` entirely, which are the two fields the Feed is built on.
 

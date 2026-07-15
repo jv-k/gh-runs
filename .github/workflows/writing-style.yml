@@ -2,16 +2,23 @@ name: Writing style
 
 # De-slop gate. Runs deslopper (github.com/jv-k/deslopper) over the repo's Markdown and fails
 # the build on an error-tier tell (em dashes, the section sign, middle dots). Warn-tier findings
-# (word lists, bold bullet leads) annotate the PR but don't block. Run it locally with:
-#   uvx --from git+https://github.com/jv-k/deslopper@038e6b5170b4d5d97eff143a17475181d73aea99 deslopper lint
-# Claude also runs it per-edit via the PostToolUse hook in .claude/settings.json.
+# (word lists, bold bullet leads) annotate the PR but don't block.
 #
-# Pinned to a SHA, not @main, so a rule added upstream cannot fail an unrelated PR. Bump it
-# deliberately. Switch to the pinned PyPI form (uvx deslopper@x.y.z) once deslopper ships there.
+# The version is pinned in .deslopper-version, which .claude/hooks/deslop-lint.sh reads too, so
+# Claude's per-edit lint and this gate cannot drift apart. Bump it there, once.
+#
+# Run it locally with:
+#   uvx --from "git+https://github.com/jv-k/deslopper@$(cat .deslopper-version)" deslopper lint
 
 on:
   pull_request:
-    paths: ["**/*.md", "**/*.markdown", ".github/workflows/writing-style.yml"]
+    paths:
+      - "**/*.md"
+      - "**/*.markdown"
+      # A PR that loosens the gate must run the gate.
+      - "deslopper.config.json"
+      - ".deslopper-version"
+      - ".github/workflows/writing-style.yml"
 
 permissions:
   contents: read
@@ -24,4 +31,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v8.2.0
       - name: Run deslopper
-        run: uvx --from git+https://github.com/jv-k/deslopper@038e6b5170b4d5d97eff143a17475181d73aea99 deslopper lint --format github
+        run: |
+          pin="$(tr -d '[:space:]' < .deslopper-version)"
+          uvx --from "git+https://github.com/jv-k/deslopper@${pin}" deslopper lint --format github

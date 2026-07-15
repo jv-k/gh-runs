@@ -45,17 +45,27 @@ Tell someone that a Run is blocked on a human decision, and let that decision be
 
 ## Acceptance criteria
 
-1. Given Feed contents holding one Run with Status `completed` and Conclusion `action_required`, and one Run with Status `waiting` and Conclusion null, the badge shows 2.
-2. The first of those Runs is classified as a fork-PR approval and offers only the approve action. The second is classified as a pending deployment and offers only the review action. Neither offers the other's.
-3. A predicate reading Status alone matches the second Run and not the first. This case must have a test. It is the one the prior generation of tools got wrong.
-4. Computing the count and applying the filter issue zero requests.
-5. No request issued anywhere by this feature carries a `conclusion` query parameter.
-6. Given Feed contents where a filtered listing reported `total_count: 40` while holding 2 matching Runs, the badge shows 2.
-7. When the last matching Run leaves the predicate, the badge is not rendered.
-8. Activating the badge leaves the Feed as the focused surface with the filter applied, and opens no new destination.
-9. Submitting a deployment review with an empty comment is refused and issues no request.
-10. Given a stub returning 403 for a deployment review, the outcome reads as not-a-designated-reviewer, no retry is issued, and the Run remains in the filter.
-11. Given a stub where an approved Run's fields change on the next poll, the badge decrements with no request beyond the Feed's ordinary poll.
+**AC1: The badge counts both kinds.** Given Feed contents holding one Run with Status `completed` and Conclusion `action_required`, and one Run with Status `waiting` and Conclusion null, the badge shows 2.
+
+**AC2: Each kind routes to its own action.** The first of those Runs is classified as a fork-PR approval and offers only the approve action. The second is classified as a pending deployment and offers only the review action. Neither offers the other's.
+
+**AC3: A Status-only predicate misses the fork-PR case.** A predicate reading Status alone matches the second Run and not the first. This case must have a test. It is the one the prior generation of tools got wrong.
+
+**AC4: The badge and the filter cost nothing.** Computing the count and applying the filter issue zero requests.
+
+**AC5: No `conclusion` parameter is ever sent.** No request issued anywhere by this feature carries a `conclusion` query parameter.
+
+**AC6: The count is what is held, not `total_count`.** Given Feed contents where a filtered listing reported `total_count: 40` while holding 2 matching Runs, the badge shows 2.
+
+**AC7: The badge disappears at zero.** When the last matching Run leaves the predicate, the badge is not rendered.
+
+**AC8: The badge opens no view.** Activating the badge leaves the Feed as the focused surface with the filter applied, and opens no new destination.
+
+**AC9: An empty review comment is refused.** Submitting a deployment review with an empty comment is refused and issues no request.
+
+**AC10: A 403 on review is an outcome, not an error.** Given a stub returning 403 for a deployment review, the outcome reads as not-a-designated-reviewer, no retry is issued, and the Run remains in the filter.
+
+**AC11: The badge clears through the Feed's poll.** Given a stub where an approved Run's fields change on the next poll, the badge decrements with no request beyond the Feed's ordinary poll.
 
 ## Constraints
 

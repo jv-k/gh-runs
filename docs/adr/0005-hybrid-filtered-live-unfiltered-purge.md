@@ -15,15 +15,15 @@ So the Feed uses server-side filters (cheap, ETag-friendly, capped) and **labels
 
 ## Considered Options
 
-**Wave deletion.** Always filter, delete the reachable 1,000 or fewer, re-query so the next 1,000 surfaces, repeat. One code path and naturally resumable, but the UI can never show a true total.
+Both alternatives collapse the design to one code path, and each fails for a different reason.
+
+**Wave deletion.** Always filter, delete the reachable 1,000 or fewer, re-query so the next 1,000 appears, repeat. One code path and naturally resumable, but the UI can never show a true total.
 
 **Always crawl unfiltered.** Exact counts everywhere and no cap semantics to explain, but it pays a full crawl per repository and makes ETag revalidation coarse, because any new Run invalidates the whole list.
 
-**Cap the feature honestly.** Operate only on the newest 1,000 and offer no Purge. Never lies, but abandons the exact use case v1 existed for.
-
 ## Consequences
 
-Two code paths through the data layer, justified because the two jobs have opposite needs. The Feed wants cheap revalidation of a small recent window. A Purge wants exhaustive reach.
+Maintaining two code paths through the data layer is the price. The two jobs have opposite needs: the Feed wants cheap revalidation of a small recent window, a Purge wants exhaustive reach.
 
 **Never trust `total_count` in a filtered view.** It reports matches, not reachable matches, and the difference is silent. Any code that paginates a filtered list and stops on an empty page is wrong.
 

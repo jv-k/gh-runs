@@ -77,37 +77,37 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 ## Acceptance criteria
 
-**AC1. Deterministic intervals.** A test advancing 30s of virtual time observes exactly one poll of each slow-tier repository and completes without sleeping. Real elapsed time is not a factor in any assertion.
+**AC1: Deterministic intervals.** A test advancing 30s of virtual time observes exactly one poll of each slow-tier repository and completes without sleeping. Real elapsed time is not a factor in any assertion.
 
-**AC2. Conditional always.** Every poll issued in the steady state carries an `If-None-Match` header. No steady-state poll is unconditional.
+**AC2: Conditional always.** Every poll issued in the steady state carries an `If-None-Match` header. No steady-state poll is unconditional.
 
-**AC3. Tier by Status.** A repository whose Run list contains a Run at Status `in_progress` is polled at ~3s. When that Run's Status reaches `completed`, the repository falls back to medium or slow at the next scheduling decision. A Conclusion appearing does not by itself change any tier.
+**AC3: Tier by Status.** A repository whose Run list contains a Run at Status `in_progress` is polled at ~3s. When that Run's Status reaches `completed`, the repository falls back to medium or slow at the next scheduling decision. A Conclusion appearing does not by itself change any tier.
 
-**AC4. Fastest tier wins.** A repository that is both on screen and holds a Run at Status `queued` is polled at ~3s, not ~5s.
+**AC4: Fastest tier wins.** A repository that is both on screen and holds a Run at Status `queued` is polled at ~3s, not ~5s.
 
-**AC5. Capability is not a tier input.** A repository with `push: false` at the same Status and visibility as one with `push: true` is polled at the same interval, and their poll counts over an interval of virtual time are equal.
+**AC5: Capability is not a tier input.** A repository with `push: false` at the same Status and visibility as one with `push: true` is polled at the same interval, and their poll counts over an interval of virtual time are equal.
 
-**AC6. The poll set is discovery's.** Over any interval, the set of repositories polled is a subset of the ~26 classified as having Runs. None of the other 137 is ever polled.
+**AC6: The poll set is discovery's.** Over any interval, the set of repositories polled is a subset of the ~26 classified as having Runs. None of the other 137 is ever polled.
 
-**AC7. Poll set changes live.** A repository added by a discovery re-probe begins polling at the slow tier with no restart, and one removed stops being polled within one interval.
+**AC7: Poll set changes live.** A repository added by a discovery re-probe begins polling at the slow tier with no restart, and one removed stops being polled within one interval.
 
-**AC8. Budget maths.** With a poll set of 26 at 5s, projected consumption is 312 points/min. With a poll set of 100, no schedule is produced that polls all of them at 5s, because 1,200 points/min exceeds the ~900 ceiling. The interval auto-scales instead.
+**AC8: Budget maths.** With a poll set of 26 at 5s, projected consumption is 312 points/min. With a poll set of 100, no schedule is produced that polls all of them at 5s, because 1,200 points/min exceeds the ~900 ceiling. The interval auto-scales instead.
 
-**AC9. No interval knob.** No flag, config key or keybinding sets a poll interval. Setting the intent-level Budget share changes observed request rate. Nothing sets seconds.
+**AC9: No interval knob.** No flag, config key or keybinding sets a poll interval. Setting the intent-level Budget share changes observed request rate. Nothing sets seconds.
 
-**AC10. Demotion.** With the rate-governor reporting Budget below the configured share, the requests issued per minute of virtual time strictly decrease, and the slow tier's rate falls before the fast tier's.
+**AC10: Demotion.** With the rate-governor reporting Budget below the configured share, the requests issued per minute of virtual time strictly decrease, and the slow tier's rate falls before the fast tier's.
 
-**AC11. Exhaustion is explicit.** With the rate-governor reporting exhaustion and a reset at 14:32, the scheduler issues zero polls until virtual time reaches 14:32, and the resumption time it publishes is 14:32.
+**AC11: Exhaustion is explicit.** With the rate-governor reporting exhaustion and a reset at 14:32, the scheduler issues zero polls until virtual time reaches 14:32, and the resumption time it publishes is 14:32.
 
-**AC12. Foreign consumption counts.** With the rate-governor reporting remaining Budget consumed by traffic the scheduler did not issue, the scheduler demotes exactly as it would for its own consumption.
+**AC12: Foreign consumption counts.** With the rate-governor reporting remaining Budget consumed by traffic the scheduler did not issue, the scheduler demotes exactly as it would for its own consumption.
 
-**AC13. Debounce.** Twenty selection changes within 150ms of virtual time produce exactly one selection-driven fetch: the one for the final selection.
+**AC13: Debounce.** Twenty selection changes within 150ms of virtual time produce exactly one selection-driven fetch: the one for the final selection.
 
-**AC14. Stale response discarded.** A response for a request whose selection has since moved is discardable and is attributable to the superseded request.
+**AC14: Stale response discarded.** A response for a request whose selection has since moved is discardable and is attributable to the superseded request.
 
-**AC15. Concurrency bound.** At no instant of virtual time are more than the configured number of requests in flight. No user-facing setting alters the bound.
+**AC15: Concurrency bound.** At no instant of virtual time are more than the configured number of requests in flight. No user-facing setting alters the bound.
 
-**AC16. 304 does no work.** A 304 triggers no re-render and decrements the primary allowance by zero. A 200 with changed content is delivered to the Feed.
+**AC16: 304 does no work.** A 304 triggers no re-render and decrements the primary allowance by zero. A 200 with changed content is delivered to the Feed.
 
 ## Constraints
 

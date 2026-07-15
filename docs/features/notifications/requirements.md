@@ -49,18 +49,29 @@ Interrupt someone, through their operating system, when something has happened t
 
 ## Acceptance criteria
 
-1. With the default matrix, replaying a cold start against a stub already holding Runs with Conclusion `failure` and Runs already matching the approvals predicate produces zero notifications.
-2. The number of requests issued over a replayed sequence of transitions is identical with notifications enabled and disabled.
-3. Given a Run whose actor is the authenticated account transitioning to Conclusion `failure`, exactly one notification fires under the default matrix.
-4. Given the same transition on a Run whose actor is another account, no notification fires under the default matrix.
-5. Given a Run entering the approvals predicate, one notification fires and [approvals](../approvals/requirements.md)' badge increments. A stub Run with Status `completed` and Conclusion `action_required` triggers both or neither, never one alone.
-6. With "any failure in a repository you can push to" also enabled, a Run you triggered failing in a pushable repository produces exactly one notification, not two.
-7. With the master control off, no transition produces a notification under any matrix.
-8. Given a Dispatch whose correlation matched two candidate Runs, no notification fires when either completes.
-9. Given a Dispatch whose correlation resolved to no Run, no notification fires, and the Dispatch is still reported as accepted.
-10. Given the same transition observed on two consecutive polls, one notification fires.
-11. Given a stub where the OS channel is unavailable, the Feed continues to update, no error is surfaced, and Settings reports the channel unavailable.
-12. Given a Run reaching Conclusion `cancelled` or `skipped`, no notification fires under any enabled failure event.
+**AC1: A cold start is silent.** With the default matrix, replaying a cold start against a stub already holding Runs with Conclusion `failure` and Runs already matching the approvals predicate produces zero notifications.
+
+**AC2: Notifications cost no requests.** The number of requests issued over a replayed sequence of transitions is identical with notifications enabled and disabled.
+
+**AC3: Your own failure fires.** Given a Run whose actor is the authenticated account transitioning to Conclusion `failure`, exactly one notification fires under the default matrix.
+
+**AC4: Someone else's failure does not.** Given the same transition on a Run whose actor is another account, no notification fires under the default matrix.
+
+**AC5: The badge and the toast cannot disagree.** Given a Run entering the approvals predicate, one notification fires and [approvals](../approvals/requirements.md)' badge increments. A stub Run with Status `completed` and Conclusion `action_required` triggers both or neither, never one alone.
+
+**AC6: One transition, one notification.** With "any failure in a repository you can push to" also enabled, a Run you triggered failing in a pushable repository produces exactly one notification, not two.
+
+**AC7: The master control silences everything.** With the master control off, no transition produces a notification under any matrix.
+
+**AC8: Ambiguous correlation stays quiet.** Given a Dispatch whose correlation matched two candidate Runs, no notification fires when either completes.
+
+**AC9: A failed correlation is not a failed Dispatch.** Given a Dispatch whose correlation resolved to no Run, no notification fires, and the Dispatch is still reported as accepted.
+
+**AC10: A repeated observation is not a new transition.** Given the same transition observed on two consecutive polls, one notification fires.
+
+**AC11: An unavailable channel degrades silently.** Given a stub where the OS channel is unavailable, the Feed continues to update, no error is surfaced, and Settings reports the channel unavailable.
+
+**AC12: `cancelled` and `skipped` are not failures.** Given a Run reaching Conclusion `cancelled` or `skipped`, no notification fires under any enabled failure event.
 
 ## Constraints
 
@@ -77,6 +88,8 @@ Interrupt someone, through their operating system, when something has happened t
 | Repo permissions ride along free on `/user/repos` | PRD | R4's push-gated event costs no request to evaluate |
 | Settings are intent-level only | PRD scope, [ADR-0007](../../adr/0007-adaptive-delete-throttle.md) | R10 |
 | Three delivery backends (macOS, Linux, Windows) | | R11–R13 are a real subsystem. The platform surface is this feature's whole cost, and it buys nothing on the API side |
+
+**This feature is an override twice over.** The product owner was recommended no notifications in 2.0.0 at all, deferred to 2.1 on the argument that cross-platform delivery is a real subsystem (the last row above is that argument), and required OS-native notifications gated in settings instead. The owner was separately recommended a narrow fixed default event set, and chose R4's configurable matrix with a conservative default. Both are recorded so that a later reader knows the scope was contested rather than assumed.
 
 ## Open questions
 

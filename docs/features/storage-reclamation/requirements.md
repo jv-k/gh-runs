@@ -66,24 +66,45 @@ Answer one question (what is consuming this repository's Actions storage) and re
 
 **R24.** Report bytes reclaimed when a deletion completes, and adjust the displayed totals by exactly the deleted rows' sizes.
 
+### Seams
+
+**R25.** Render to a frame from held state alone, with no live terminal and no network, and verify that frame with golden-file tests covering R6's per-row byte formatting and R9's expired-Artifact tombstones. Both are properties of the painted row and of nothing else. R6's whole point is a list spanning 302,460,229 bytes and 145,212 bytes in which the small rows still render non-zero, and R9's is a row that says on its face that deleting it reclaims nothing. A unit test over the model can assert the bytes. Only a golden asserts what the row says about them.
+
 ## Acceptance criteria
 
-1. Opening the view for `cli/cli` displays 12,823,331,523 bytes and 96 Caches, and exactly one request produces both figures.
-2. Given a stub whose cache-usage reports 96 Caches while enumeration yields 40, the view labels the list incomplete and still shows 96 as the repository's Cache count.
-3. Any Artifact total the view presents is either summed from a complete enumeration or labelled an estimate. No total is extrapolated from a sample and presented plainly.
-4. For any two adjacent rows in the default order, the upper row's `size_in_bytes` is greater than or equal to the lower row's, irrespective of kind.
-5. Every row states whether it is a Cache or an Artifact, and every Cache row shows `last_accessed_at`.
-6. A 145,212-byte Artifact and a 302,460,229-byte Cache in the same list both render a non-zero size.
-7. In a 100-Artifact sample containing 10 with `expired: true`, exactly 10 rows render as tombstones, and the reclaimable total equals the summed `size_in_bytes` of the other 90 plus the Caches, unchanged whether the stub reports the expired Artifacts' size as their original value or as zero.
-8. Confirming deletion of an expired Artifact shows a reclaim figure of zero bytes.
-9. Download is unavailable on every row with `expired: true`. Given a stub returning 410 Gone, the outcome reads as the bytes being gone, not as a network failure.
-10. Given the three near-duplicate `setup-go-macOS-arm64` Caches, selecting the 302,442,412-byte row and confirming issues a delete carrying that Cache's id. The other two remain listed afterwards.
-11. Selecting rows, opening the confirmation, then mutating the underlying data deletes exactly the frozen set.
-12. Deleting a Cache of 302,460,229 bytes decreases the displayed total by exactly 302,460,229.
-13. With `permissions.push: false`, or `archived: true`, no delete action is offered and no delete request is issued. The archived case is worded differently from the unpermitted one.
-14. Given a stub returning 403 for a delete in a repository whose `permissions.push` is true, the outcome is recorded as a permission result, the deletion is not retried, and the view continues.
-15. Given a stub returning 404 for a delete, the outcome is counted as a success.
-16. Deleting N rows issues no delete faster than the governor permits.
+**AC1: The totals come from one request.** Opening the view for `cli/cli` displays 12,823,331,523 bytes and 96 Caches, and exactly one request produces both figures.
+
+**AC2: An incomplete list is labelled.** Given a stub whose cache-usage reports 96 Caches while enumeration yields 40, the view labels the list incomplete and still shows 96 as the repository's Cache count.
+
+**AC3: The Artifact total is summed or labelled.** Any Artifact total the view presents is either summed from a complete enumeration or labelled an estimate. No total is extrapolated from a sample and presented plainly.
+
+**AC4: The default sort is bytes descending.** For any two adjacent rows in the default order, the upper row's `size_in_bytes` is greater than or equal to the lower row's, irrespective of kind.
+
+**AC5: Kind and staleness are on every row.** Every row states whether it is a Cache or an Artifact, and every Cache row shows `last_accessed_at`.
+
+**AC6: No row rounds to zero.** A 145,212-byte Artifact and a 302,460,229-byte Cache in the same list both render a non-zero size.
+
+**AC7: Expired Artifacts are tombstones and reclaim nothing.** In a 100-Artifact sample containing 10 with `expired: true`, exactly 10 rows render as tombstones, and the reclaimable total equals the summed `size_in_bytes` of the other 90 plus the Caches, unchanged whether the stub reports the expired Artifacts' size as their original value or as zero.
+
+**AC8: An expired Artifact confirms at zero bytes.** Confirming deletion of an expired Artifact shows a reclaim figure of zero bytes.
+
+**AC9: 410 Gone reads as gone.** Download is unavailable on every row with `expired: true`. Given a stub returning 410 Gone, the outcome reads as the bytes being gone, not as a network failure.
+
+**AC10: Deletion targets the id, not the key.** Given the three near-duplicate `setup-go-macOS-arm64` Caches, selecting the 302,442,412-byte row and confirming issues a delete carrying that Cache's id. The other two remain listed afterwards.
+
+**AC11: The frozen set holds.** Selecting rows, opening the confirmation, then mutating the underlying data deletes exactly the frozen set.
+
+**AC12: The total adjusts by the deleted bytes.** Deleting a Cache of 302,460,229 bytes decreases the displayed total by exactly 302,460,229.
+
+**AC13: The gate distinguishes archived from unpermitted.** With `permissions.push: false`, or `archived: true`, no delete action is offered and no delete request is issued. The archived case is worded differently from the unpermitted one.
+
+**AC14: A 403 is an outcome, not a fault.** Given a stub returning 403 for a delete in a repository whose `permissions.push` is true, the outcome is recorded as a permission result, the deletion is not retried, and the view continues.
+
+**AC15: A 404 is success.** Given a stub returning 404 for a delete, the outcome is counted as a success.
+
+**AC16: Multi-row deletion goes through the governor.** Deleting N rows issues no delete faster than the governor permits.
+
+**AC17: Goldens hold the list's frame.** Rendering a recorded frame from held state, with no terminal and no network, reproduces the stored golden byte for byte. Separate goldens fix a list holding both the 302,460,229-byte Cache and the 145,212-byte Artifact, each size rendered in units suited to its own magnitude and neither shown as zero, and a row for an Artifact with `expired: true` rendering as a tombstone that states deleting it reclaims nothing.
 
 ## Constraints
 

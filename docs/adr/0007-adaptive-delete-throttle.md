@@ -5,15 +5,7 @@ GitHub gives two answers for how fast you may delete, and they disagree by 3×:
 - The **points model**: DELETE costs 5 points against roughly 900/min, giving about **180/min**.
 - The **written guidance** for write requests: *"wait at least one second between each request"*, giving about **60/min**.
 
-On an 18,260-Run Purge that is 100 minutes versus 5 hours. We start at the documented-safe 1/sec, ramp toward the points ceiling while responses stay clean, and back off hard the moment a 403, a 429 or a `Retry-After` appears.
-
-## Considered Options
-
-**Fixed 1/sec.** Never trips a limit, dead predictable, and defensible by citing the docs. Also 3× slower than the API demonstrably permits.
-
-**Fixed at the points ceiling, about 3/sec.** Finishes in 100 minutes, but treats the points model as the whole truth while GitHub's prose says otherwise. The penalty for being wrong is a block on the user's account, not a retry.
-
-**A user-configurable rate.** Punts the judgement, and the blame, to someone with no way to make it. See below.
+On an 18,260-Run Purge that is 100 minutes versus 5 hours. We start at the documented-safe 1/sec, ramp toward the points ceiling while responses stay clean, and back off hard the moment a 403, a 429 or a `Retry-After` appears. Starting at the ceiling instead would treat the points model as the whole truth while GitHub's prose says otherwise, and the penalty for being wrong is a block on the user's account, not a retry.
 
 ## Consequences
 

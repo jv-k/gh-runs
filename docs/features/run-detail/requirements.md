@@ -50,6 +50,10 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 **R18.** The detail pane must gate re-run and every other mutating action on `permissions.push && !archived` for the owning repository, consistently with the Feed. The mechanics of the operations themselves belong to [run-lifecycle](../run-lifecycle/requirements.md).
 
+### Seams
+
+**R19.** The detail pane must render to a frame from held state alone, with no live terminal and no network, and that frame must be verified by golden-file tests covering the Jobs and Steps rendering (R1, R2, R3) and R4's Attempt badge. The badge carries the most weight of anything this pane paints: it is the whole of what the API supports for Attempt, and after a re-run it is the only evidence on screen that anything happened (R17). R4 also fixes where it goes, against the Run's identity and not inside the Jobs list, and a position is a fact about the frame and nowhere else.
+
 ## Acceptance criteria
 
 **AC1: No fetch per keystroke.** Arrow-keying through 100 Feed rows with less than 150ms between keystrokes issues exactly one Job request: the one for the row where the cursor settles.
@@ -75,6 +79,8 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 **AC11: Orphaned Run.** For a Run whose Workflow is `deleted`, the pane marks the Workflow deleted.
 
 **AC12: Budget exhaustion.** At Budget exhaustion, the pane stops refreshing and states that it has paused and when it resumes. Jobs already on screen are not presented as live.
+
+**AC13: Goldens hold the pane's frame.** Rendering a recorded frame from held state, with no terminal and no network, reproduces the stored golden byte for byte. Separate goldens fix a Run's Jobs with their Steps rendered under them, a Job at Status `in_progress` with an empty Conclusion field, and a Run with `run_attempt: 3` rendering "Attempt 3" against the Run's identity and not within the Jobs list. Moving the badge into the Jobs list fails its golden.
 
 ## Constraints
 
