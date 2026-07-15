@@ -41,4 +41,10 @@ Two remedies were rejected.
 
 **Drop standalone and ship the gh extension alone.** Rejected: it abandons Homebrew and `go install`, and knocks a leg out from under ADR-0008.
 
-Risk R3, the exact asset naming that lets `gh extension install` find a precompiled binary, blocks release automation but not design.
+**Risk R3 is resolved: the asset name must end with `{GOOS}-{GOARCH}`.** gh selects a release asset with `strings.HasSuffix(a.Name, platform+ext)`, where `platform` is `GOOS-GOARCH` and `ext` is `.exe` on Windows and empty elsewhere (`pkg/cmd/extension/manager.go`, `installBin`). The prefix is ours to choose and the suffix is not, so `gh-runs_v2.0.0-alpha.0_darwin-arm64` matches and `gh-runs_2.0.0_Darwin_arm64` does not. Case and separator are both load-bearing. On Apple silicon gh falls back to a `darwin-amd64` asset through Rosetta 2 when no `darwin-arm64` asset exists. When nothing matches, install fails with "unsupported for {platform}" and tells the user to open an issue against this repository.
+
+Goreleaser's stock naming title-cases the OS and joins with underscores, which does not match, and a mismatch produces a release that looks complete and installs nowhere. Release automation therefore uses `cli/gh-extension-precompile`, gh's own action, which already names assets to this convention.
+
+**Prereleases are invisible to `gh extension install`, which is what makes an alpha safe.** gh resolves an unpinned install through `repos/{owner}/{repo}/releases/latest`, and GitHub defines that endpoint as the most recent non-prerelease, non-draft release. A release marked prerelease is therefore skipped. Testers opt in explicitly with `gh extension install jv-k/gh-runs --pin v2.0.0-alpha.0`, which resolves through `releases/tags/{tag}` instead and does see it.
+
+**Homebrew ships from a personal tap, `jv-k/homebrew-tap`.** homebrew-core's notability guidance sits above this repository's 42 stars, and core would also own the formula's update cadence. A tap is the channel we control, and it keeps Homebrew and the extension on the same release.
