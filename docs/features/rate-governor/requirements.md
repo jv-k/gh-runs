@@ -52,7 +52,7 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **R18.** Requests-per-second, concurrency and backoff parameters must likewise not be exposed. The single permitted user-facing knob is intent: what share of the Budget gh-runs may spend. That is a question answerable from the user's own context, unlike one that requires the points model, their token tier and their repo count.
 
-**R19.** The governor must honour the intent-level Budget share, applying it to writes and reads alike, since both draw on the same account-scoped allowance.
+**R19.** The governor must honour the intent-level Budget share over reads alone, and must never let it throttle a Purge. The Budget is a share of the **primary** limit, which is observable and is what polling spends. A Purge's throughput is bound by the **secondary** limit, which exposes no counter and is a different pool. The two are not the same currency, so a share of one says nothing about the other. A Purge running under a 25% Budget deletes at the governor's full ramped rate. See [ADR-0007](../../adr/0007-adaptive-delete-throttle.md), which settles this on measurement.
 
 ### Delivery and seams
 
@@ -92,7 +92,7 @@ The governor owns all write throughput and all Budget accounting: it reads the r
 
 **AC13: Nothing to turn up.** No flag, config key or environment variable sets deletes-per-second, requests-per-second, concurrency, or any backoff parameter. Setting the intent-level Budget share changes the observed rate. Nothing sets the rate itself.
 
-**AC14: Reads and writes share one Budget.** A configured Budget share is respected across a workload mixing polls and writes, not per class.
+**AC14: The Budget governs polling, never a Purge.** A configured Budget share is respected across a read workload. The same share applied to a workload mixing polls and deletes leaves the deletes at the governor's full ramped rate, because a Purge is bound by the secondary limit and the Budget is a share of the primary one.
 
 ## Constraints
 
@@ -121,7 +121,15 @@ That disagreement is the entire reason this component is adaptive rather than a 
 
 ## Open questions
 
-1. **Telling a rate-limit 403 from an authorization 403 is UNKNOWN, and it is the most consequential gap here.** R12 sends a 403 to hard backoff. [repo-discovery](../repo-discovery/requirements.md) R10 and [purge](../purge/requirements.md) R20 send a 403 to an authorization outcome. Both are canon (a 403 can arrive despite `push: true`, and a 403 can mean slow down), and they demand opposite handling of the same status code. Misreading it either way is expensive: an authorization 403 treated as a rate limit stalls a Purge behind a backoff that will never clear, and a rate-limit 403 treated as authorization keeps issuing and risks the block this whole component exists to avoid. Must be resolved by measurement before any Purge ships. Shared with [purge](../purge/requirements.md) open question 3.
+1. **Resolved by body, not by header, and it fails safe toward backoff.** R12 sends a 403 to hard backoff. [repo-discovery](../repo-discovery/requirements.md) R10 and [purge](../purge/requirements.md) R20 send a 403 to an authorization outcome. Both are canon, and they demand opposite handling of the same status code.
+
+    **An authorization 403 is measured.** `GET /repos/cli/cli/actions/permissions` on a token without admin returns HTTP 403 carrying a `documentation_url` that points at **the endpoint's own reference page**, a `message` naming the missing permission, no `retry-after`, and `x-ratelimit-remaining: 4976`.
+
+    **A secondary-limit violation is documented rather than measured**, deliberately, because provoking one is the hazard PRD R4 refuses. GitHub documents 403 **or 429**, "an error message that indicates that you exceeded a secondary rate limit", and an optional `retry-after`. It does **not** publish the exact message text, so we must not match on a string we have never seen.
+
+    **`x-ratelimit-remaining` is not the discriminator, and the temptation to use it is a trap.** Those headers describe the **primary** limit only (PRD). A secondary-limit 403 can arrive with a completely healthy primary remaining, exactly as the authorization 403 above did. The two are indistinguishable on that header.
+
+    **The rule: a 403 or 429 is an authorization outcome only when it matches the measured authorization shape.** Everything else is rate limiting. `retry-after` present means rate limiting outright. This is asymmetric on purpose. Misreading a rate limit as authorization keeps issuing and risks the account block this component exists to avoid, while misreading authorization as a rate limit costs one backoff before the retry fails the same way and resolves. Default to backing off. Verify the shape against a live secondary limit only if one is ever hit in the wild, never by provoking one.
 
 2. **Whether the secondary limit is observable at all is UNKNOWN, and much of the design depends on the answer.** The interleaved measurement behind R7 tracked *primary* consumption, and nothing in the canon establishes that any header reports remaining *secondary* points. Nor does it establish, strictly, which limit `x-ratelimit-remaining` describes when both are in play. If none does, then all secondary accounting (including every number in [polling-scheduler](../polling-scheduler/requirements.md) R11) is a projection from our own issued requests and the points model, computed by a client that cannot see the other consumers of the same token, and the only feedback signal is the 403 or 429 that means we already overshot. That is precisely why R11's headroom must be real and R12's backoff must be hard. Verify what a rate-limit response carries.
 
@@ -133,7 +141,7 @@ That disagreement is the entire reason this component is adaptive rather than a 
 
 6. **The pressure threshold at which the Budget readout appears is UNKNOWN.** R8 and [live-run-feed](../live-run-feed/requirements.md) R29 require silence when consumption is nominal and a readout under pressure. No number separates the two.
 
-7. **Whether the primary and secondary limits need separate Budget shares is undecided.** R19 applies one share to reads and writes alike, but the two limits have different currencies and different periods, and a workload can be comfortable on one while pinned against the other. Idle polling is exactly that case: ~0 primary, 312 points/min secondary. Belongs jointly to [settings](../settings/requirements.md) and [polling-scheduler](../polling-scheduler/requirements.md) open question 3.
+7. **Resolved: one Budget share, over the primary limit, and a Purge is not subject to it.** R19 previously applied one share to reads and writes alike, which contradicted [ADR-0007](../../adr/0007-adaptive-delete-throttle.md) outright. The ADR wins, on measurement: the two limits are different currencies, so a share of the primary one has nothing to say about a Purge bound by the secondary one. R19 and AC14 are corrected. The secondary limit gets no share of its own, because it exposes no counter to take a share of, and its control is the ramp rather than a budget. The observation that a workload can be comfortable on one limit while pinned against the other still holds and is exactly why the two are governed differently.
 
 ## Related
 
