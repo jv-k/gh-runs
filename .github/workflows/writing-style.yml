@@ -1,0 +1,27 @@
+name: Writing style
+
+# De-slop gate. Runs deslopper (github.com/jv-k/deslopper) over the repo's Markdown and fails
+# the build on an error-tier tell (em dashes, the section sign, middle dots). Warn-tier findings
+# (word lists, bold bullet leads) annotate the PR but don't block. Run it locally with:
+#   uvx --from git+https://github.com/jv-k/deslopper@038e6b5170b4d5d97eff143a17475181d73aea99 deslopper lint
+# Claude also runs it per-edit via the PostToolUse hook in .claude/settings.json.
+#
+# Pinned to a SHA, not @main, so a rule added upstream cannot fail an unrelated PR. Bump it
+# deliberately. Switch to the pinned PyPI form (uvx deslopper@x.y.z) once deslopper ships there.
+
+on:
+  pull_request:
+    paths: ["**/*.md", "**/*.markdown", ".github/workflows/writing-style.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: De-slop lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Run deslopper
+        run: uvx --from git+https://github.com/jv-k/deslopper@038e6b5170b4d5d97eff143a17475181d73aea99 deslopper lint --format github

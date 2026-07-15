@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "statusMessage": "De-slop lint",
+            "timeout": 60,
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in *.md|*.markdown) out=$(uvx --from git+https://github.com/jv-k/deslopper@038e6b5170b4d5d97eff143a17475181d73aea99 deslopper lint \"$f\" 2>&1) || { printf 'deslopper found machine-writing tells in %s. Fix them now: the error tier blocks CI.\\n%s\\n' \"$f\" \"$out\" >&2; exit 2; };; esac; }"
+          }
+        ]
+      }
+    ]
+  }
+}
