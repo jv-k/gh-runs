@@ -125,7 +125,7 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 **What the Feed polls is a filtered listing, capped at 1,000 silently** ([ADR-0005](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md)). The cap is the Feed's to label honestly. It is not the scheduler's to work around, and no polling frequency affects it.
 
-**All of this rests on PRD risk R2**, whether go-gh's client revalidates ETags or merely TTL-caches. If it is TTL-only, R1 is unimplementable as written and the live layer needs its own transport. See [local-store](../local-store/requirements.md).
+**go-gh's client is TTL-only and never revalidates (PRD risk R2, resolved).** Measured against real go-gh v2.9.0, two identical GETs produced 1 network hit and 0 requests carrying `If-None-Match`. R1 above is therefore implementable only over a transport of our own, passed as `api.ClientOptions.Transport` with go-gh's cache left off (`CacheTTL: 0`), which is verified working end to end. The economics above are untouched: the 304s are still free, and they are now ours to send. See [local-store](../local-store/requirements.md) R8, R19 and R20.
 
 ## Open questions
 
@@ -153,7 +153,7 @@ The scheduler decides which repositories are revalidated and how often, so that 
 - [ADR-0007: Adaptive delete throttle, not a fixed rate](../../adr/0007-adaptive-delete-throttle.md). R12's intent-not-mechanism principle.
 - [rate-governor](../rate-governor/requirements.md) owns the Budget state R13–R16 consume.
 - [repo-discovery](../repo-discovery/requirements.md) supplies R2's poll set.
-- [local-store](../local-store/requirements.md) supplies R1's ETags and carries PRD risk R2.
+- [local-store](../local-store/requirements.md) supplies R1's ETags, and its R19 owns the transport PRD risk R2 resolved into.
 - [live-run-feed](../live-run-feed/requirements.md): R8 meets its R27 and R16 meets its R30.
 - [run-detail](../run-detail/requirements.md) consumes R9's debounce and R5's fast tier.
 - [purge](../purge/requirements.md): open question 5.

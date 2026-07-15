@@ -30,7 +30,7 @@ The local store persists ETags, last-seen payloads and discovery results across 
 
 ### Correctness
 
-**R8.** The HTTP layer must perform true ETag revalidation: send `If-None-Match`, and distinguish a 304 from a 200 to the local store and to the [rate-governor](../rate-governor/requirements.md). A time-based cache that serves an entry without revalidating it does not satisfy this requirement, no matter how fresh the entry is. See open question 1. This is the highest risk in the project.
+**R8.** The HTTP layer must perform true ETag revalidation: send `If-None-Match`, and distinguish a 304 from a 200 to the local store and to the [rate-governor](../rate-governor/requirements.md). A time-based cache that serves an entry without revalidating it does not satisfy this requirement, no matter how fresh the entry is. go-gh's client is exactly such a cache (open question 1, resolved), so R8 is met only by the transport R19 requires.
 
 **R9.** A freshness lifetime must not be exposed as a user setting, by flag or config key. With ETag revalidation being both free and correct, a TTL could only ever make data staler than revalidating it would. There is no value of the knob that improves on asking.
 
@@ -57,6 +57,12 @@ The local store persists ETags, last-seen payloads and discovery results across 
 **R17.** The local store's freshness bookkeeping must take its timing from an injected clock, so that tests of expiry, revalidation and last-revalidated reporting advance time explicitly rather than sleeping.
 
 **R18.** The local store must be exercisable end-to-end against recorded HTTP fixtures, with no live network, and the fixtures must include a 200-with-ETag followed by a 304 for the same resource. This is the seam that proves R8 rather than assuming it: a hand-written fake would return whatever we believed a conditional request does, and would keep returning it long after the API changed. Cassettes replay what the API actually said. That is how this project learned that a filtered listing silently caps at 1,000 and that DELETE rejects a Run still in progress.
+
+### The transport
+
+**R19.** The tool must supply its own `http.RoundTripper` as `api.ClientOptions.Transport`, and must leave go-gh's own cache off by setting `CacheTTL: 0`. `EnableCache: false` does **not** disable it: the cache RoundTripper is installed unconditionally, and `EnableCache` only defaults `CacheTTL` to 24h, so `EnableCache: false, CacheTTL: 5 * time.Second` still caches. Our transport must never run underneath go-gh's cache, which sits above it and short-circuits before it runs, and which treats a 304 as cacheable (`isCacheableResponse` is `StatusCode < 500 && StatusCode != 403`) and would store a bare empty-bodied 304 as the response.
+
+**R20.** Every ETag store key must compose the request URL, the `Accept` header and the `Authorization` header, as go-gh's own `cacheKey` does. Keying on the URL alone leaks across tokens and across Accept headers: a second account, or a request for a different media type, would revalidate against an entry that was never its own.
 
 ## Acceptance criteria
 
@@ -106,11 +112,11 @@ The local store persists ETags, last-seen payloads and discovery results across 
 
 **Repository identity is host-qualified from day one** ([ADR-0009](../../adr/0009-host-qualified-repo-identity.md)), because host is one field now against a migration of every persisted key later. This feature is the "later" that ADR is protecting against.
 
-**The whole live layer rests on PRD risk R2.** Free 304s are the economic basis of polling, of cold start, and of the re-probe. If the client we build on does not revalidate, none of the economics in this document, [polling-scheduler](../polling-scheduler/requirements.md) or [rate-governor](../rate-governor/requirements.md) hold.
+**go-gh's client never revalidates (PRD risk R2, resolved).** Free 304s are the economic basis of polling, of cold start and of the re-probe, and go-gh's cache is TTL-only: a hit returns without touching the network, and freshness is file mtime against a TTL. Measured against real go-gh v2.9.0, two identical GETs produced 1 network hit and 0 requests carrying `If-None-Match`. The economics in this document, [polling-scheduler](../polling-scheduler/requirements.md) and [rate-governor](../rate-governor/requirements.md) all still hold, because the 304s themselves are real and free. They are simply ours to send, which is what R19 exists for ([ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)).
 
 ## Open questions
 
-1. **Whether go-gh's client does real ETag revalidation or only TTL caching is UNKNOWN, and it is the most important open question in this document, arguably in the project.** PRD risk R2 names it "the one that forces a redesign". R8 states the behaviour the tool requires. Nothing states that the client we have chosen provides it. If it is TTL-only, then a cached entry is served on age rather than on asking, 304s never happen, every poll is a full 200, and the arithmetic underneath [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md) (~26 repositories polled every few seconds at ~zero cost) collapses into 18,720 requests/hour against a 5,000/hour allowance. The remedy is a transport of our own, which is contained but is not small, and it must be discovered before the live layer is built on top of it rather than after. **Verify first.** This is a build-time check, not a judgement call: issue a request, issue it again, and look at whether the second one carried `If-None-Match` and what the server said.
+1. **Resolved: go-gh's client is TTL-only and never revalidates.** The check was the one this question named: issue a request, issue it again, and look at whether the second carried `If-None-Match`. It did not. Verified three ways. `pkg/api/cache.go` returns on a cache hit without ever calling the inner RoundTripper, and freshness is file mtime against a TTL, which is the entire policy. A grep across the whole v2 module for `etag`, `if-none-match`, `if-modified-since`, `StatusNotModified` and `revalidat` returns zero matches, tests included, and go.sum carries no caching library. Empirically, real go-gh v2.9.0 with `EnableCache: true, CacheTTL: 30s` against a counting server serving an ETag: two identical GETs produced 1 network hit and 0 requests carrying `If-None-Match`, where a revalidating cache would show 2. R8 stands and is unaffected. What changed is that it is met by R19's transport of our own rather than by the client, which is verified end to end: `If-None-Match` reached the wire, the server returned 304, the body was reconstituted from the local store, and the caller saw a normal 200. The remedy is contained but not small, and it is now a build requirement rather than an open question ([ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)).
 
 2. **Concurrent access is undecided.** Nothing prevents two gh-runs processes from running at once, and [ADR-0006](../../adr/0006-stateless-bulk-jobs.md)'s stateless Purge actively invites it. Running a 100-minute Purge in one terminal while browsing the Feed in another is a normal thing to do, not an abuse. Both processes revalidate, and both write. Whether the local store is single-writer, locked, partitioned by process, or simply last-write-wins has not been decided. R13 bounds the damage (a corrupt cache is discarded and rebuilt), but bounding the damage is not the same as not causing it, and "your Feed got slower because your Purge trampled its ETags" is a real outcome.
 
@@ -128,7 +134,7 @@ The local store persists ETags, last-seen payloads and discovery results across 
 - [ADR-0006: Purges are stateless, the filter is the job state](../../adr/0006-stateless-bulk-jobs.md) (R4)
 - [ADR-0009: Repo identity is host-qualified](../../adr/0009-host-qualified-repo-identity.md) (R14)
 - [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) (R16's window, open question 5)
-- [ADR-0002: Build on go-gh, ship as both a gh extension and a standalone binary](../../adr/0002-go-gh-with-dual-distribution.md) (the client open question 1 interrogates)
+- [ADR-0002: Build on go-gh, ship as both a gh extension and a standalone binary](../../adr/0002-go-gh-with-dual-distribution.md) (the client open question 1 interrogated, and which R19 now wraps)
 - [polling-scheduler](../polling-scheduler/requirements.md) (consumes R1's ETags, shares open question 1's fallout)
 - [rate-governor](../rate-governor/requirements.md) (consumes R8's 304/200 distinction for R7 of that document)
 - [repo-discovery](../repo-discovery/requirements.md) (R2 persists its results, R1 persists the ETags its conditional re-probe needs)

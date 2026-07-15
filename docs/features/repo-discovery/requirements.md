@@ -46,6 +46,8 @@ Discovery establishes which of the account's repositories actually have Runs, so
 
 **R14.** When launched inside a git repository whose remote resolves to github.com, discovery must resolve that repository from the local git remote and yield it first, so its Runs can be painted from a single Run-listing request without waiting on enumeration or on any other repository's response.
 
+R14 is where go-gh's `repository.Current()` trap lands, so it must not be met by calling that function naively. `Current()` shells out to git, which is fine, but it gates its answer on `auth.KnownHosts()`, which reads only environment variables and `hosts.yml` and never the keyring. On a machine where gh was never installed, it fails with "none of the git remotes point to a known GitHub host" even though git works and the remote is plainly github.com. The `GH_TOKEN` contract in [ADR-0002](../../adr/0002-go-gh-with-dual-distribution.md) populates `KnownHosts()` and clears it, so the fast path must fail with that instruction rather than with the library's message, which names the wrong problem.
+
 **R15.** Discovery must publish results incrementally as each probe returns, rather than as one batch when the last probe completes, so the Feed fills in progressively behind the fast path.
 
 **R16.** Discovery must probe with bounded concurrency, and the bound must be chosen by the tool rather than by the user. At concurrency ~10 the full 163-repository pass completes in ~4s. Serially it would be minutes.

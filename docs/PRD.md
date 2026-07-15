@@ -31,12 +31,13 @@ People who own or contribute to enough repositories that Actions activity stops 
 
 ## Constraints that shape everything
 
-These are empirical, measured against the live API. Every one of them changed a design decision.
+These are empirical, measured against the live API and against the client we build on. Every one of them changed a design decision.
 
 | Constraint | Consequence |
 |---|---|
 | **No cross-repo Run query exists.** Not in REST, not in GraphQL. `Repository` has no workflow field; `search` doesn't cover Runs; `WorkflowRun` in GraphQL is only reachable via `CheckSuite` and lacks Status and Conclusion entirely. | Fan out one request per repository and merge client-side. gh-dash's "section = search query" model is unavailable. → [ADR-0003](./adr/0003-multi-repo-via-client-side-fanout.md) |
 | **Conditional requests are free.** A 304 consumes zero primary rate limit; a 200 consumes one. Verified by interleaved measurement. | Polling ~26 repos every few seconds costs approximately nothing while idle. This is what makes a live dashboard affordable. → [ADR-0004](./adr/0004-conditional-polling-for-liveness.md) |
+| **go-gh's cache is TTL-only and never revalidates.** A cache hit returns without touching the network, and freshness is file mtime against a TTL. Verified by source read, by exhaustive grep, and against real go-gh v2.9.0, where two identical GETs produced 1 network hit and 0 requests carrying `If-None-Match`. `EnableCache: false` does not disable it. Only `CacheTTL: 0` does. | The free 304s above are ours to send, not go-gh's to provide. We supply our own `http.RoundTripper` as `api.ClientOptions.Transport` and leave go-gh's cache off. Verified end to end. → [ADR-0004](./adr/0004-conditional-polling-for-liveness.md) |
 | **Filtered listing silently caps at 1,000.** `total_count` still reports 18,260; page 11 returns `[]` with no error. Unfiltered listing reaches ~27k+. | Never trust `total_count` in a filtered view. Live Feed filters server-side and labels honestly; a Purge crawls unfiltered. → [ADR-0005](./adr/0005-hybrid-filtered-live-unfiltered-purge.md) |
 | **DELETE costs 5 points against ~900/min**, while GitHub's prose separately advises ≥1s between writes. A 3× disagreement. | ~180/min ceiling against ~60/min advice. Purging 18,260 Runs takes 100 minutes at best, 5 hours at worst. Bulk deletion cannot be a modal. → [ADR-0007](./adr/0007-adaptive-delete-throttle.md) |
 | **Prior Attempts' Jobs are not served.** `/runs/{id}/attempts/1/jobs` returns `total_count: 0`. | Attempt history is not buildable. Attempt is a badge, never a view. |
@@ -46,6 +47,7 @@ These are empirical, measured against the live API. Every one of them changed a 
 | **The secondary rate limit is not observable.** Headers expose `x-ratelimit-*` for the primary limit only; `/rate_limit` lists `core`, `graphql`, `search`, `code_search` and friends, and nothing for the secondary limit. | There is no counter to read. The governor's ramp is open-loop and the only feedback is the 403 that means we already overshot, which is why headroom and backoff are the whole control mechanism. It also means the Budget (a share of the *primary* limit, spent by polling) and a Purge's throughput (bound by the *secondary* limit) are different currencies. → [ADR-0007](./adr/0007-adaptive-delete-throttle.md) |
 | **Repo permissions ride along free.** `/user/repos` returns `{admin, maintain, push, triage, pull}` and `archived` with no extra request. | Gate destructive actions per repo at zero cost. Archived repos are permanently read-only: their Runs can never be cleaned. |
 | **Fine-grained PATs expose no scopes.** `x-oauth-scopes` exists only for classic tokens. | Pre-flight permission checks are impossible for fine-grained tokens. The API is always the final authority; a 403 can arrive despite `push: true`. |
+| **go-gh cannot reach a keyring token without the gh binary.** It has no keyring code and no keyring dependency. Its only keyring path is shelling out to `gh auth token`, so with gh off PATH the reference token (which lives in the keyring, not `hosts.yml`) resolves empty, source `"default"`. | `GH_TOKEN` is required for users who do not have gh, and is documented as the contract. Anyone with gh keeps getting their token free through the shellout. → [ADR-0002](./adr/0002-go-gh-with-dual-distribution.md) |
 | **Dispatch inputs live only in YAML.** The Workflow object carries `path`, never `inputs`. `type: environment` needs a separate `/environments` call. | A typed Dispatch form must fetch and parse the YAML at the target ref. |
 | **Dispatch returns 204 with no Run ID.** | Correlating a Dispatch to its Run is best-effort polling on `event=workflow_dispatch` plus a timestamp, and is racy by construction. |
 | **Live log streaming does not exist.** Logs are a zip (per Run) or plain text (per Job), delivered on completion. | Job and Step *status* can be live. Log *content* cannot. |
@@ -88,15 +90,15 @@ These are empirical, measured against the live API. Every one of them changed a 
 
 ## Open risks
 
-Unverified. Each is a build-time check, not a guess to be written into the design.
+R1 and R2 are **resolved by measurement**, and each resolved into a build requirement rather than an unknown to design around. R3 and R5 stay open build-time checks. R4 can never be resolved, so it is a permanent assumption rather than a pending question.
 
-| # | Risk | If it goes badly |
+| # | Risk | Verdict |
 |---|---|---|
-| **R2** | Does go-gh's client do real ETag revalidation, or only TTL caching? | **The one that forces a redesign.** Free 304s are the economic basis of the entire live layer. If go-gh is TTL-only, we need our own `http.RoundTripper`. Verify first. |
-| **R1** | Does go-gh's token resolution work with **no gh binary installed**? The reference token lives in the OS keyring, not `hosts.yml`. | "Standalone" is a shim, not a product. Would reopen [ADR-0002](./adr/0002-go-gh-with-dual-distribution.md) and [ADR-0008](./adr/0008-full-cli-surface-despite-gh-overlap.md). |
-| **R3** | Exact asset naming required for `gh extension install` to find a precompiled Go binary. | Release automation is wrong. Contained; blocks the release, not the design. |
-| **R4** | Do 304s count against the **secondary** limit? Assumed yes. Untestable without deliberately tripping a limit and risking a block. | The polling scheduler's budget maths is optimistic. Mitigated by assuming the worst. |
-| **R5** | In-progress Run log behaviour. | Log viewer needs an empty state. Live tailing is impossible regardless. |
+| **R2** | Does go-gh's client do real ETag revalidation, or only TTL caching? | **Resolved: TTL-only. It never revalidates.** Verified three ways, including two identical GETs against real v2.9.0 producing 1 network hit and 0 requests carrying `If-None-Match`. [ADR-0004](./adr/0004-conditional-polling-for-liveness.md)'s design survives, but only over our own `http.RoundTripper` passed as `api.ClientOptions.Transport`, with go-gh's cache left off (`CacheTTL: 0`). Verified end to end. A build requirement now, not a risk. |
+| **R1** | Does go-gh's token resolution work with **no gh binary installed**? The reference token lives in the OS keyring, not `hosts.yml`. | **Resolved: it does not.** go-gh has no keyring code, and its only keyring path is shelling out to `gh auth token`. With gh off PATH the reference token resolves empty. **Decision: require `GH_TOKEN` for users without gh, and document it.** [ADR-0002](./adr/0002-go-gh-with-dual-distribution.md) and [ADR-0008](./adr/0008-full-cli-surface-despite-gh-overlap.md) both stand: the binary needs no gh, only a token. A build requirement now, not a risk. |
+| **R3** | Exact asset naming required for `gh extension install` to find a precompiled Go binary. | Open. Release automation is wrong. Contained; blocks the release, not the design. |
+| **R4** | Do 304s count against the **secondary** limit? | **Permanently assumed, never to be resolved.** Testing it means deliberately tripping a limit and risking a block on the user's account, so it will not be tested. Assumed yes throughout, which makes the polling scheduler's budget maths pessimistic by construction. |
+| **R5** | In-progress Run log behaviour. | Open. Log viewer needs an empty state. Live tailing is impossible regardless. |
 
 ## Features
 

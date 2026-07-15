@@ -86,7 +86,7 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 **Conclusion is null until Status reaches `completed`**, for a Job as for a Run. A Job carries its own Status and Conclusion, and conflating the two fields is the defining bug of the tools that came before this one.
 
-**Conditional requests cost nothing against the primary limit.** Measured by interleaving, `used` advanced by exactly one per round (120 → 121 → 122) and that one belonged entirely to the 200. A ~3s refresh of an unchanged Run is therefore ~free against the primary limit, though we assume conservatively that 304s do count against the secondary one (~900 points/min, GET = 1 point, PRD risk R4). All of this rests on PRD risk R2: whether go-gh revalidates ETags or merely TTL-caches.
+**Conditional requests cost nothing against the primary limit.** Measured by interleaving, `used` advanced by exactly one per round (120 → 121 → 122) and that one belonged entirely to the 200. A ~3s refresh of an unchanged Run is therefore ~free against the primary limit, though we assume conservatively that 304s do count against the secondary one (~900 points/min, GET = 1 point, PRD risk R4). go-gh's own client is TTL-only and never revalidates (PRD risk R2, resolved), so those 304s come from a transport of our own ([local-store](../local-store/requirements.md) R19) rather than from the client.
 
 **The ~150ms debounce is chosen, not measured.** Its justification is arithmetic rather than empirical: eager fetching while arrow-keying a 100-row Feed costs one request per keystroke. Per ADR-0007's principle (expose intent, not mechanism), it must not become a user-facing setting.
 

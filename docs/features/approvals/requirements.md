@@ -85,7 +85,7 @@ Tell someone that a Run is blocked on a human decision, and let that decision be
 
 **UNKNOWN: does approving a fork-PR Run require `permissions.push`, or something narrower?** R11 does not pre-gate, so R14 carries it either way.
 
-**Undecided: how is ADR-0008's `--conclusion` flag implemented?** [ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md) adds a `--conclusion` flag gh does not have. The measurement above shows it cannot be a server-side pass-through: no such parameter exists, and sending one returns unfiltered results silently. It must filter client-side, over a result set the server has already capped at 1,000 under any filter. That is a real amendment to ADR-0008's reasoning, and it belongs to [cli-surface](../cli-surface/requirements.md). But it is this feature's predicate that first needs the flag.
+**Resolved: there is no `--conclusion` flag. It is dropped.** [ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md) once added a `--conclusion` flag gh does not have. The measurement in the table above killed it: no such parameter exists, sending one returns unfiltered results silently, and a client-side flag would post-filter a set the server has already capped at 1,000, reporting what was reachable rather than what matches. [cli-surface](../cli-surface/requirements.md) R5 drops it and ADR-0008 records the correction. Nothing here depended on it: R5 already evaluates this feature's predicate client-side against Feed data, and R6 already forbids sending `conclusion` as a query parameter. The flag was never this predicate's route to a Conclusion, only a second consumer of the same fact.
 
 **Undecided: should the badge say "need you"?** `action_required` and `waiting` mean a Run needs *someone*. Reviewer designation is not pre-flightable, so the badge counts Runs the account may have no standing to act on. The count is therefore wrong in both directions for two independent reasons: a lower bound on what exists (R10), and a possible overcount of what is actionable.
 
@@ -93,7 +93,7 @@ Tell someone that a Run is blocked on a human decision, and let that decision be
 
 ## Related
 
-- [ADR-0008: A full CLI surface, mirroring gh's flags](../../adr/0008-full-cli-surface-despite-gh-overlap.md) (why `-s/--status` is permissive, and the `--conclusion` flag whose implementation this feature's measurement complicates)
+- [ADR-0008: A full CLI surface, mirroring gh's flags](../../adr/0008-full-cli-surface-despite-gh-overlap.md) (why `-s/--status` is permissive, and the `--conclusion` flag this feature's measurement helped drop)
 - [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) (R7 and R10, and the silent-wrong-answer failure shape R6 guards against)
 - [ADR-0004: Liveness via conditional ETag polling](../../adr/0004-conditional-polling-for-liveness.md) (why the badge is free)
 - [ADR-0003: Multi-repo Feed via client-side fan-out](../../adr/0003-multi-repo-via-client-side-fanout.md) (why both fields are already local, and why no new data source is needed)
@@ -102,4 +102,4 @@ Tell someone that a Run is blocked on a human decision, and let that decision be
 - [run-lifecycle](../run-lifecycle/requirements.md) covers the other Run actions taken from a Feed row, and owns cancel and re-run, not approve.
 - [run-detail](../run-detail/requirements.md) is where a blocked Run's Jobs are inspected before deciding.
 - [repo-discovery](../repo-discovery/requirements.md) supplies the `permissions` R14 declines to trust.
-- [cli-surface](../cli-surface/requirements.md) owns the flag spelling, and the `--conclusion` question above.
+- [cli-surface](../cli-surface/requirements.md) owns the flag spelling. Its R5 drops `--conclusion` on the measurement in this feature's table, and its R6 carries the client-side validation that same measurement demands.

@@ -40,7 +40,7 @@ Settings **expose intent, never mechanism**. A setting earns its place only if a
 | Deletes per second | Mechanism, and dangerous. The adaptive governor beats any fixed number. This knob's only real function is letting someone get their account blocked |
 | Cache TTL | Meaningless. ETag revalidation is already free *and* correct, and a TTL could only make data staler |
 | Concurrency | Internal. Bounded by the secondary rate limit, not by taste |
-| Skip confirmation entirely | The one thing standing between a keystroke and 5,000 deleted Runs |
+| A stored setting that skips confirmation | The one thing standing between a keystroke and 5,000 deleted Runs. The CLI's `--yes` is not this and is not affected: a mandatory per-invocation flag *is* that surface's confirmation ([cli-surface](../cli-surface/requirements.md) R11), where a persistent setting could only waive one. What is rejected here is the stored form, including any key that would supply `--yes` on the operator's behalf |
 
 **R14.** An unrecognised config key MUST produce a diagnostic and MUST NOT fail the run. Each of R13's five rejected keys MUST produce a **specific** diagnostic naming its reason from that table, rather than a generic "unknown key". The point of R13 is that these are refused for stated reasons, and someone who reaches for one deserves the reason rather than silence.
 
@@ -59,7 +59,7 @@ Settings **expose intent, never mechanism**. A setting earns its place only if a
 - Excluding a repository removes it from the Feed and results in zero HTTP requests to it across a full polling cycle.
 - The Budget setting's schema admits no unit of time and no unit of requests. There is no config key, flag, or environment variable whose value is a poll interval, a delete rate, a cache TTL, or a concurrency level (R13).
 - Setting `poll_interval: 5` in `config.yml` starts normally and emits a diagnostic containing that key's reason from R13: that choosing it requires the token tier, repo count and points model. The same holds for the other four. Setting `some_future_key: 1` emits a generic unknown-key diagnostic and also starts normally.
-- Setting the confirm threshold above the hard maximum clamps it to the maximum and emits a diagnostic. Deleting a set larger than the effective threshold requires typing the count. No config file, flag, or environment variable produces a state in which a bulk deletion proceeds with no confirmation at all.
+- Setting the confirm threshold above the hard maximum clamps it to the maximum and emits a diagnostic. Deleting a set larger than the effective threshold requires typing the count. No config file and no environment variable produces a state in which a bulk deletion proceeds with no confirmation at all: in the TUI the modal still opens, and in the CLI `--yes` is still required on the command line.
 - With `NO_COLOR` set to any value, including the empty string, output contains no ANSI escape sequences, whatever the theme setting says.
 - With colour stripped, every Status and Conclusion in the Feed remains distinguishable by text alone. As it happens, v1's `SKIP`/`GOOD`/`FAIL` labels already satisfied this.
 - Editing a setting in the TUI and quitting leaves `config.yml` changed in that key only, with unrelated comments and key order intact.

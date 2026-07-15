@@ -28,7 +28,7 @@ A Purge deletes every Run matching a filter, across one or more repositories, at
 
 **R8.** The type-the-count threshold MUST be configurable, and the configured value MUST be clamped to a hard upper bound. At or above that bound, and for any cross-repository frozen set, typing the count MUST be required regardless of configuration. Friction has a floor.
 
-**R9.** There MUST be no setting, flag, key or mode that skips confirmation entirely. Every path from a selection to the first DELETE MUST pass through R7. v1 piped `fzf --multi` straight into a delete loop and Enter was immediately destructive. This requirement is the correction.
+**R9.** There MUST be no setting, config key or mode that skips confirmation. In the TUI, every path from a selection to the first DELETE MUST pass through R7's graduated confirmation. The non-interactive CLI confirms differently and does not confirm less: its mandatory `--yes` ([cli-surface](../cli-surface/requirements.md) R11) is that surface's confirmation, an explicit act made once per invocation by the person typing the command, and a destructive command without it MUST refuse. That flag is not an exemption from this requirement, it is how this requirement is met where there is no modal to show. The distinction R9 draws is between a per-invocation act and a persistent state: no stored setting may stand in for either surface's confirmation, or waive the flag's requirement. v1 piped `fzf --multi` straight into a delete loop and Enter was immediately destructive. This requirement is the correction.
 
 ### Eligibility
 
@@ -80,7 +80,7 @@ A Purge deletes every Run matching a filter, across one or more repositories, at
 6. Given a single-repository frozen set below the threshold, `y` starts the Purge. `n`, Esc, and Enter on the default abort it with zero DELETE requests issued.
 7. Given a frozen set spanning 2 or more repositories, `y` does not start the Purge. Only the exact count string does, and a wrong number leaves the DELETE count at zero.
 8. Given a configuration setting the threshold above its hard upper bound, a frozen set at the bound still requires the count to be typed.
-9. No configuration, flag or key sequence produces a path from a selection to a first DELETE without an intervening confirm interaction.
+9. In the TUI, no configuration, flag or key sequence produces a path from a selection to a first DELETE without an intervening confirm interaction. In the CLI, no configuration and no environment variable produces a Purge that issues a DELETE without `--yes` present on the command line.
 10. Given a Purge in flight, the Feed still applies polled updates and still accepts cursor movement and view changes.
 11. Given cancellation after N deletions, no DELETE is issued after at most one in-flight request completes, the summary reports N, and no file is created on disk.
 12. Given a DELETE that returns 404, the summary counts it under successes and not under failures.
@@ -115,12 +115,12 @@ Measured against the live API. Every number below is from the [PRD](../../PRD.md
 ## Open questions
 
 1. **The threshold numbers are UNKNOWN.** R7's default type-the-count threshold and R8's hard upper bound both need values. Nothing in the canon implies either.
-2. **How a non-interactive Purge confirms is UNKNOWN.** [ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md) commits to a full non-interactive CLI that is a drop-in superset of `gh run`'s flags, while R9 refuses to offer a skip. These have not been reconciled, and the reconciliation belongs to [cli-surface](../cli-surface/requirements.md) jointly with this feature.
+2. **Resolved: a non-interactive Purge confirms with a mandatory `--yes`.** [ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md) commits to a full non-interactive CLI, and R9 refused to offer a skip. The reconciliation is that `--yes` is not a skip. It is an explicit act, made once per invocation by the person typing the command, and it is what confirmation looks like on a surface with no modal to show. A Purge invoked without it refuses ([cli-surface](../cli-surface/requirements.md) R11). What stays forbidden is the persistent form: any stored setting that waives the flag or pre-answers the modal ([settings](../settings/requirements.md) R13). R9 carries the amended wording.
 3. **Discriminating a rate-limit 403 from a permission 403 is UNKNOWN.** R19 and R20 send them to opposite outcomes, and the canon establishes that both occur without saying how they are told apart.
 4. **The Status values DELETE rejects are UNKNOWN beyond in-progress.** R12 conservatively excludes every Status other than `completed`. Whether DELETE also rejects `queued`, `waiting`, `requested` and `pending` has not been measured. Verify before narrowing R12.
 5. **The terminal signal for an unfiltered crawl is UNKNOWN.** The canon proves an empty page in a *filtered* listing is not exhaustion, but does not establish what exhaustion looks like unfiltered. R1's correctness depends on getting this right.
 6. **50 consecutive failures is asserted, not measured.** It is undecided whether the number is configurable. Too low and a flaky network stops a legitimate Purge. Too high and it stops meaning anything.
-7. **Whether the throttle is global or per repository is undecided.** The Budget is account-scoped, which argues for one governor across a cross-repo Purge, but [ADR-0007](../../adr/0007-adaptive-delete-throttle.md) does not say. Belongs to [rate-governor](../rate-governor/requirements.md).
+7. **Resolved: the throttle is global, not per repository.** The Budget is a property of the token, so a per-repository throttle would multiply its own rate by however many repositories a Purge happens to span. One cross-repo Purge is one throttle. Settled by [rate-governor](../rate-governor/requirements.md) R3, which owns it.
 8. **Whether a Purge's crawl yields to the Feed's polling is undecided.** Both draw on the same Budget. The crawl is ~287 requests of 200s that cannot be revalidated away. Belongs to [polling-scheduler](../polling-scheduler/requirements.md).
 9. **R15's estimate is weak early.** The adaptive ramp spans a 3× range, so a remaining-time figure computed in the first minute may be off by hours. How honestly to present that is undecided.
 
@@ -130,7 +130,7 @@ Measured against the live API. Every number below is from the [PRD](../../PRD.md
 - [ADR-0006: Purges are stateless, the filter is the job state](../../adr/0006-stateless-bulk-jobs.md). R18, R23, R24, R25
 - [ADR-0007: Adaptive delete throttle, not a fixed rate](../../adr/0007-adaptive-delete-throttle.md). R14, R16, R17, R19
 - [ADR-0003: Multi-repo Feed via client-side fan-out](../../adr/0003-multi-repo-via-client-side-fanout.md). Why frozen sets span repositories
-- [ADR-0008: A full CLI surface, mirroring gh's flags](../../adr/0008-full-cli-surface-despite-gh-overlap.md). Open question 2
+- [ADR-0008: A full CLI surface, mirroring gh's flags](../../adr/0008-full-cli-surface-despite-gh-overlap.md). R9's non-interactive half, settled in open question 2
 - [run-lifecycle](../run-lifecycle/requirements.md) shares R4–R8's frozen set and graduated confirm. It owns the cancel that R12 declines to perform
 - [live-run-feed](../live-run-feed/requirements.md). The surface selection is made on, and the reason R4 exists
 - [rate-governor](../rate-governor/requirements.md) implements R17 and R19
