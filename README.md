@@ -23,7 +23,9 @@ v1 was `delete-workflow-runs`: a bash script that piped a filtered run list into
 
 ## Contributing
 
-I'd love you to contribute to `gh-runs`, [pull requests](https://github.com/jv-k/gh-runs/issues/new/choose) are welcome for submitting issues and bugs!
+Contributions are welcome. There is no Go code yet, so the most useful thing you can do today is read the design and argue with it: the [feature requirements](docs/features/) each end in an Open questions section, and those are real.
+
+[Open an issue](https://github.com/jv-k/gh-runs/issues/new/choose) to report a bug or request a feature. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## Support
 

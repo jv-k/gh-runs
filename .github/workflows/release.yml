@@ -1,6 +1,6 @@
 name: Release
 
-# Cross-compiles the extension and publishes the binaries to a GitHub release on a v* tag.
+# Cross-compiles the extension and publishes the binaries to a GitHub release on a v2-or-later tag.
 #
 # cli/gh-extension-precompile is the supported path, not goreleaser. gh picks a release asset
 # with HasSuffix(name, "{GOOS}-{GOARCH}"), plus ".exe" on Windows. This action writes its
@@ -22,7 +22,11 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      # v2 and later only. The v1 tags predate the Go rewrite, so re-pushing one would build a
+      # tree with no Go in it. Two patterns because a range matches one character: the first
+      # covers v2 through v9, the second covers v10 and up.
+      - "v[2-9]*"
+      - "v[1-9][0-9]*"
 
 permissions:
   contents: write

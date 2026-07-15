@@ -1,5 +1,6 @@
 # Compiled binary — gh extension and standalone builds share the name
 /gh-runs
+/gh-runs.exe
 
 # Release artifacts
 /dist/
