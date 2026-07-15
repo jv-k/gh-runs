@@ -3,10 +3,10 @@
   "version": "1.0.7",
   "description": "",
   "bin": "./delete-workflow-runs.sh",
-  "homepage": "https://github.com/jv-k/delete-workflow-runs",
+  "homepage": "https://github.com/jv-k/gh-runs",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jv-k/delete-workflow-runs.git"
+    "url": "https://github.com/jv-k/gh-runs.git"
   },
   "author": "John Valai <git@jvk.to>",
   "license": "MIT",
