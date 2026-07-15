@@ -93,7 +93,7 @@ The list is described as inclusive, not exhaustive, which is why R3 exists.
 
 **UNKNOWN: how common are Orphaned Runs in the reference account?** The reference user has 163 repositories, ~26 with Runs (PRD). Whether any of them carries a `deleted` Workflow decides whether R11–R13 is a headline cleanup win or a rare curiosity, and there is currently no measured answer.
 
-**Undecided: is the Workflow list cross-repository or one repository at a time?** ADR-0003 established there is no cross-repo Run query and that the Feed pays a fan-out for it. Whether a Workflow list is worth the same fan-out, or belongs scoped to the repository you are looking at, is unasked.
+**Resolved: both, and the person chooses. Cross-repository is the default.** The fan-out is affordable, being one request per repository over the machinery [ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md) already builds, and a cross-repo list is what a tool whose thesis is cross-repo should open with. But "which Workflows are disabled in the repo I am in" is a real question a rollup answers badly, so `this-repo` stays available as a scope rather than a tab. [settings](../settings/requirements.md) R19 owns the setting and defines what `this-repo` resolves to. Both code paths must exist, and the list must be correct under either scope.
 
 **Undecided: does the CLI surface extend to `gh workflow`'s commands?** ADR-0008 enumerates `gh run`'s flags only, but its standalone-coherence argument applies just as well here: a Homebrew user without `gh` installed has no `gh workflow enable` to fall back on. Owned by [cli-surface](../cli-surface/requirements.md).
 
