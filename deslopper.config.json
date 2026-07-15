@@ -1,0 +1,6 @@
+{
+  "extends": ["deslopper:recommended"],
+  "files": {
+    "exclude": ["CHANGELOG.md"]
+  }
+}

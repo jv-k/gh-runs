@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "statusMessage": "De-slop lint",
+            "timeout": 180,
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/deslop-lint.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
