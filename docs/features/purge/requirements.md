@@ -70,6 +70,14 @@ A Purge deletes every Run matching a filter, across one or more repositories, at
 
 **R25.** A summary MUST report only what this pass did. It MUST NOT claim cumulative progress across sessions, because none is recorded.
 
+### Seams
+
+**R26.** A Purge MUST be exercisable end-to-end against recorded HTTP fixtures, with no live network, covering the crawl and every branch of the failure contract. The crawl fixtures MUST include a repository at reference scale whose `Link` header carries `rel="next"` on every populated page and, on a page past the end, carries `prev`, `last` and `first` with no `next` (R1, AC5, open question 5). The delete fixtures MUST include a 404, a permission 403, a rate-limit response, and a DELETE rejected against a Run that is still in progress (R12, R18, R19, R20). [rate-governor](../rate-governor/requirements.md) R23 already records a bulk-delete cassette, and it is not this one: it proves pacing across 18,260 clean DELETEs and asserts nothing about which Run IDs a Purge resolved, or what a Purge did with the ones that answered 404. Pacing and selection are different claims and need different fixtures. Cassettes replay what the API actually said, which is how this project learned that a filtered listing caps at 1,000 and that `rel="last"` lies inside one. A hand-written fake would encode our reading of the `Link` header and stay green while the API changed it.
+
+**R27.** A Purge's timing MUST come from an injected clock: the throttle's interval, R19's backoffs, and R15's elapsed and remaining-time figures. A test of a Purge at reference scale (18,260 Runs, between 100 minutes and 5 hours of wall clock) MUST complete in milliseconds of real time while virtual time advances across the whole run, and no test may sleep through a backoff. AC13's circuit breaker is the case that needs this most. Its sequence of 49 failures, one success and 49 more failures is a counting property, and R19's backoff sits between every pair of them. On a real clock that test either sleeps for hours or never gets written.
+
+**R28.** No test may issue a live DELETE. This tool deletes tens of thousands of Runs irreversibly, it has no undo, and the measurements this document rests on were taken against real third-party repositories. Deletion is exercised against cassettes, never against an account. A test that deletes only a few Runs is a test that deletes somebody's Runs. R26's fixtures are what make that rule affordable rather than a restriction, and they are also the only way R23 and AC11 become checkable: a Purge whose every request is replayed can be run to completion, killed mid-flight, and have its state directory inspected for the files it MUST NOT have written.
+
 ## Acceptance criteria
 
 **AC1: The breakdown sums to the total.** Given a frozen set of 47 Runs drawn from 3 repositories, the confirm modal shows the number 47 and three per-repository rows whose counts sum to 47.

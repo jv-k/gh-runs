@@ -60,6 +60,14 @@
 
 **R18.** Interrupting a Purge MUST be safe at any point. No state file is written and none is needed: the filter is the job state, and resuming means running the same command again.
 
+### Seams
+
+**R19.** Every request the CLI issues MUST pass through an injected transport, and the non-interactive paths MUST be exercisable end-to-end against recorded HTTP fixtures with no live network. AC5 and AC7 each assert that a command issues **zero** HTTP requests, and zero is a claim about a request that was never made. Only a transport that counts what passes through it can carry that claim. A test that watches for an error message passes just as happily while `-s faliure` reaches the wire and comes back with all 28,710 Runs, which is the exact failure R6 exists to prevent, and the same holds for the `ghe.corp` host R9 rejects. The fixtures MUST cover a crawl past the 1,000 cap (R15, AC12), a 404 on DELETE (R13, AC11), an in-progress Run's rejection (R12, AC10), and the auth failure R17 exits 4 on (AC14).
+
+**R20.** `--dry-run` MUST resolve its set through the same code path as the real operation and MUST NOT be a second implementation of it. R10 makes it a production rail, and AC9 pins the equivalence: removing `--dry-run` and adding `--yes` deletes exactly the N it reported. That equivalence is what makes it usable in a test as well as at a keyboard. It is also why `--dry-run` is not the seam that makes deletion safe to test. A bug living in its own branch is precisely what a test would be hunting, so it cannot be trusted to prove itself. Deletion is proven against R19's fixtures. `--dry-run` is the rail an operator gets, not the harness.
+
+**R21.** No test may issue a live DELETE. This tool deletes tens of thousands of Runs irreversibly and cannot undo one, and the measurements throughout this document (28,710 Runs, `?status=success` narrowing to 18,260, page 11 returning `[]`) were taken against real third-party repositories that other people depend on. Deletion is exercised against R19's fixtures, never against an account. This binds `--dry-run` as well: a flag an operator can forget is not a substitute for a test that never had a live endpoint to reach.
+
 ## Acceptance criteria
 
 **AC1: The TUI needs a TTY.** `gh runs` with no arguments, on a TTY, opens the TUI. The same command with stdout redirected to a file exits non-zero with a diagnostic and writes no escape sequences.

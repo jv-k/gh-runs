@@ -66,6 +66,16 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **R24.** Bulk lifecycle operations MUST be stateless in the same sense as a Purge: no job record, no progress file, and re-invoking the same selection is the only resume.
 
+### Seams
+
+**R25.** All four operations MUST be exercisable end-to-end against recorded HTTP fixtures, with no live network. The fixtures MUST include cancel's 202 and its 409, force-cancel against its own endpoint, a 403 arriving on a repository whose recorded permission is `push: true` (R3), a 404 under both readings R22 draws, and a re-run followed by a poll showing `run_attempt` incremented, Status back to `queued` and Conclusion back to null (R8). They MUST also include `/runs/{id}/attempts/1/jobs` returning `total_count: 0`, because R12's whole case rests on that one response and a fake would return whatever we expected to see. Cassettes replay what the API actually said. Every row of the constraints table above was learned that way, including that a re-run's `created_at` and `run_started_at` disagree by 3 hours.
+
+**R26.** A bulk lifecycle operation's timing MUST come from the same injected clock the throttle uses, so that R21's backoffs, R23's pacing and a run across a large frozen set are deterministic and instant. AC5 depends on the clock for a second reason: proving that a 202 shows no Conclusion until a poll observes the transition means advancing to that poll, and a test that waits for a real one is slow, then flaky, then deleted.
+
+**R27.** The Feed row a re-run mutates MUST render to a frame from held state alone, with no live terminal and no network, and that frame MUST be verified by golden-file tests covering AC1, AC2 and AC3. R8 calls the Attempt model the most confusable behaviour in the product, and its three observable consequences are each a property of the painted frame: a row count that does not change, a Conclusion cell that empties, and an Attempt badge reading 2 against the Run ID it read 1 against. A test over the model can assert Conclusion is null. Only a golden proves the row stopped saying `failure`. See [live-run-feed](../live-run-feed/requirements.md) R36, which owns the Feed's goldens, and [run-detail](../run-detail/requirements.md) R19, which owns the badge's.
+
+**R28.** No test may issue a live DELETE. This tool deletes irreversibly at a scale of tens of thousands, and the reference measurements were taken against real third-party repositories. Deletion is exercised against cassettes, never against an account. The four operations here inherit that rule and extend it: no test may issue a live cancel, force-cancel or re-run either. A live cancel kills work somebody is waiting on, a live re-run spends their Actions minutes, and neither can be undone. Every one of AC1 to AC17 is assertable against R25's fixtures, so no test here needs an account.
+
 ## Acceptance criteria
 
 **AC1: A re-run adds no row.** Given a Run with `run_attempt: 1`, Status `completed` and Conclusion `failure`, when it is re-run, the Feed's row count is unchanged, no row is added, and the row bearing that Run ID shows Attempt 2.
