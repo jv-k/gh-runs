@@ -1,0 +1,13 @@
+# Compiled binary — gh extension and standalone builds share the name
+/gh-runs
+
+# Release artifacts
+/dist/
+
+# Go test output
+*.test
+coverage.out
+
+node_modules/
+
+.DS_Store
