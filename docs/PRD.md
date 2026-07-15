@@ -108,13 +108,13 @@ These are empirical, measured against the live API and against the client we bui
 
 ## Open risks
 
-R1 and R2 are **resolved by measurement**, and each resolved into a build requirement rather than an unknown to design around. R3 and R5 stay open build-time checks. R4 can never be resolved, so it is a permanent assumption rather than a pending question.
+R1, R2 and R3 are **resolved**, and each resolved into a build requirement rather than an unknown to design around. R5 stays an open build-time check. R4 can never be resolved, so it is a permanent assumption rather than a pending question.
 
 | # | Risk | Verdict |
 |---|---|---|
 | **R2** | Does go-gh's client do real ETag revalidation, or only TTL caching? | **Resolved: TTL-only. It never revalidates.** Verified three ways, including two identical GETs against real v2.9.0 producing 1 network hit and 0 requests carrying `If-None-Match`. [ADR-0004](./adr/0004-conditional-polling-for-liveness.md)'s design survives, but only over our own `http.RoundTripper` passed as `api.ClientOptions.Transport`, with go-gh's cache left off (`CacheTTL: 0`). Verified end to end. A build requirement now, not a risk. |
 | **R1** | Does go-gh's token resolution work with **no gh binary installed**? The reference token lives in the OS keyring, not `hosts.yml`. | **Resolved: it does not.** go-gh has no keyring code, and its only keyring path is shelling out to `gh auth token`. With gh off PATH the reference token resolves empty. **Decision: require `GH_TOKEN` for users without gh, and document it.** [ADR-0002](./adr/0002-go-gh-with-dual-distribution.md) and [ADR-0008](./adr/0008-full-cli-surface-despite-gh-overlap.md) both stand: the binary needs no gh, only a token. A build requirement now, not a risk. |
-| **R3** | Exact asset naming required for `gh extension install` to find a precompiled Go binary. | Open. Release automation is wrong. Contained; blocks the release, not the design. |
+| **R3** | Exact asset naming required for `gh extension install` to find a precompiled Go binary. | **Resolved: the name must end with `{GOOS}-{GOARCH}`**, plus `.exe` on Windows. gh selects with `HasSuffix(name, platform+ext)` (`pkg/cmd/extension/manager.go`, `installBin`), so `darwin-arm64` matches and goreleaser's stock `Darwin_arm64` does not. Case and separator are both load-bearing, and a mismatch ships a release that looks complete and installs nowhere. Release automation uses `cli/gh-extension-precompile`, which already names to the convention. A build requirement now, not a risk. [ADR-0002](./adr/0002-go-gh-with-dual-distribution.md) |
 | **R4** | Do 304s count against the **secondary** limit? | **Permanently assumed, never to be resolved.** Testing it means deliberately tripping a limit and risking a block on the user's account, so it will not be tested. Assumed yes throughout, which makes the polling scheduler's budget maths pessimistic by construction. |
 | **R5** | In-progress Run log behaviour. | Open. Log viewer needs an empty state. Live tailing is impossible regardless. |
 
