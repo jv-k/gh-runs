@@ -20,7 +20,7 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **R4.** Cancel is asynchronous. A 202 means the request was accepted, not that the Run was cancelled. The tool MUST show that cancellation was requested and MUST NOT optimistically display a `cancelled` Conclusion. Only a subsequent poll observing the Run's actual transition may do that.
 
-**R5.** A 409 from cancel means the Run is not cancelable. The tool MUST present this as a fact about the Run's state rather than as an error, and MUST offer force-cancel where the gate in R2 permits it.
+**R5.** A 409 from cancel means the Run is not cancelable. The tool MUST present this as a fact about the Run's Status rather than as an error, and MUST offer force-cancel where the gate in R2 permits it.
 
 **R6.** Force-cancel MUST be a distinct operation against a distinct endpoint, offered as the escalation for when plain cancel does not take effect. It MUST NOT be the default, and MUST NOT be silently substituted for cancel.
 
