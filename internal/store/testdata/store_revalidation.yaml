@@ -1,0 +1,88 @@
+---
+version: 2
+interactions:
+    # Interaction 0: the unconditional GET. It carries no If-None-Match, so it
+    # matches only the first request, and answers 200 with an ETag. The
+    # x-ratelimit-used counter reads 189: this one 200 spends one primary point.
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers:
+            Accept:
+                - 'application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview'
+            Authorization:
+                - token dummy-fixed-token
+            Content-Type:
+                - application/json; charset=utf-8
+        url: https://api.github.com/repos/cli/cli/actions/runs/12345
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 31
+        body: '[{"id":1,"status":"completed"}]'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"etag-abc123"'
+            Link:
+                - '<https://api.github.com/repos/cli/cli/actions/runs?page=2>; rel="next"'
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4811"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "189"
+        status: 200 OK
+        code: 200
+    # Interaction 1: the conditional GET. It carries If-None-Match, so it matches
+    # the second and third requests (WithReplayableInteractions lets one tape
+    # answer both), and returns 304. The store reconstitutes a 200 from it. A
+    # GitHub 304 carries no Link, measured, so it is absent here on purpose: the
+    # reconstituted Link can only come from the store. x-ratelimit-used stays 189,
+    # because a 304 costs zero primary allowance.
+    - id: 1
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers:
+            Accept:
+                - 'application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview'
+            Authorization:
+                - token dummy-fixed-token
+            Content-Type:
+                - application/json; charset=utf-8
+            If-None-Match:
+                - '"etag-abc123"'
+        url: https://api.github.com/repos/cli/cli/actions/runs/12345
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        body: ""
+        headers:
+            Etag:
+                - '"etag-abc123"'
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4811"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "189"
+        status: 304 Not Modified
+        code: 304
