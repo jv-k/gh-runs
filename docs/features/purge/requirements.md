@@ -74,7 +74,9 @@ Without the bound, R19 is an infinite loop rather than a retry. R21's breaker ca
 
 ### Statelessness
 
-**R23.** A Purge MUST NOT write a job record, a resolved ID list, or progress to disk. The filter is the durable state.
+**R23.** A Purge MUST NOT write a job record, a resolved ID list, or progress to disk, and MUST NOT read back anything it writes, in this pass or a later one. The filter is the durable state.
+
+**The rule is not that nothing is written. It is that nothing written is ever read back.** That is what statelessness buys here, and the list is finite: no schema to migrate, no reconciliation against IDs that vanished underneath us, no second source of truth to disagree with the API, and no resume prompt. A file no code path opens for reading costs none of those and breaks none of them. R29's deletion log is written under exactly that constraint and is permitted. [ADR-0006](../../adr/0006-stateless-bulk-jobs.md) carries the amendment, and the decision it records is unchanged: the filter is still the job state, and R24 is still the only resume.
 
 **R24.** Re-running the same Purge MUST be the resume path, and MUST converge: Runs deleted by an earlier pass are simply absent from the next crawl. A crash, a quit or a kill MUST require no reconciliation and MUST NOT produce a resume prompt.
 
@@ -86,7 +88,42 @@ Without the bound, R19 is an infinite loop rather than a retry. R21's breaker ca
 
 **R27.** A Purge's timing MUST come from an injected clock: the throttle's interval, R19's backoffs, and R15's elapsed and remaining-time figures. A test of a Purge at reference scale (18,258 Runs, which the governor's reachable rates put between ~2 hours and ~10 hours of wall clock, and at ~155 minutes in the normal case) MUST complete in milliseconds of real time while virtual time advances across the whole run, and no test may sleep through a backoff. AC13's circuit breaker is the case that needs this most. Its sequence of 49 failures, one success and 49 more failures is a counting property, and R19's backoff sits between every pair of them. On a real clock that test either sleeps for hours or never gets written.
 
-**R28.** No test may issue a live DELETE. This tool deletes tens of thousands of Runs irreversibly, it has no undo, and the measurements this document rests on were taken against real third-party repositories. Deletion is exercised against cassettes, never against an account. A test that deletes only a few Runs is a test that deletes somebody's Runs. R26's fixtures are what make that rule affordable rather than a restriction, and they are also the only way R23 and AC11 become checkable: a Purge whose every request is replayed can be run to completion, killed mid-flight, and have its state directory inspected for the files it MUST NOT have written.
+**R28.** No test may issue a live DELETE. This tool deletes tens of thousands of Runs irreversibly, it has no undo, and the measurements this document rests on were taken against real third-party repositories. Deletion is exercised against cassettes, never against an account. A test that deletes only a few Runs is a test that deletes somebody's Runs. R26's fixtures are what make that rule affordable rather than a restriction, and they are also the only way R23, R29 and AC11 become checkable: a Purge whose every request is replayed can be run to completion, killed mid-flight, and have its state directory inspected for the files it MUST NOT have written and the one file it MUST.
+
+### The deletion log
+
+**R29.** Every deletion this tool issues MUST be recorded, one line per attempt, in an append-only log under the XDG state directory that nothing ever reads back. The log's writability MUST be a precondition of the first DELETE, and a write it cannot complete MUST stop the operation.
+
+**A Purge is irreversible, has no undo (R28), and kept no record of what it destroyed.** R15's progress and R22's failure groups are in-memory and die with the process, and R25 says outright that nothing cumulative is recorded. After a Purge over the wrong filter there was nothing to tell anyone, not even the IDs. This requirement is the record. It is not a job store: nothing reads it, so it carries no schema, needs no reconciliation, and is not a resume path ([ADR-0006](../../adr/0006-stateless-bulk-jobs.md), amended, and R23).
+
+**Shape.** One line per deletion attempt, tab-separated, six fields in fixed order:
+
+| Field | Value |
+|---|---|
+| timestamp | RFC 3339 UTC, taken from R27's injected clock and never from the wall clock |
+| repo | `host/owner/name`, per [ADR-0009](../../adr/0009-host-qualified-repo-identity.md) and R4's tuple |
+| kind | `run`, `log`, `cache` or `artifact` |
+| id | the object's id, the same one R4's tuple carries |
+| outcome | `deleted`, `gone`, `skipped` or `failed`, and nothing else |
+| reason | free text, empty when the outcome is `deleted`. Tab and newline MUST be escaped |
+
+**Tab-separated, because the only moment this file is ever read is the worst possible moment to need a parser.** `grep 4675883901` finds a Run, `cut -f4` lists the IDs to send someone, `grep -c deleted` counts them. JSON Lines answers the same questions through `jq`, which is a second tool to have installed and a syntax to recall while staring at 18,000 deletions you did not mean. It would also invite the thing R23 forbids, because a format built to be parsed eventually is.
+
+**The outcome is a closed vocabulary in a column of its own**, so that a count is a `grep -c` and not a regex. `gone` is the 404, and R18 is unaffected by its presence here: a 404 still counts as a success in the summary. The log holds the two apart because "I deleted it" and "it was already gone" are different facts about the world, and the person reading this file is asking which. `skipped` and `failed` carry R20's recorded reason in the sixth field.
+
+**The id is not unique across kinds, and the kind column is what separates them.** Deleting a Run's logs ([log-viewer](../log-viewer/requirements.md) R17) and later deleting the Run itself writes two lines carrying the same id, one `log` and one `run`. That is exactly the distinction log-viewer R17 exists to draw, and the log would erase it by keying on the id alone.
+
+**Location.** `$XDG_STATE_HOME/gh-runs/deletions.log`, defaulting to `~/.local/state/gh-runs/deletions.log`. [settings](../settings/requirements.md) R2 puts state under the state directory and keeps it out of the config file, and this is state by that rule: nobody wants it on a second machine, and nobody wants it in a dotfiles repository. It sits beside the [local-store](../local-store/requirements.md) and is no part of it. That store is derived and always safe to delete (its R11), while this log is the one thing under that directory recoverable from nowhere else, so local-store R12's discard-on-unknown-schema and R13's discard-on-corrupt MUST never reach this file.
+
+**Bounds.** Rotate at 8 MB, keep 4 generations, ~40 MB in total and no more. A reference-scale Purge writes 18,258 lines at ~100 bytes, which is ~1.8 MB, so 8 MB carries four of them and no Purge rotates in its own middle. Four generations is roughly twenty Purges of history, in a tool that exists to reclaim 10.59 GB. **One rolling log, never a file per Purge and never a file per repository.** A file per Purge is a job record wearing a different name: it is discoverable, it is countable, and the first person to see that directory asks which one to resume from. The reference user has 163 repositories, so a file per repository is a directory that only grows. The rotation size and the generation count MUST NOT be settable, by flag, config key or environment variable. Answering "how many megabytes of deletion log" needs the reference scale and the bytes-per-line figure, and the person has neither, which is [settings](../settings/requirements.md) R13's test for mechanism.
+
+**Failure mode: no record, no deletion.** The log MUST be opened and proved writable before the first DELETE, and an operation that cannot open it MUST refuse to start and MUST name the log as the reason. A write that fails mid-operation MUST stop it exactly as R21's breaker does: no further DELETE, objects already deleted stay deleted, and the summary says the log failed and why. Deleting 18,000 Runs while unable to record one of them is the precise state this requirement exists to abolish, and it is worse than refusing to start, because the operator believes a record is being kept. R24 is what makes refusing cheap: the cost of stopping is one re-crawl, and the cost of continuing is permanent and unbounded. A disk-full does stop a ~155-minute operation. That trade is not close.
+
+**Ordering.** The line MUST be written after the response is classified and before the next DELETE is issued, so the log is never more than one attempt behind reality. A kill inside that window loses one line, and that is accepted, on the same reasoning as R16's one in-flight request. Writing an intent line first and an outcome line after would double the file and give every attempt two records to correlate, which is a job record arriving by the back door.
+
+**It is write-only.** No code path in this tool may open this file for reading, parse it, count it, or offer to resume from it. R24 stays the only resume, and its mechanism is the filter and the API, never this file. The log is for a person, and for one question: what did I just destroy.
+
+**Scope: deletions, and nothing else.** [rate-governor](../rate-governor/requirements.md) R2 paces eight writes. Four destroy something no later action recreates, and those four are logged: Run deletion here, log deletion ([log-viewer](../log-viewer/requirements.md) R17), and Cache and Artifact deletion ([storage-reclamation](../storage-reclamation/requirements.md) R17). The rest MUST NOT be logged. Cancel and force-cancel change a Run's Status. Re-run adds an Attempt. Dispatch creates a Run. Flipping a Workflow's State, which [ADR-0011](../../adr/0011-package-layout-and-dependency-direction.md) also gives to `ops`, is undone by flipping it back. Every one of those leaves an object standing on GitHub carrying its own record, and that record is the record. Logging them would make this a general activity log, which has other readers, other bounds, and no reason to stop a write when the disk fills.
 
 ## Acceptance criteria
 
@@ -110,7 +147,7 @@ Without the bound, R19 is an infinite loop rather than a retry. R21's breaker ca
 
 **AC10: A Purge is not modal.** Given a Purge in flight, the Feed still applies polled updates and still accepts cursor movement and view changes.
 
-**AC11: Cancellation stops promptly and writes nothing.** Given cancellation after N deletions, no DELETE is issued after at most one in-flight request completes, the summary reports N, and no file is created on disk.
+**AC11: Cancellation stops promptly and leaves no job state.** Given cancellation after N deletions, no DELETE is issued after at most one in-flight request completes, and the summary reports N. Afterwards the state directory holds no job record, no resolved ID list and no progress file, and re-running the same Purge offers no resume prompt. R29's deletion log is expected to exist and to carry those N deletions, and its presence MUST NOT fail this criterion. The claim under test is that nothing on disk is read back, never that nothing was written (R23).
 
 **AC12: A 404 is success.** Given a DELETE that returns 404, the summary counts it under successes and not under failures.
 
@@ -127,6 +164,12 @@ Without the bound, R19 is an infinite loop rather than a retry. R21's breaker ca
 **AC17: Re-running is the resume.** Given a Purge that deleted 500 Runs and then quit, re-running the same Purge reports a matched count reduced by roughly those 500, shows no resume prompt, and reports only the deletions performed by the new pass.
 
 **AC18: The summary groups failures and retries only those.** Given failures spanning two distinct reasons, the summary shows two groups with per-reason counts, and the retry keystroke issues exactly as many requests as there are recorded failures.
+
+**AC19: Every attempt is one line, and nothing reads it back.** Given a Purge over R26's fixtures whose outcomes span a deletion, a 404, a skip and a failure, the deletion log carries exactly one line per attempt, each with R29's six fields in order, each repo field host-qualified, and each timestamp taken from R27's injected clock rather than the wall clock. The 404's line reads `gone` while the summary counts it a success (R18). Across this whole suite no code path opens the log for reading, and a Purge run against a populated log behaves identically to one run against an absent log and offers no resume prompt (R23, R24).
+
+**AC20: No record, no deletion.** Given a state directory that cannot be written, a Purge issues zero DELETE requests, refuses to start, and names the log in its diagnostic. Given a log write that fails after N deletions, no DELETE is issued afterwards, the N stay deleted, and the summary names the log as the reason it stopped (R21, R29).
+
+**AC21: The log is bounded.** Given deletions totalling more than 8 MB of lines, the log rotates, at most 4 generations exist, and the whole directory's log footprint stays under the stated bound. No configuration, flag or environment variable changes the rotation size or the generation count (R29).
 
 ## Constraints
 
@@ -169,7 +212,9 @@ Measured against the live API. Every number below is from the [PRD](../../PRD.md
 ## Related
 
 - [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md). R1, R2, R3
-- [ADR-0006: Purges are stateless, the filter is the job state](../../adr/0006-stateless-bulk-jobs.md). R18, R23, R24, R25
+- [ADR-0006: Purges are stateless, the filter is the job state](../../adr/0006-stateless-bulk-jobs.md). R18, R23, R24, R25. Its amendment unbundles R29's log from the job store it was rejected alongside
+- [ADR-0011: Package layout and dependency direction](../../adr/0011-package-layout-and-dependency-direction.md). `ops` owns R29's log, and `Execute` is the only thing that writes it
+- [log-viewer](../log-viewer/requirements.md) and [storage-reclamation](../storage-reclamation/requirements.md). Their R17s carry R29 for log, Cache and Artifact deletion
 - [ADR-0007: Adaptive delete throttle, not a fixed rate](../../adr/0007-adaptive-delete-throttle.md). R14, R16, R17, R19
 - [ADR-0003: Multi-repo Feed via client-side fan-out](../../adr/0003-multi-repo-via-client-side-fanout.md). Why frozen sets span repositories
 - [ADR-0008: A full CLI surface, mirroring gh's flags](../../adr/0008-full-cli-surface-despite-gh-overlap.md). R9's non-interactive half, settled in open question 2

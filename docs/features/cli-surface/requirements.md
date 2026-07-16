@@ -44,7 +44,7 @@
 
 **R9.** A host other than `github.com` MUST be rejected explicitly, naming the host, before any network request is made. `-R ghe.corp/o/r` MUST report that the host is not supported yet, never a 404, an auth error, or a confusing failure. An explicit `github.com` host (`-R github.com/o/r`) MUST be accepted and treated identically to the bare `-R o/r` form.
 
-**R10.** Every non-interactive destructive command MUST support `--dry-run`, which resolves the affected set of Runs by the same code path as the real operation, reports exactly what would be deleted, deletes nothing, and exits 0.
+**R10.** Every non-interactive destructive command MUST support `--dry-run`, which resolves the affected set of Runs by the same code path as the real operation, reports exactly what would be deleted, deletes nothing, and exits 0. Deleting nothing, it MUST write no line to [purge](../purge/requirements.md) R29's deletion log, and it MUST NOT require that log to be writable. A line records an attempt, `--dry-run` makes none, and a command that issues no DELETE has nothing R29 protects.
 
 **R11.** Every non-interactive destructive command MUST require `--yes`, and MUST refuse to delete without it. `--yes` is gh's established spelling on `gh repo delete`. Passing it **is** the confirmation on this surface: an explicit act, made once per invocation, by the person typing the command. That is what a persistent setting can never be, which is why the flag is confirmation and a config key that waived it would be a skip. The flag is always required. No configuration setting, environment variable or mode may waive it ([settings](../settings/requirements.md) R13), and none may supply it on the operator's behalf.
 
@@ -60,7 +60,7 @@
 
 **R17.** Exit codes MUST follow gh's documented taxonomy (verified, `gh help exit-codes`): **0** on success, **1** on failure, **2** when a running command is cancelled, **4** when authentication is required. A Purge interrupted by the user MUST exit 2, leave already-deleted Runs deleted, and state that re-running the same filter resumes it.
 
-**R18.** Interrupting a Purge MUST be safe at any point. No state file is written and none is needed: the filter is the job state, and resuming means running the same command again.
+**R18.** Interrupting a Purge MUST be safe at any point. No job record, no resolved ID list and no progress file is written, and none is needed: the filter is the job state, and resuming means running the same command again. [purge](../purge/requirements.md) R29's append-only deletion log is none of those three and is written: nothing reads it back, so it is not what R17's resume runs on, and an interrupted Purge's log MUST hold every deletion issued before the interrupt. Statelessness here is a rule about reading, not about writing ([ADR-0006](../../adr/0006-stateless-bulk-jobs.md), amended).
 
 ### Seams
 
@@ -88,7 +88,7 @@
 
 **AC8: `--yes` is never waivable.** A Purge invoked without `--yes` deletes nothing and exits non-zero, whatever the config file contains. No config key makes `--yes` optional, and none supplies it.
 
-**AC9: `--dry-run` resolves the same set.** `--dry-run` over a filter matching N Runs reports N, issues no DELETE, and exits 0. Removing `--dry-run` and adding `--yes` deletes exactly the same N.
+**AC9: `--dry-run` resolves the same set.** `--dry-run` over a filter matching N Runs reports N, issues no DELETE, and exits 0. It writes no line to the deletion log, and it still exits 0 with the state directory unwritable (R10). Removing `--dry-run` and adding `--yes` deletes exactly the same N and writes exactly N lines.
 
 **AC10: An in-progress Run is skipped, not failed.** A Purge over a set containing an `in_progress` Run reports it as skipped, not failed, and the command still exits 0 if all completed Runs were deleted.
 

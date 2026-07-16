@@ -60,6 +60,8 @@ So this is a single bytes-first view led by Caches rather than an Artifact brows
 
 **R17.** Route every deletion through the Purge's confirmation, [purge](../purge/requirements.md) R4–R9: selection keyed by id, the set frozen when the modal opens, a displayed count, friction scaled to blast radius, and no path from a selection to a first DELETE that skips confirmation.
 
+**Record every Cache and Artifact deletion in [purge](../purge/requirements.md) R29's deletion log**, one line per attempt, with `cache` or `artifact` as the kind and R16's id as the id. R29's failure mode binds here: a log that cannot be written stops the deletion. An expired Artifact is logged like any other, even though R11 confirms it at zero bytes, because R29 records what was destroyed rather than what was reclaimed. **R29 does not arrive with R4 to R9 and has to be stated here.** Those six are selection and confirmation, R29 is execution, and this feature is where "which of my 163 repositories did I just take 10.59 GB out of" gets asked.
+
 **R18.** Show enough in the confirmation to distinguish rows whose keys differ only in a version fragment or a hash suffix. `setup-go-macOS-arm64-go-1.26.5-06fc251f3` and `setup-go-macOS-arm64-go-1.26.5-20b85b5b8` differ by nine characters and 21,383 bytes out of 302 million, and R4's sort files them adjacently.
 
 **R19.** Keep rows still while the cursor is in the list. A refresh must not reorder beneath it.

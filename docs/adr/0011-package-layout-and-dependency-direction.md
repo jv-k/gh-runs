@@ -82,6 +82,10 @@ That is the policy half. The structural half is [ADR-0012](./0012-transport-chai
 
 `tui/confirm` renders a `Plan` and collects the input. It cannot construct a `Confirmed`, because outside `ops` there is no way to populate an unexported field, and it cannot reach `Execute` without one. The arrow still runs `tui` to `ops` and never back. R9 stops being a convention in the tabs and becomes a thing the compiler refuses.
 
+**`ops` owns the deletion log, and `Execute` is the only thing that writes it.** [purge](../features/purge/requirements.md) R29 requires an append-only record of every deletion under the XDG state directory. It is a write, so `ops` holds it by the rule above, and it needs no new edge in the table: the timestamp comes from `clock`, the identity from `domain`, and the **path arrives from `main.go`**, exactly as `store`'s RoundTripper reaches `ghclient`. That keeps the state directory out of `ops`'s imports and hands R29 a test seam for free, which purge R28 needs, because a replayed Purge has to be pointed at a directory a test can inspect.
+
+The property worth having is that **the only call that issues a DELETE is the only call that writes the line**, and they are the same call. A tab cannot reach one without the other, for the same reason it cannot reach `Execute` without a `Confirmed`. R29's rule that an unwritable log stops the operation is therefore a precondition inside `Execute` rather than a promise four call sites make, which is this ADR's usual move: purge R9 became a tree property, and R29 becomes one on the same lever. The log is not its own package. It is not a boundary the canon draws, it is part of what executing a deletion means, and a package would only give a tab somewhere else to import.
+
 ## Consequences
 
 **Tabs do not import each other.** A tab needing another tab's data takes it from the model above, not sideways. Without this rule `feed` and `rundetail` grow a cycle within a week, because a Run detail pane wants the Feed's row and the Feed wants the detail's selection.

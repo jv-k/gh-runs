@@ -64,7 +64,11 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **R23.** Bulk lifecycle operations are writes and MUST be paced by the same adaptive throttle as a Purge. Rate MUST NOT be exposed as a setting.
 
-**R24.** Bulk lifecycle operations MUST be stateless in the same sense as a Purge: no job record, no progress file, and re-invoking the same selection is the only resume.
+**R24.** Bulk lifecycle operations MUST be stateless in the same sense as a Purge: no job record, no progress file, and re-invoking the same selection is the only resume. That sense is a rule about reading, not about writing ([ADR-0006](../../adr/0006-stateless-bulk-jobs.md), amended, and [purge](../purge/requirements.md) R23): what is forbidden is anything this tool reads back on a later pass.
+
+**None of the four operations here is a deletion, so [purge](../purge/requirements.md) R29's deletion log MUST NOT record them.** R29 logs what no later action recreates. Cancel and force-cancel change a Run's Status, and the Run, its logs and its metadata all survive. Re-run adds an Attempt. Each leaves an object standing on GitHub that carries its own record, and that record is better than ours.
+
+**Re-run is the closest call, and it still falls outside.** R12's constraint means a new Attempt makes the prior Attempt's Jobs permanently unreachable, which open question 7 already flags as a one-way door. It is not logged, for two reasons. The Run survives carrying `run_attempt`, which is GitHub's own record that the door was opened. And there is no id for the thing that was lost, so R29's line has nothing to put in its id column. A record that cannot name what it lost is not the record R29 is.
 
 ### Seams
 

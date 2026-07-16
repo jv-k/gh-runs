@@ -20,6 +20,8 @@ The local store persists ETags, last-seen payloads and discovery results across 
 
 **R4.** The local store must not persist a Purge's crawl: not the resolved Run IDs, not the pages walked, not the progress. [ADR-0006](../../adr/0006-stateless-bulk-jobs.md) makes the filter the durable state precisely to avoid a job store, and persisting a ~287-page unfiltered crawl would rebuild that job store (with its schema, its reconciliation, and its capacity to disagree with reality) under a different name.
 
+**R4 forbids a job store, and is not a claim that a Purge writes nothing under this directory.** [purge](../purge/requirements.md) R29 requires an append-only deletion log beside this store, which nothing ever reads back and which therefore has none of the properties R4 is guarding against. It is not this store's, and this store must neither own it nor manage it: R11's safe-to-delete, R12's discard-on-unknown-schema and R13's discard-on-corrupt are claims about the local store, and none of them may reach that file. ADR-0006's amendment draws the line at reading rather than at the filesystem, and purge R23 carries it.
+
 ### Cold start
 
 **R5.** On launch, the tool must paint the Feed from the local store before any HTTP response has arrived, and then revalidate. Stale-while-revalidate is the right shape for a dashboard that must feel immediate: the cached Feed is nearly always right, and where it is wrong the revalidation is seconds behind.
@@ -36,7 +38,7 @@ The local store persists ETags, last-seen payloads and discovery results across 
 
 **R10.** A successful write must invalidate the affected repository's cached entries immediately, rather than waiting for the next revalidation to discover what the tool itself just did.
 
-**R11.** The local store must be derived state and must always be safe to delete. Nothing may be recoverable only from it, and deleting the whole directory must cost a cold start its speed and nothing else.
+**R11.** The local store must be derived state and must always be safe to delete. Nothing may be recoverable only from it, and deleting the whole store must cost a cold start its speed and nothing else. **This says the store and not the directory, deliberately.** [purge](../purge/requirements.md) R29's deletion log shares the state directory and is the one thing under it recoverable from nowhere else, so `rm -rf` over the directory is safe for this component and destroys the record of every deletion the tool has made. R4 keeps the two apart.
 
 **R12.** The local store must carry a schema version, and a version it does not recognise must be discarded and rebuilt rather than migrated in place or read optimistically. R11 is what makes discarding always available. A migration is only worth writing when discarding costs the user something, and here it costs one slow launch.
 
@@ -90,7 +92,7 @@ go-gh's own `cacheKey` is the reference, and it does exactly this: SHA256 over `
 
 **AC8: Last-revalidated is reportable.** With revalidation paused at Budget exhaustion, each painted entry's last-revalidated time is available and is the time the injected clock held at its last 200 or 304.
 
-**AC9: A Purge writes nothing.** Given a Purge crawling ~287 unfiltered pages and deleting Runs, no file is created and the local store's size does not grow with the crawl. After a kill mid-Purge, no resume state exists on disk.
+**AC9: A Purge leaves no crawl in the store.** Given a Purge crawling ~287 unfiltered pages and deleting Runs, the local store gains no entry for the crawl and its size does not grow with it. After a kill mid-Purge, no resume state exists on disk. [purge](../purge/requirements.md) R29's deletion log is not this store's, and its presence and its growth are expected rather than a failure of this criterion (R4).
 
 **AC10: A write invalidates.** Given a successful deletion of Run X, no subsequent cold start serves X from the local store.
 
@@ -120,6 +122,8 @@ go-gh's own `cacheKey` is the reference, and it does exactly this: SHA256 over `
 
 **A Purge is stateless by decision, not by omission** ([ADR-0006](../../adr/0006-stateless-bulk-jobs.md)). Deletion is idempotent, so re-running the same Purge is the resume path and the filter is the durable state. The alternative (a persisted job queue) was considered and rejected for the cost of a job store, schema versioning, and reconciling IDs that vanished underneath it. R4 keeps that decision from being quietly undone here, which is the natural place for it to be undone.
 
+**That rejection also swept up an audit trail, and the ADR is amended on exactly that point.** The three costs above are the job store's alone. A log nothing reads back pays none of them, so [purge](../purge/requirements.md) R29 requires one and R23 permits it. The decision this component enforces is unchanged, and its boundary is now stated as reading rather than as writing: R4 still forbids a crawl, an ID list and progress, and it never forbade a file.
+
 **Repository identity is host-qualified from day one** ([ADR-0009](../../adr/0009-host-qualified-repo-identity.md)), because host is one field now against a migration of every persisted key later. This feature is the "later" that ADR is protecting against.
 
 **go-gh's client never revalidates (PRD risk R2, resolved).** Free 304s are the economic basis of polling, of cold start and of the re-probe, and go-gh's cache is TTL-only: a hit returns without touching the network, and freshness is file mtime against a TTL. Measured against real go-gh v2.9.0, two identical GETs produced 1 network hit and 0 requests carrying `If-None-Match`. The economics in this document, [polling-scheduler](../polling-scheduler/requirements.md) and [rate-governor](../rate-governor/requirements.md) all still hold, because the 304s themselves are real and free. They are simply ours to send, which is what R19 exists for ([ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)).
@@ -136,7 +140,9 @@ go-gh's own `cacheKey` is the reference, and it does exactly this: SHA256 over `
 
 5. **What a 304 leaves us holding is UNKNOWN in one respect.** R6 assumes a 304 means the persisted payload is still current, which is what a conditional request means. But the Feed's requests are filtered listings, and it is not established whether an ETag on a filtered listing is stable in the way this depends on: whether, for instance, a Run aging out of a `--created` window changes the ETag without any Run changing. If it does not, a filtered entry can be stale while revalidating clean.
 
-6. **Whether the XDG state directory is the right home is worth one more look.** The decided design says state. R11 says the contents are derived and always safe to delete, which is the classic description of a cache directory rather than a state directory. The distinction matters to anyone whose backup policy treats the two differently, and to a user looking for the thing to delete when they suspect it.
+6. **Whether the XDG state directory is the right home is worth one more look, and one half of it is now settled.** The decided design says state. R11 says this store's contents are derived and always safe to delete, which is the classic description of a cache directory rather than a state directory. The distinction matters to anyone whose backup policy treats the two differently, and to a user looking for the thing to delete when they suspect it.
+
+    **What changed is that the directory is no longer all derived.** [purge](../purge/requirements.md) R29 puts the deletion log there, and that file is not derived, not reproducible, and not safe to delete. So the directory cannot be reclassified as a cache directory wholesale, whatever this store alone would justify. The open half is narrower than it was: whether **this store** would be better off in a cache directory of its own, leaving the state directory to the one file that is genuinely state.
 
 ## Related
 
@@ -150,5 +156,5 @@ go-gh's own `cacheKey` is the reference, and it does exactly this: SHA256 over `
 - [rate-governor](../rate-governor/requirements.md) (consumes R8's 304/200 distinction for R7 of that document)
 - [repo-discovery](../repo-discovery/requirements.md) (R2 persists its results, R1 persists the ETags its conditional re-probe needs)
 - [live-run-feed](../live-run-feed/requirements.md) (R5 paints its cold start, R7 keeps its R30 honest)
-- [purge](../purge/requirements.md) (R4 is the enforcement of its R23)
+- [purge](../purge/requirements.md) (R4 is the enforcement of its R23, and R29's deletion log is the neighbour R4 and R11 keep this store apart from)
 - [settings](../settings/requirements.md) (owns what R9 refuses to expose)
