@@ -16,6 +16,7 @@ It exists because `go.mod` records **what** and cannot record **why**. Half the 
 | `charm.land/bubbletea/v2` | `v2.0.8` | **Path is load-bearing** |
 | `charm.land/lipgloss/v2` | `v2.0.5` | **Path is load-bearing** |
 | `charm.land/bubbles/v2` | `v2.1.1` | **Path is load-bearing** |
+| `github.com/charmbracelet/colorprofile` | `v0.4.3` | Bubble Tea's own, promoted to direct. See below |
 | `github.com/spf13/cobra` | `v1.10.2` | Ordinary |
 | `gopkg.in/dnaeon/go-vcr.v4` | `v4.0.7` | **Major version is load-bearing** |
 | `github.com/jonboulle/clockwork` | `v0.5.0` | Ordinary, replaces an archived library |
@@ -52,6 +53,23 @@ There are two wrong paths, and they fail differently:
 The suffixed GitHub path is safe precisely because it breaks. The unsuffixed one is the hazard: it is a real module that builds, and nothing about a green compile says the TUI is written against the wrong major. **The `/v2` suffix is not the signal. The domain is.**
 
 `charm.land/bubbles/v2 v2.1.1` is pinned because the [PRD](../PRD.md)'s stack argument depends on it by name: gocui and raw tcell lost on "hand-rolling lists, viewports and key handling that bubbles supplies". A dependency that carries a stack decision belongs in the file that records the stack decision.
+
+## colorprofile is already here, and we promote it rather than adopt it
+
+**`github.com/charmbracelet/colorprofile v0.4.3` is what `charm.land/bubbletea/v2 v2.0.8` resolves today**, verified against the module graph, where it sits `// indirect`. It becomes a direct require for one reason: [settings](../features/settings/requirements.md) R15a resolves `NO_COLOR` **itself** and hands the answer to `tea.WithColorProfile`, rather than letting this library detect it. The version does not move. The line moves from indirect to direct, which is a `go.mod` line and therefore this ADR's business.
+
+**The reason we override its detection is measured, and it is an accessibility defect rather than a preference.** At v0.4.3, `Detect` resolves `NO_COLOR` through `strconv.ParseBool` and gates the result on `isatty`, while leaving `CLICOLOR_FORCE` ungated. On a real PTY:
+
+| Environment | `Detect` returns | Against R15 |
+|---|---|---|
+| `NO_COLOR=1` | `Ascii` | Suppresses colour, and **keeps bold** |
+| `NO_COLOR=` | `TrueColor` | R15 and AC9 name the empty string explicitly |
+| `NO_COLOR=yes` | `TrueColor` | R15 says any value |
+| `NO_COLOR=0` | `TrueColor` | gh would suppress |
+| `NO_COLOR=1` piped, `CLICOLOR_FORCE=1` | `TrueColor`, full escapes | R15 forbids the override |
+| `CLICOLOR=0` | `TrueColor` | gh would suppress. `cliColor` only ever raises |
+
+Three specifications disagree here and the library follows none of them. no-color.org says present and **not** an empty string. gh 2.92.0 says **any** value. `strconv.ParseBool` accepts eleven spellings and rejects `yes`. The canon followed gh deliberately ([settings](../features/settings/requirements.md) R15), so the canon resolves it, in one function, and the library is left to do the part it is good at: **`colorprofile.Writer` is still the only thing that degrades a styled string, and the profile handed to it is ours to choose.** Its own documentation states the split we are relying on, that `NO_COLOR` "will disable colors but not text decoration".
 
 ## go-gh, cobra and the clock
 
@@ -107,7 +125,9 @@ cassette.NewDefaultMatcher(
 
 This is a real fork, and the brief that prompted this ADR guessed it would be settled by teatest targeting Bubble Tea v1. **It does not, and that guess was wrong.** `github.com/charmbracelet/x/exp/teatest/v2` exists and requires `charm.land/bubbletea/v2`. The fork is settled on other grounds.
 
-**A Bubble Tea `View()` is a pure function of model state.** Golden-testing it needs a model and a string. goldie asserts bytes against `testdata` and supplies the `-update` flag, which is the whole requirement [ADR-0011](./0011-package-layout-and-dependency-direction.md) records for the `tui/*` seam.
+**A Bubble Tea `View()` is a pure function of model state.** That is the whole of the argument, and it survives v2 intact. What does not survive is the sentence that used to follow it, which read "golden-testing it needs a model and **a string**" and named an API that no longer exists. **Verified at v2.0.8: `View()` returns `tea.View`, a struct.** `Init() Cmd` and `Update(Msg) (Model, Cmd)` are unchanged, `tea.KeyMsg` became an interface and a press arrives as `tea.KeyPressMsg`, and the string is now `tea.View.Content`. The fork below is settled on purity, and purity is a property of the function rather than of its return type, so the decision stands and its load-bearing sentence was describing v1.
+
+**Golden `[]byte(m.View().Content)`.** goldie asserts bytes against `testdata` (`Assert(t testing.TB, name string, actualData []byte)`, verified at v2.8.0) and supplies the `-update` flag, which is the whole requirement [ADR-0011](./0011-package-layout-and-dependency-direction.md) records for the `tui/*` seam.
 
 teatest does something else and something more. `NewTestModel` runs a real `tea.Program`, and `WaitFor` polls the output with a **default duration of 1s and a check interval of 50ms**, with `WithFinalTimeout` on top. That is real wall-clock waiting, reintroduced into the one suite whose [injected clock](./0011-package-layout-and-dependency-direction.md) exists to remove it. We would be driving an event loop to observe a function of state.
 
@@ -116,6 +136,40 @@ Two further facts settle it. teatest has **no tagged release**, and resolves onl
 **gh-dash is not precedent here either way.** It uses neither. It hand-rolls `.golden.yml` comparison for config and does not golden-test its TUI at all.
 
 goldie v2.8.0 is tagged, maintained (last pushed 2025-11-22) and does exactly one thing.
+
+### The pipeline, stated once
+
+**Six requirements mandate goldens and not one says what is goldened.** [live-run-feed](../features/live-run-feed/requirements.md) R36, [run-detail](../features/run-detail/requirements.md) R19, [log-viewer](../features/log-viewer/requirements.md) R20, [storage-reclamation](../features/storage-reclamation/requirements.md) R25, [workflow-dispatch](../features/workflow-dispatch/requirements.md) R21 and [settings](../features/settings/requirements.md) R18 each require a frame verified byte for byte, and none names a subject, a width or a colour profile. Six implementers would pick six. It is stated here because the trap below is a consequence of *this* ADR's own fork, not of any feature's requirement.
+
+**One golden is `[]byte(m.View().Content)`, rendered at a fixed width fed by a fabricated `tea.WindowSizeMsg`, with the colour profile named by the test and never detected.**
+
+**That is simpler than it looks, and the reason is measured: lipgloss v2 does not consult the environment at render time.** `Style.Render` returns byte-identical output under every combination of `TERM`, `COLORTERM`, `NO_COLOR` and `CLICOLOR_FORCE`, on a TTY and piped: 34 bytes of truecolor in every case, verified at v2.0.5. Degradation happens **downstream**, in `colorprofile.Writer` or in Bubble Tea's renderer, and never in the style. **So a golden over `View().Content` is byte-stable across a truecolor dev box and a dumb CI terminal by construction.** An implementer who does not know this will spend a day defending against a problem that does not exist, which is the only reason this paragraph is longer than one line.
+
+**The width is not free, and the trap is ours.** This ADR rejected teatest for running a real `tea.Program`, which is defensible and unchanged. But `tea.WithColorProfile` and `tea.WithWindowSize` are both `ProgramOption`s, so **choosing goldie means neither lever exists** and the test pins both by hand: construct the model, send a `tea.WindowSizeMsg{Width, Height}` through `Update` as the runtime's first message would, then read `View()`. Nothing about that is hard. Everything about it is invisible from goldie's API, which is why it is written down.
+
+**The width is 100 columns**, which is [live-run-feed](../features/live-run-feed/requirements.md) R4a's minimum and the narrowest terminal the Feed will paint a row into. 80 cannot hold R4's mandated row and R4a carries the arithmetic. A golden at a width the product refuses to run at would fix a frame nobody can see.
+
+**[settings](../features/settings/requirements.md) AC9 and AC10 cannot be goldens over `View().Content`, and that follows from the measurement above.** The content is truecolor whatever the environment says, so a NO_COLOR golden and a colour golden are the same bytes, and an AC9 asserted that way passes without testing anything. Those two assert over a **downstream** stage instead: run the content through an explicit `colorprofile.Writer` at the profile [settings](../features/settings/requirements.md) R15a's resolver returns, and assert on the writer's output. That is the only place in the suite where a profile appears at all, and AC9 is the only reason it does.
+
+## No notification library is pinned, and that is a decision
+
+**[notifications](../features/notifications/requirements.md) R11 mandates three OS backends, and this file has no line for them.** That absence was silence rather than a decision, which is what this section corrects. The recommendation is that **2.0.0 ships no notification backend**, and the requirements stand until the product owner rules, because this feature was already contested and overridden once and cutting it is not this ADR's to do quietly.
+
+**A pure-Go cross-compiled option does exist, and it was measured rather than assumed.** `github.com/gen2brain/beeep v0.11.2` builds under `CGO_ENABLED=0` for `darwin/arm64`, `darwin/amd64`, `linux/amd64`, `linux/arm64` and `windows/amd64`, verified. So the cost is not the one this feature was cut for the first time. It is not a subsystem we write. It is one require line and roughly ten transitive modules.
+
+**The blocker is elsewhere, and no pin fixes it.** [ADR-0002](./0002-go-gh-with-dual-distribution.md) ships precompiled cross-platform binaries through `cli/gh-extension-precompile`, so cgo is off and there is no application bundle. `UNUserNotificationCenter` needs both. That leaves a subprocess, and beeep's macOS path is exactly that: `terminal-notifier` if `exec.LookPath` finds it, else `osascript -e 'display notification …'`. Three measured consequences:
+
+| Measured | Consequence |
+|---|---|
+| `osascript` exits **0** whether or not the toast rendered | **R13 is unsatisfiable on macOS.** "Report the channel's unavailability in Settings" needs a signal, and there is none. Settings could only ever claim availability it cannot know |
+| A toast from `osascript` is attributed to the AppleScript host, not to gh-runs, and inherits **that app's** notification permission | R14's content still lands. The badge names somebody else. The doc's open question, whether first run should ask before the OS's own prompt, is answered: the prompt is not ours to spend, and we cannot ask for it |
+| `terminal-notifier` was **present on the reference machine** at `/opt/homebrew/bin/terminal-notifier` | Delivery, attribution and reliability differ between two users on the same OS according to an unrelated Homebrew package. That is not a behaviour a shipped binary should have |
+
+**Linux closes the loop with [ADR-0002](./0002-go-gh-with-dual-distribution.md), and the two documents never met.** beeep sends over D-Bus through `esiqveland/notify`, falling back to `notify-send`. ADR-0002 rejected go-keyring partly because "on headless Linux it needs a D-Bus Secret Service that is often absent". Secret Service and Notifications are different D-Bus services, and they need the same session bus, which is the thing that is absent. So the case ADR-0002 already reasoned about is precisely [notifications](../features/notifications/requirements.md) R12's degrade-silently path, reached by the same mechanism. R12 holds on Linux. **On macOS it is R12 that is the problem**, because a toast that was never displayed and a toast that was delivered are the same exit code, so the feature degrades silently in the case where it was supposed to work.
+
+**The position: recommend cutting notifications to 2.1, and pin nothing.** The argument that lost the first time was cost, and measurement has retired it. The argument now is correctness, and it is stronger: on the reference platform the feature would attribute its toasts to another application, report an availability it cannot observe (R13), and fail silently in exactly the way R12 reserves for a channel that is genuinely absent. This canon spends R24, R29 and R30 on not saying things it cannot know. A Settings row reading "Notifications: available" would be the one place it does.
+
+**If the owner keeps the feature, `beeep v0.11.2` is the pin**, and these caveats are what it ships with. It is the honest option and it is not a bad one. R13 would then need rewording to what a subprocess can support, and that reword is a requirement change rather than a dependency choice, which is why this ADR does not make it.
 
 ## Considered Options
 
@@ -130,6 +184,10 @@ goldie v2.8.0 is tagged, maintained (last pushed 2025-11-22) and does exactly on
 **teatest for golden files.** Covered above. Untagged, experimental, pinned to an rc, and it trades a pure function for an event loop with real timeouts.
 
 **kong or urfave/cli.** Both are cleaner than cobra in isolation. Both lose to ADR-0008's compatibility requirement, which is satisfied by using gh's own library rather than by matching its output.
+
+**`gen2brain/beeep v0.11.2` for notifications.** The best option available and still not recommended, above. It is genuinely pure Go and genuinely cross-compiles, which is more than was assumed. What it cannot do is give a bundle-less binary an identity on macOS or a delivery receipt on any platform, and those are R13's and R12's requirements rather than beeep's shortcomings. Recorded here because it is the pin to reach for if the feature stays, and because the next reader will otherwise re-run this measurement.
+
+**Writing the three backends ourselves.** Strictly worse than beeep on every axis. The macOS path would still be `osascript`, so it inherits the same two defects and adds the Linux D-Bus client and the Windows COM client to our maintenance. There is no version of this feature where the platform surface is ours to improve.
 
 **No `toolchain` line.** Simpler, and one line shorter. It builds every release on the exact patch named in the `go` directive, forever, because that is how `setup-go` resolves an exact semver.
 

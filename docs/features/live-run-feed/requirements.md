@@ -18,11 +18,68 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 
 **R4.** The Feed must render Status and Conclusion as two distinct, separately labelled columns, and must never merge them into one column.
 
+**R4a.** The Feed's minimum width is **100 columns**. Below it the Feed must state that the terminal is too narrow, name the width it needs, and paint no rows. Four columns are fixed and must never shrink, and two flex above their floors:
+
+| Column | Width | Fixed? | Basis |
+|---|---|---|---|
+| Status | 11 | Fixed | `in_progress`, the longest of [CONTEXT.md](../../CONTEXT.md)'s six |
+| Conclusion | 15 | Fixed | `action_required` and `startup_failure`, the longest of its nine |
+| Run ID | 11 | Fixed | Measured. `cli/cli` serves 11-digit ids |
+| `run_started_at` | 20 | Fixed | Measured, `2026-07-15T16:39:00Z`. R10 in [settings](../settings/requirements.md) makes relative narrower, never wider |
+| Repository | 20 floor | Flexes | `home-assistant/core` is 19, `kubernetes/kubernetes` is 21 |
+| Workflow name | 18 floor | Flexes | Chosen. It is what is left |
+
+**The arithmetic is where the number comes from, and it refutes 80 without needing the two floors at all.** The four fixed columns sum to **57**, and five single-space separators make **62**. An 80-column terminal has **18 characters left for the repository and the Workflow name together**, and `home-assistant/core` is 19. So 80 cannot hold the repository column alone, before a character of Workflow name. The floors then give 57 + 5 + 20 + 18 = **100**, and that is the whole derivation. **The only "80 columns" in this canon is [log-viewer](../log-viewer/requirements.md)'s Purpose line, and it contradicts this Feed's own mandated row.** That line is about a Job log, which is one text column, and it does not reach here.
+
+**The row is mandated rather than chosen, which is why nothing can be dropped to fit.** [purge](../purge/requirements.md) R30 fixes all six for the inspect view ("the Feed's columns and no new ones") and forbids new ones. Dropping Conclusion or Status to fit a narrow pane would breach R4 outright, in a tool whose stated defining bug is conflating those two fields. There is no honest subset, so the Feed says so and waits. Widening a pane is one action, and it is a better outcome than a Feed that quietly stops showing the column this product exists to separate.
+
+**20 and 18 are chosen, not measured**, exactly as [purge](../purge/requirements.md) R7's 50 and R8's 500 are. What is measured is the 57, and the 57 is what settles 80.
+
 **R5.** The Feed must render an empty Conclusion cell for every Run whose Status is not `completed`, and must not substitute a Conclusion-like value in its place. Conclusion is null until Status reaches `completed`.
 
 **R6.** The Feed must render each Status value (`queued`, `in_progress`, `completed`, `waiting`, `requested`, `pending`) distinguishably from the others, and must render any Status or Conclusion value it does not recognise verbatim rather than discarding it or collapsing it to "unknown".
 
+**R6a.** R6's "verbatim" governs the value, never the column. **No value in either enum can ever be truncated**, because R4a sizes both columns to the longest member each enum has. Only a value this tool does not recognise can exceed its column, and only because the API added one. Such a value must be rendered as far as the column reaches, marked as truncated, and must never be replaced, discarded, or collapsed to "unknown". The columns must not resize to fit it.
+
+**Truncation is not what R6 forbids.** R6 names two failure modes and both are substitution: discarding a value, and collapsing it to a word the tool made up. A truncated value is still that value, still distinct from every value the tool knows, and still visibly not "unknown". What R6 protects is the tool's refusal to pretend it understands the API better than the API does, and a truncation marker says the opposite of that pretence.
+
+**The columns must not resize, and R9 and R10 are the reason.** A column sized to the widest value present makes every row's layout a function of every other row's content, so one arriving Run carrying an unrecognised 30-character Conclusion reflows the entire table. R9 requires a Status change to repaint one row and leave every other row alone. R10 defers anything that would move a row while the cursor is in the list. A reflow moves all of them, and it arrives from a poll, which is exactly the event AC1 says may never change what the cursor is resting on. **Fixed columns are what make R9 and R10 implementable**, and truncating a value the API invented after we shipped is the price. It is a good price: the alternative is a Feed whose layout an unknown third party controls.
+
 **R7.** The Feed must ship exactly two keybinding profiles, Vim and Standard, and must offer no others. No binding in either profile may use Cmd, which terminals do not send, and neither profile may bind Ctrl+C to anything but quitting, because the terminal sends it as SIGINT.
+
+**R7a.** Both profiles must be **declared as one registry**, in `internal/keys` ([ADR-0011](../../adr/0011-package-layout-and-dependency-direction.md)), as `key.Binding` values. Every binding in the product must come from it, and no view may match a key literal of its own. **AC18 is why this is a requirement rather than a layout preference.** "No binding in either profile uses Cmd" can only be asserted over a declared set: a test cannot enumerate the keys a `switch` statement scattered across nine packages happens to match, so without a registry AC18 is a sentence nothing can check, and R7's second clause is a promise rather than a property.
+
+**The two profiles differ on motion, and nowhere else.** Vim and Standard disagree about how to move a cursor. They have no disagreement about deleting a Run, because vim has no opinion on that. Every binding below that is not a motion is therefore identical in both profiles, deliberately, and a profile that forked them would be inventing a distinction for symmetry.
+
+| Motion | Vim | Standard | Required by |
+|---|---|---|---|
+| Row up, row down | `k`, `j` | `up`, `down` | run-detail AC1 arrow-keys 100 rows |
+| Page up, page down | `ctrl+b`, `ctrl+f` | `pgup`, `pgdown` | R30 in [purge](../purge/requirements.md) |
+| **First row, last row** | `g`, `G` | `home`, `end` | **[purge](../purge/requirements.md) R30 depends on this outright.** "Reach both ends" is how an operator checks a date filter, and the oldest Run in a frozen set is its last row |
+
+| Everything else | Both profiles | Required by |
+|---|---|---|
+| Next tab, previous tab | `tab`, `shift+tab` | R2's three tabs |
+| Tab by position | `1`, `2`, `3` | R2. Three tabs is few enough to address directly |
+| Settings | `,` | R2. Reachable from any tab, and never a fourth tab |
+| Toggle row selection | `space` | R4 in [purge](../purge/requirements.md) |
+| Apply deferred changes, refresh | `r` | R10 and R11. R11's affordance must name this key |
+| Open Run detail | `enter` | [BUILD-ORDER](../../BUILD-ORDER.md) stage 8 |
+| Filter | `/` | R22, R23 |
+| Help | `?` | `bubbles/help` renders the registry |
+| Quit | `q`, `ctrl+c` | R7. Ctrl+C quits in both and binds to nothing else |
+
+| Confirm modal | Both profiles | Required by |
+|---|---|---|
+| Confirm below the threshold | `y` | R7 and AC6 in [purge](../purge/requirements.md) |
+| Abort | `n`, `esc` | AC6 there |
+| Abort on the default | `enter` | AC6 there. The default is no |
+| At or above the threshold | the exact count, typed | R7 there. **`y` must not start it** |
+| Inspect the frozen set | `v` | R30 there. The modal must name this key on its face |
+
+**Feature-local bindings join this registry rather than escaping it.** Log deletion needs a key distinct from Run deletion ([log-viewer](../log-viewer/requirements.md) R17), a Purge summary needs one that retries only the recorded failures ([purge](../purge/requirements.md) R22), and the log view needs its fold and timestamp toggles ([log-viewer](../log-viewer/requirements.md) R4, R5). Each is its own feature's to name and every one of them is declared here. A binding that lives anywhere else is outside AC18's reach, which is the only thing this requirement is protecting.
+
+**Two spellings are measured, and both are traps.** A space press arrives as `tea.KeyPressMsg` whose `String()` is **`"space"`**, so `key.WithKeys(" ")` matches nothing: verified at bubbletea v2.0.8, where the v1 idiom `case " "` is now `case "space"`. And `tea.KeyMsg` is an interface in v2 rather than a struct, so a press is a `tea.KeyPressMsg` and a type switch on `tea.KeyMsg` catches releases too. `key.Matches[Key fmt.Stringer](k Key, b ...Binding) bool` takes the press directly, which `tea.KeyPressMsg` satisfies.
 
 ### Ordering and stability
 
@@ -132,9 +189,15 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 
 **AC17: Unsupported host.** Launched inside a git repository whose remote is a GHES host, the Feed states the host is unsupported and lists no Runs under that repository's name.
 
-**AC18: Keybindings.** Exactly two profiles are selectable. No binding in either uses Cmd. Ctrl+C quits in both.
+**AC18: Keybindings.** Exactly two profiles are selectable. **Enumerating R7a's registry**, no binding in either profile carries a key naming Cmd (`cmd+`, `super+`, `meta+`), and `ctrl+c` appears in both profiles bound to quitting and to nothing else. R7a's motion rows resolve to `k`/`j` under Vim and `up`/`down` under Standard, and both profiles reach the first and last row (`g`/`G`, `home`/`end`), which [purge](../purge/requirements.md) R30 requires. Every binding the product matches on is drawn from the registry, and a view matching a key literal of its own fails this criterion.
 
-**AC19: Goldens hold the Feed's frame.** Rendering a recorded frame from held state, with no terminal and no network, reproduces the stored golden byte for byte. Four separate goldens fix the cases R36 names. A row at Status `in_progress` with an empty Conclusion cell, alongside one at `completed` carrying its Conclusion. A capped view labelled "1,000 of ~18,258", nowhere carrying a bare 18,258. The same row rendered with its destructive action offered, read-only, not yet known, and permanently read-only, each visibly different from the others. A deferred state whose affordance reads "3 new runs". Changing any of them fails its golden.
+**The enumeration is the criterion, and an earlier form of it had none.** "No binding in either uses Cmd" is a claim about a set, and this criterion named no set. Against nine packages each free to `switch` on a key string, it asserted a property of code nothing could enumerate, so it would have passed by being unwritten. R7a's registry is what turns it into a test that can fail.
+
+**AC19: Goldens hold the Feed's frame.** Rendering a recorded frame from held state, with no terminal and no network, reproduces the stored golden byte for byte. Four separate goldens fix the cases R36 names. A row at Status `in_progress` with an empty Conclusion cell, alongside one at `completed` carrying its Conclusion. A capped view labelled "1,000 of ~18,258", nowhere carrying a bare 18,258. The same row rendered with its destructive action offered, read-only, not yet known, and permanently read-only, each visibly different from the others. A deferred state whose affordance reads "3 new runs". Changing any of them fails its golden. Every golden here is rendered at R4a's 100 columns ([ADR-0013](../../adr/0013-dependency-pins.md) fixes the pipeline).
+
+**AC20: The mandated row fits, and a narrow terminal is refused rather than abridged.** At 100 columns a row carrying `action_required` and `in_progress` renders both in full, in their own cells, alongside its repository, Run ID, Workflow name and `run_started_at`. At 99 columns the Feed paints no rows and states the width it needs. No width causes a Status or Conclusion value in either enum to truncate, and no width merges the two columns or drops one (R4, R4a).
+
+**AC21: An unrecognised value truncates and is never renamed.** Given a Run whose Conclusion is a 30-character value absent from [CONTEXT.md](../../CONTEXT.md)'s nine, the cell renders the value's leading characters with a truncation marker, renders neither "unknown" nor an empty cell, and **every other row's layout is unchanged**. A poll delivering that Run does not reflow the table (R6, R6a, R9, R10).
 
 ## Constraints
 

@@ -4,7 +4,9 @@
 
 ## Purpose
 
-Read a Job's log inside the tool, rendered the way the web UI renders it (folded, de-noised, legible at 80 columns) without leaving for a browser. Logs are fetched one Job at a time, on open, so nothing is downloaded that is not read.
+Read a Job's log inside the tool, rendered the way the web UI renders it (folded, de-noised, legible in a terminal) without leaving for a browser. Logs are fetched one Job at a time, on open, so nothing is downloaded that is not read.
+
+**This line used to say "legible at 80 columns" and it was the only 80 in the canon.** It contradicted the Feed's own mandated row, which [live-run-feed](../live-run-feed/requirements.md) R4a costs at 100 columns minimum and 80 cannot hold. A log is one column of text and stays legible at any width, so the number was doing no work here while quietly disagreeing with the surface this pane opens over.
 
 ## Requirements
 
@@ -78,7 +80,7 @@ Every fact below was measured against the live API. Each one removed an option.
 |---|---|---|
 | Per-Job log | `GET /repos/{o}/{r}/actions/jobs/{id}/logs` → 303 → `200 text/plain`. **4,153 bytes** for a trivial Job | One small request per Job opened → R1 |
 | Byte-order mark | The first line carries a UTF-8 BOM | R3 |
-| Timestamp prefix | **Every** line prefixed with a 29-char ISO timestamp (`2026-07-15T03:11:52.0835958Z `). **36% of an 80-column terminal** | R4 |
+| Timestamp prefix | **Every** line prefixed with a 29-char ISO timestamp (`2026-07-15T03:11:52.0835958Z `). **29% of the 100-column minimum** ([live-run-feed](../live-run-feed/requirements.md) R4a) | R4 |
 | Marker density | One small Job's log: **12** `##[group]`, **12** `##[endgroup]`, **2** `##[warning]` | Markers are the norm, not an edge case → R5–R8 |
 | Marker family | `group`, `endgroup`, `error`, `warning`, `notice`, `command`, `debug` | R8 |
 | Run-level logs | `GET /repos/{o}/{r}/actions/runs/{id}/logs` → 303 → a **zip** | Export only → R2, R11 |
@@ -113,7 +115,7 @@ Note also that archive filenames are **lossily sanitised**: a space-slash-space 
 
 **Undecided: search within a log.** Not specified. Given that a single Job log is small (4,153 bytes measured, though nothing bounds it), searching may be unnecessary or may be the main way anyone navigates a long one.
 
-**Undecided: long-line handling.** Wrap, or horizontal scroll, or truncate with an expander. Stripping the 29-char prefix buys back 36% of an 80-column terminal (R4) and may make this moot.
+**Undecided: long-line handling.** Wrap, or horizontal scroll, or truncate with an expander. Stripping the 29-char prefix buys back 29% of the 100-column minimum (R4, [live-run-feed](../live-run-feed/requirements.md) R4a) and may make this moot.
 
 **Undecided: whether the timestamp toggle persists.** Settings are intent-level only (PRD), and "show timestamps" is mechanism, so this may belong to the view's session state rather than to [settings](../settings/requirements.md).
 

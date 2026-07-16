@@ -25,6 +25,8 @@ Directory names follow the glossary. If a name feels wrong, read CONTEXT.md befo
 - **Module path is `github.com/jv-k/gh-runs/v2`.** The `/v2` suffix is mandatory at any v2 tag, prereleases included. [ADR-0010](docs/adr/0010-module-path-carries-the-v2-suffix.md).
 - **`main.go` lives at the repository root.** Not `cmd/`. This is what makes `go install …/v2@latest` yield a binary called `gh-runs`, and it is what `cli/gh-extension-precompile` builds by default. [ADR-0011](docs/adr/0011-package-layout-and-dependency-direction.md).
 - **Everything else is `internal/`.** Nothing here is a library. [ADR-0011](docs/adr/0011-package-layout-and-dependency-direction.md) fixes the tree and the direction every import points.
+- **Only the root implements `tea.Model`. A tab exposes `View() string`.** Every `bubbles/v2` component does the same, and `tea.View` carries eleven terminal-wide fields a second tab could only fight over. There are **three tabs** (`feed`, `workflows`, `storage`) and four **panes** (`rundetail`, `logview`, `settings`, `confirm`). A tab may import a pane, never another tab. [ADR-0011](docs/adr/0011-package-layout-and-dependency-direction.md)'s tab contract.
+- **Routing is per message class.** Size and data reach every tab, keys reach exactly one. An inactive tab that stops receiving breaks the Feed's background reveal ([live-run-feed](docs/features/live-run-feed/requirements.md) R33) and its ~30s liveness (R27).
 - **`store` and `ghclient` must not import each other.** `store` exports an `http.RoundTripper`, `ghclient` takes one, `main.go` is the only place that knows both. This is the load-bearing seam.
 - **Every pin in `go.mod` is [ADR-0013](docs/adr/0013-dependency-pins.md), and three of them are load-bearing.** Bubble Tea v2 is `charm.land/bubbletea/v2`, never `github.com/charmbracelet/bubbletea`, which is a live v1 that compiles. Cassettes need **go-vcr v4**: v3's matcher ignores headers, so local-store AC5 passes vacuously. `go get -u` is not a routine chore here.
 - **go-gh's cache is TTL-only and never revalidates.** `EnableCache: false` does not disable it. Only `CacheTTL: 0` does. Our RoundTripper does the revalidating.
@@ -47,6 +49,8 @@ Three seams, from the PRD, designed in rather than retrofitted:
 | **Recorded HTTP cassettes** | `store`, `discovery`, `scheduler`, `governor`, `ops` | Replay what the API actually said. Hand-written fakes encode what we believe and stay green while reality moves. |
 | **Injected clock** | `scheduler`, `governor` | Timing-dependent, must be deterministic and instant. Never sleep through a real interval. |
 | **Golden files** | `tui/*` | A live Feed's correctness is mostly what it puts on screen. |
+
+**Golden `[]byte(m.View().Content)`, at 100 columns, at a named colour profile.** `View()` returns a `tea.View` **struct** in Bubble Tea v2, not a string. The width comes from a fabricated `tea.WindowSizeMsg`, because goldie means there is no `tea.Program` and so no `tea.WithWindowSize`. lipgloss renders truecolour regardless of `TERM` or `NO_COLOR`, so a golden is stable on any machine and a `NO_COLOR` golden over `View().Content` would prove nothing. [ADR-0013](docs/adr/0013-dependency-pins.md) has the pipeline and the measurements.
 
 Test material goes in each package's `testdata/`.
 

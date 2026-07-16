@@ -62,6 +62,12 @@ None of this blocks stage 0.
 
 Stages 1 and 2 are the co-root and can be built at once by two people who agree on two types first: the **Budget Readout** ([CONTEXT.md](./CONTEXT.md)) and the `base http.RoundTripper` each takes. Neither imports the other, and `main.go` nests them ([ADR-0012](./adr/0012-transport-chain-and-the-client-surface.md)), so the seam between them is two standard-library interfaces and one struct.
 
-Stages 9, 10 and 11 fan out cleanly. Stage 11 shares nothing with 9 or 10. Everything from 7 onward is a tab, and [ADR-0011](./adr/0011-package-layout-and-dependency-direction.md) forbids tabs importing each other, which is what keeps that fan-out honest. Stage 5 is parallelisable with anything, since `filter` imports `domain` alone.
+Stages 9, 10 and 11 fan out cleanly. Stage 11 shares nothing with 9 or 10. Stage 5 is parallelisable with anything, since `filter` imports `domain` alone.
+
+**What keeps that fan-out honest is [ADR-0011](./adr/0011-package-layout-and-dependency-direction.md)'s tab contract, and this paragraph used to cite the wrong half of it.** It said "everything from 7 onward is a tab", which is false and was the flat tree line talking: only three of these stages build a tab (7 is Runs, 10's storage-reclamation is Storage, 11 is Workflows). Stages 8, 10's log-viewer and 13 build **panes**, and a pane is exactly the thing the old rule was silent about. The contract that makes the fan-out safe is the whole of it: a tab may import a pane, a tab may not import another tab, and a pane may not import a tab or whatever opened it. So `storage` and `workflows` cannot reach into `feed`, and `logview` cannot reach back up to `rundetail`.
+
+**Stages 7, 8 and 10's log-viewer are a chain rather than a fan-out**, and the table already implies it without saying so. Runs is `feed` opening `rundetail` opening `logview`, three packages in one tab, which is why stage 8 follows 7 and why [log-viewer](./features/log-viewer/requirements.md) R1 can only open "from Run detail".
+
+**`internal/keys` lands at stage 7**, with the Feed that requires it ([live-run-feed](./features/live-run-feed/requirements.md) R7a). It imports nothing of ours, so it could sit at stage 0 beside `clock`, and it does not because nothing before stage 7 has a key to press. Every stage from 7 on draws its bindings from it, and its AC18 test needs no terminal.
 
 Nothing before stage 6 parallelises usefully beyond that. It is a chain, it is four links long, and it is the whole foundation.
