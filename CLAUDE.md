@@ -11,8 +11,8 @@ v2 is a ground-up Go rewrite. **There is no Go code yet.** v1 was a bash script 
 | [docs/PRD.md](docs/PRD.md) | What we are building, who for, and the measured constraints that shaped it. The constraints table is the most valuable thing in the repo. |
 | [docs/CONTEXT.md](docs/CONTEXT.md) | The glossary. It is binding, see below. |
 | [docs/BUILD-ORDER.md](docs/BUILD-ORDER.md) | What to build first. **Not** the PRD's feature grouping, which is a taxonomy and points roughly backwards. |
-| [docs/adr/](docs/adr/) | Thirteen decisions and the options they beat. |
-| [docs/features/](docs/features/) | Sixteen requirement sets, one per capability. Numbered `R*` requirements and `AC*` acceptance criteria. |
+| [docs/adr/](docs/adr/) | Fourteen decisions and the options they beat. |
+| [docs/features/](docs/features/) | Sixteen requirement sets, one per capability. Fifteen are 2.0.0 scope, and notifications is deferred to 2.1 ([ADR-0013](docs/adr/0013-dependency-pins.md)). Numbered `R*` requirements and `AC*` acceptance criteria. |
 
 ## The glossary is binding
 
@@ -35,6 +35,7 @@ Directory names follow the glossary. If a name feels wrong, read CONTEXT.md befo
 - **There is no server-side `conclusion` parameter.** Measured: `?conclusion=failure` returns every Run, because the API ignores it. Never send it.
 - **Filtered Run listing silently caps at 1,000** while `total_count` keeps reporting the full match count. Never trust `total_count` in a filtered view. This file names no figure for it deliberately: the counts are point-in-time reference measurements that drift, they live in the [PRD](docs/PRD.md)'s constraints table, and a copy here is one more place for them to disagree. This one already had.
 - **`GH_TOKEN` is required for users without gh.** go-gh reaches the keyring only by shelling out to the gh binary. [ADR-0002](docs/adr/0002-go-gh-with-dual-distribution.md).
+- **Notifications are deferred to 2.1, on correctness not cost.** beeep is cgo-free and cross-compiles, but `osascript` exits 0 whether or not a toast rendered, so [notifications](docs/features/notifications/requirements.md) R13 (report the channel's availability) is unsatisfiable on macOS from a bundle-less precompiled binary. The requirements are preserved as 2.1's starting point, and [settings](docs/features/settings/requirements.md) R11's notification options defer with the feature. [ADR-0013](docs/adr/0013-dependency-pins.md).
 
 ## Stack
 

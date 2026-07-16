@@ -91,9 +91,10 @@ Every one of these changed a design decision, and they are not all the same kind
 | Dispatch | Typed form generated from the Workflow's YAML |
 | Reclamation | Caches and Artifacts, bytes-first |
 | Approvals | Badge and saved filter over the Feed; approve and review inline |
-| Notifications | OS-native, gated in Settings, conservative default |
 | Settings | Intent-level only |
 | CLI | Drop-in superset of `gh run`'s flags |
+
+**2.0.0 targets macOS, Linux and Windows.** Ruled by the product owner on 2026-07-16, and stated nowhere before that, which left three things unanchored: the config path's Windows limb ([settings](./features/settings/requirements.md) R1), the local store's lock ([local-store](./features/local-store/requirements.md) R22, `flock(2)` on unix and `LockFileEx` on Windows), and the CI matrix. The alternative was not free either way: `cli/gh-extension-precompile` builds Windows assets by default and gh-dash ships them, so excluding Windows meant actively suppressing binaries, and shipping them untested is a channel this canon's honesty rules forbid.
 
 ### Out
 
@@ -102,6 +103,7 @@ Every one of these changed a design decision, and they are not all the same kind
 - **Live log tailing.** Not possible. The API has no streaming endpoint.
 - **Attempt history.** Not possible. Prior Attempts' Jobs return empty.
 - **npm as a distribution channel for v2.** A Go binary on npm means a postinstall that downloads a platform binary. That is an anti-pattern which breaks behind proxies and offline. v1.0.7 stays published and functional, and `npm deprecate` points at the successor.
+- **Notifications. Deferred to 2.1, on correctness rather than cost.** `gen2brain/beeep` is cgo-free and cross-compiles to every release target, so the subsystem is affordable. What no precompiled binary can do is confirm delivery on macOS: `osascript` exits 0 whether or not the toast rendered, and `UNUserNotificationCenter`, the one API that could confirm, needs cgo and a bundle ID that [ADR-0002](./adr/0002-go-gh-with-dual-distribution.md)'s bundle-less binaries do not carry. A notifier that reports an availability it cannot observe ([notifications](./features/notifications/requirements.md) R13) is worse than none. The requirements are preserved as 2.1's starting point, not deleted. → [ADR-0013](./adr/0013-dependency-pins.md)
 
 ## Success criteria
 
@@ -131,7 +133,9 @@ Requirements live in [features/](./features/), one directory per capability.
 | Group | Features |
 |---|---|
 | **Surfaces** | [live-run-feed](./features/live-run-feed/requirements.md), [run-detail](./features/run-detail/requirements.md), [log-viewer](./features/log-viewer/requirements.md), [workflow-management](./features/workflow-management/requirements.md), [workflow-dispatch](./features/workflow-dispatch/requirements.md), [storage-reclamation](./features/storage-reclamation/requirements.md), [approvals](./features/approvals/requirements.md), [settings](./features/settings/requirements.md) |
-| **Operations** | [purge](./features/purge/requirements.md), [run-lifecycle](./features/run-lifecycle/requirements.md), [notifications](./features/notifications/requirements.md) |
+| **Operations** | [purge](./features/purge/requirements.md), [run-lifecycle](./features/run-lifecycle/requirements.md) |
 | **Infrastructure** | [repo-discovery](./features/repo-discovery/requirements.md), [polling-scheduler](./features/polling-scheduler/requirements.md), [rate-governor](./features/rate-governor/requirements.md), [local-store](./features/local-store/requirements.md), [cli-surface](./features/cli-surface/requirements.md) |
 
 Directory names follow the glossary. `purge` is the capability's name in the language, not "bulk-delete". `local-store` is the on-disk ETag and payload store, deliberately not named "cache", because **Cache** is reserved for a GitHub Actions Cache, the thing Reclamation deletes.
+
+The `notifications/` directory is present but out of 2.0.0 scope. The feature is deferred to 2.1 (see Out, above), and its requirements are preserved there as the 2.1 starting point rather than deleted. Fifteen of the sixteen directories are 2.0.0 scope.

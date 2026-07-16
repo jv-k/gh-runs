@@ -1,5 +1,11 @@
 # Notifications
 
+**DEFERRED TO 2.1. NOT IN 2.0.0 SCOPE.**
+
+Notifications ship in 2.1, not 2.0.0. The product owner ruled on 2026-07-16, and the reason is correctness rather than cost. `gen2brain/beeep` is genuinely cgo-free and cross-compiles to every release target, so the subsystem is affordable. What no precompiled binary can do is confirm delivery on macOS: `osascript` exits 0 whether or not the toast rendered, and `UNUserNotificationCenter`, the one API that could confirm, needs cgo and a bundle ID that [ADR-0002](../../adr/0002-go-gh-with-dual-distribution.md)'s bundle-less binaries do not carry. R13 asks the tool to report the channel's availability, and on macOS there is no signal to report one from. A notifier that cannot tell you it failed is worse than none.
+
+**The requirements below are preserved unchanged as 2.1's starting point, not deleted.** When 2.1 picks the feature up, `beeep v0.11.2` is the pin, R13 needs rewording to what a subprocess can support, and the two macOS caveats ship with it. See [ADR-0013](../../adr/0013-dependency-pins.md) and [PRD](../../PRD.md) Scope.
+
 > Terms are defined in [CONTEXT.md](../../CONTEXT.md). Status and Conclusion are two different fields: a Run **completes** on Status and **fails** on Conclusion.
 
 ## Purpose
@@ -91,7 +97,7 @@ Interrupt someone, through their operating system, when something has happened t
 
 **This feature is an override twice over.** The product owner was recommended no notifications in 2.0.0 at all, deferred to 2.1 on the argument that cross-platform delivery is a real subsystem (the last row above is that argument), and required OS-native notifications gated in settings instead. The owner was separately recommended a narrow fixed default event set, and chose R4's configurable matrix with a conservative default. Both are recorded so that a later reader knows the scope was contested rather than assumed.
 
-**The mechanism has now been measured, and the recommendation to defer stands on different ground.** [ADR-0013](../../adr/0013-dependency-pins.md) carries it in full. The short of it, because it changes what R11 to R13 are asking for:
+**The mechanism has now been measured, and the decision to defer stands on different ground from the first.** [ADR-0013](../../adr/0013-dependency-pins.md) carries it in full. The short of it, because it changes what R11 to R13 are asking for:
 
 | Measured | Effect here |
 |---|---|
@@ -101,9 +107,9 @@ Interrupt someone, through their operating system, when something has happened t
 | beeep prefers `terminal-notifier` when `exec.LookPath` finds it, and it was present on the reference machine | Delivery and attribution vary with an unrelated Homebrew package |
 | beeep's Linux path is D-Bus, falling back to `notify-send` | **R12's degrade path is exactly [ADR-0002](../../adr/0002-go-gh-with-dual-distribution.md)'s rejected case.** That ADR turned down go-keyring partly because headless Linux often has no D-Bus session bus. Same bus, same absence, and the two documents had never met |
 
-**The recommendation is to cut this feature to 2.1.** The first deferral was argued on cost and measurement has answered it. This one is argued on correctness: on macOS the feature would attribute its toasts to another application, report an availability it cannot observe (R13), and degrade silently in the case where it was meant to work rather than the case R12 reserves. **R12's silence is a virtue when the channel is absent and a defect when the channel merely failed, and macOS cannot tell those apart.** This canon spends R24, R29 and R30 on refusing to state what it cannot know, and a Settings row reading "Notifications: available" would be the one place it does.
+**The decision is made: this feature is cut to 2.1.** The first deferral was argued on cost and measurement has answered it. This one is argued on correctness: on macOS the feature would attribute its toasts to another application, report an availability it cannot observe (R13), and degrade silently in the case where it was meant to work rather than the case R12 reserves. **R12's silence is a virtue when the channel is absent and a defect when the channel merely failed, and macOS cannot tell those apart.** This canon spends R24, R29 and R30 on refusing to state what it cannot know, and a Settings row reading "Notifications: available" would be the one place it does.
 
-**The requirements below stand unchanged, and the decision is the owner's.** This scope was overridden once already and it is not being cut from underneath that. If it stays, `beeep v0.11.2` is the pin, R13 needs rewording to what a subprocess can support, and the two caveats ship with it.
+**The requirements below stand unchanged, and the owner has made the call: this feature moves to 2.1.** This scope was overridden once already and it was not cut from underneath that. When 2.1 picks it up, `beeep v0.11.2` is the pin, R13 needs rewording to what a subprocess can support, and the two caveats ship with it.
 
 ## Open questions
 
@@ -136,6 +142,6 @@ Interrupt someone, through their operating system, when something has happened t
 - [local-store](../local-store/requirements.md): the cross-session state R2 must not mistake for news.
 - [polling-scheduler](../polling-scheduler/requirements.md) sets how quickly a transition is noticed. Notifications add no polling of their own.
 - [settings](../settings/requirements.md) hosts R4's matrix, R8's control and R13's unavailability report.
-- [ADR-0013: The dependency pins](../../adr/0013-dependency-pins.md) measured R11's three backends and pins none of them. It carries the recommendation to defer this feature to 2.1, and the pin to reach for if it stays.
+- [ADR-0013: The dependency pins](../../adr/0013-dependency-pins.md) measured R11's three backends and pins none of them. It carries the decision to defer this feature to 2.1, and the pin to reach for when it is built.
 - [ADR-0002: Build on go-gh with dual distribution](../../adr/0002-go-gh-with-dual-distribution.md). Bundle-less precompiled binaries are why macOS delivery is a subprocess, and its rejected go-keyring option already reasoned about the missing D-Bus session bus that R12 degrades on.
 - [repo-discovery](../repo-discovery/requirements.md) supplies R4's free `permissions.push`, and the account identity question above.

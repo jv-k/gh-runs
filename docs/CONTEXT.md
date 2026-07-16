@@ -106,5 +106,5 @@ The best-effort linking of a Dispatch to the Run it triggered, when the trigger 
 _Avoid_: Match, association (those imply a certainty Correlation deliberately withholds).
 
 **Baseline**:
-The first observation of a repository's Runs in a session. It fires no notifications, so launching to a night of finished Runs does not announce them all at once. Notifications describe what changed against the Baseline, never the Baseline itself.
+The first observation of a repository's Runs in a session. It fires no notifications, so launching to a night of finished Runs does not announce them all at once. Notifications describe what changed against the Baseline, never the Baseline itself. Notifications are deferred to 2.1 ([PRD](./PRD.md) Scope), so this term is preserved for them: the Baseline is the silent first read they will measure against.
 _Avoid_: Initial state, snapshot (Baseline is specifically the silent first read).

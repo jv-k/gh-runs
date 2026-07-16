@@ -108,7 +108,7 @@ Tell someone that a Run is blocked on a human decision, and let that decision be
 - [ADR-0004: Liveness via conditional ETag polling](../../adr/0004-conditional-polling-for-liveness.md) (why the badge is free)
 - [ADR-0003: Multi-repo Feed via client-side fan-out](../../adr/0003-multi-repo-via-client-side-fanout.md) (why both fields are already local, and why no new data source is needed)
 - [live-run-feed](../live-run-feed/requirements.md) owns the data, the window bounding R10, and the update path R15 relies on.
-- [notifications](../notifications/requirements.md) reuses R2's predicate for its one default approval event. The badge and the toast must be incapable of disagreeing.
+- [notifications](../notifications/requirements.md) reuses R2's predicate for its one default approval event, and is deferred to 2.1 ([PRD](../../PRD.md) Scope). When it ships, the badge and the toast must be incapable of disagreeing. In 2.0.0 the badge stands alone, so that coupling is a 2.1 obligation.
 - [run-lifecycle](../run-lifecycle/requirements.md) covers the other Run actions taken from a Feed row, and owns cancel and re-run, not approve.
 - [run-detail](../run-detail/requirements.md) is where a blocked Run's Jobs are inspected before deciding.
 - [repo-discovery](../repo-discovery/requirements.md) supplies the `permissions` R14 declines to trust.

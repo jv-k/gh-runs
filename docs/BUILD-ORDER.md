@@ -16,7 +16,7 @@ Those two are the floor. Everything below stands on them.
 
 | Stage | Build | Because |
 |---|---|---|
-| **0** | `go.mod`, `main.go`, `domain`, `clock`, `config`, `ghclient` | The skeleton of [ADR-0011](./adr/0011-package-layout-and-dependency-direction.md). **Every line of `go.mod` is [ADR-0013](./adr/0013-dependency-pins.md)**, including the Go floor that CI and the released binaries both read from it. `config` lands here rather than with the settings view, because the governor needs a Budget share before any view exists. `clock` is here because five later packages inject it and it imports nothing. |
+| **0** | `go.mod`, `main.go`, `domain`, `clock`, `config`, `ghclient` | The skeleton of [ADR-0011](./adr/0011-package-layout-and-dependency-direction.md). **Every line of `go.mod` is [ADR-0013](./adr/0013-dependency-pins.md)**, including the Go floor that CI and the released binaries both read from it. **`domain`'s structs and enums are [ADR-0014](./adr/0014-domain-types-and-the-budget-readout.md)**, measured against the live API. `config` lands here rather than with the settings view, because the governor needs a Budget share before any view exists. `clock` is here because five later packages inject it and it imports nothing. |
 | **1** | **local-store** | The root. R19's RoundTripper, R19a's injected base, R19b's 304-to-200 reconstitution, ETags, payloads. [ADR-0012](./adr/0012-transport-chain-and-the-client-surface.md). |
 | **2** | **rate-governor** | The co-root, and a RoundTripper nested inside stage 1's ([ADR-0012](./adr/0012-transport-chain-and-the-client-surface.md)). Pacing, and the published **Budget Readout**, whose pressure flag is R8a's projection and needs no stub. |
 | **3** | **repo-discovery** | Needs local-store's persistence and the governor's accounting. |
@@ -30,7 +30,9 @@ Those two are the floor. Everything below stands on them.
 | **11** | **workflow-management**, **workflow-dispatch** | Independent of the Feed. Parallelisable with 9 and 10. |
 | **12** | **approvals** | A predicate and a badge over the Feed. |
 | **13** | **settings**, the view | The view is last. The file was stage 0. |
-| **14** | **notifications** | Four upstreams: approvals' predicate, the Feed's transitions, local-store's baseline, dispatch's correlation. Genuinely last. |
+| **14 (2.1)** | **notifications**, deferred | Out of 2.0.0 scope, deferred to 2.1 ([ADR-0013](./adr/0013-dependency-pins.md), [PRD](./PRD.md) Scope). Four upstreams when 2.1 builds it: approvals' predicate, the Feed's transitions, local-store's baseline, dispatch's correlation. Last then, and last now. |
+
+**Stages 0 to 13 are 2.0.0. Stage 14 is 2.1.** notifications defers to 2.1 because delivery cannot be confirmed on macOS from a precompiled binary ([ADR-0013](./adr/0013-dependency-pins.md)): `osascript` exits 0 whether or not a toast rendered. [settings](./features/settings/requirements.md) R11's notification options defer with it, so the last thing 2.0.0 builds is stage 13, the Settings view. When 2.1 builds notifications it is still last, standing on the same four upstreams.
 
 **The filter engine is a package, and that is what makes stage 6 possible.** [cli-surface](./features/cli-surface/requirements.md) says the Feed's "filter engine has to exist regardless. Flags are a thin adapter over it", and names [live-run-feed](./features/live-run-feed/requirements.md) as its owner. Read literally, that puts the CLI after the Feed and has `cli` importing `tui/feed`, which [ADR-0011](./adr/0011-package-layout-and-dependency-direction.md) forbids outright: nothing imports `tui`. The engine is `internal/filter` over `domain`, it precedes both consumers, and the ordering above is only coherent because of it.
 
@@ -60,7 +62,7 @@ None of this blocks stage 0.
 
 ## Parallelism
 
-Stages 1 and 2 are the co-root and can be built at once by two people who agree on two types first: the **Budget Readout** ([CONTEXT.md](./CONTEXT.md)) and the `base http.RoundTripper` each takes. Neither imports the other, and `main.go` nests them ([ADR-0012](./adr/0012-transport-chain-and-the-client-surface.md)), so the seam between them is two standard-library interfaces and one struct.
+Stages 1 and 2 are the co-root and can be built at once by two people who agree on two types first: the **Budget Readout** ([CONTEXT.md](./CONTEXT.md), its struct fixed by [ADR-0014](./adr/0014-domain-types-and-the-budget-readout.md)) and the `base http.RoundTripper` each takes. Neither imports the other, and `main.go` nests them ([ADR-0012](./adr/0012-transport-chain-and-the-client-surface.md)), so the seam between them is two standard-library interfaces and one struct.
 
 Stages 9, 10 and 11 fan out cleanly. Stage 11 shares nothing with 9 or 10. Stage 5 is parallelisable with anything, since `filter` imports `domain` alone.
 

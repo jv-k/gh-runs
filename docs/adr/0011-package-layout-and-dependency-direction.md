@@ -20,7 +20,7 @@ The canon says what to build and never says where the code goes. Sixteen feature
     ├── discovery/           repo-discovery.
     ├── scheduler/           polling-scheduler.
     ├── ops/                 Every write in the product, see below.
-    ├── notify/              notifications. Three platform backends, if the feature ships. See below.
+    ├── notify/              notifications, a 2.1 package. Three platform backends, if the feature ships. See below.
     ├── cli/                 cli-surface. Flags, and the non-interactive paths.
     └── tui/                 Bubble Tea. The root model, three tabs, four panes.
         ├── feed/            Tab: Runs.
@@ -168,6 +168,6 @@ That last clause is what the Consequences section's cycle warning names. `rundet
 
 **`config` is not `tui/settings`.** The file, its precedence and its defaults are needed by the governor before any view exists, and settings R2 forbids state from entering the config file. Splitting them keeps a settings view out of the dependency path of everything that merely reads a setting.
 
-**`notify` is the one package here that may never be built, and the tree keeps it anyway.** [ADR-0013](./0013-dependency-pins.md) recommends deferring [notifications](../features/notifications/requirements.md) to 2.1 and pins no backend, on measurement rather than on cost. That recommendation is the product owner's to accept, the requirements stand until they do, and this row is what the package looks like if it ships: over `domain` alone, importing no other internal package, called from wherever a Feed transition is observed. Nothing else in the tree moves either way, which is the point of it importing so little.
+**`notify` is a 2.1 package, and the tree keeps its row anyway.** [ADR-0013](./0013-dependency-pins.md) deferred [notifications](../features/notifications/requirements.md) to 2.1 and pins no backend, on measurement rather than on cost, and the product owner ruled for that on 2026-07-16. This row is what the package looks like when 2.1 builds it: over `domain` alone, importing no other internal package, called from wherever a Feed transition is observed. Nothing else in the tree moves either way, which is the point of it importing so little.
 
 **This is a floor and not a cage.** A package here earns its place by being a boundary the canon already draws. Adding one is cheap and needs no ADR. Reversing an arrow in the table above is not, and does.
