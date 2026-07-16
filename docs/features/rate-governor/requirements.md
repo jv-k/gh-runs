@@ -14,7 +14,9 @@ It is an `http.RoundTripper`, nested under [local-store](../local-store/requirem
 
 **R1.** The governor must be the single authority for Budget accounting. Every request the tool issues must be accounted through it: discovery probes, scheduler polls, detail fetches, a Purge's crawl, and every write. No other component may parse rate-limit headers or maintain a parallel tally.
 
-**R2.** The governor must be the single authority for write throughput. Every write must be paced by it: Run deletion, log deletion ([log-viewer](../log-viewer/requirements.md) R17), cancel, force-cancel, re-run, Dispatch, Cache and Artifact deletion.
+**R2.** The governor must be the single authority for write throughput. Every write must be paced by it: Run deletion, log deletion ([log-viewer](../log-viewer/requirements.md) R17), cancel, force-cancel, re-run, Dispatch, Workflow enable and disable ([workflow-management](../workflow-management/requirements.md) R5), and Cache and Artifact deletion. That is ten writes, and the list is exhaustive rather than illustrative. A write this requirement does not name is a gap in the list, never a write outside it.
+
+**Workflow enable and disable are writes, and the list did not have them.** They are PUTs against `/actions/workflows/{id}/enable` and `/disable`, [ADR-0011](../../adr/0011-package-layout-and-dependency-direction.md) already gave them to `ops` alongside the other nine, and [purge](../purge/requirements.md) R29 already counted flipping a Workflow's State among the writes this requirement paces. Two documents worked from ten while the list said eight. The omission never cost a request, because [ADR-0012](../../adr/0012-transport-chain-and-the-client-surface.md) puts the governor under every request as a RoundTripper that discriminates on method, and a PUT is a write whether or not this list names it. What it cost was the list's claim to be exhaustive, which is the only thing R2 has.
 
 **R3.** The governor must be account-scoped and global, not per repository. The Budget is a property of the token, not of a repository, so a per-repository throttle would multiply its own rate by the number of repositories a Purge happens to span. One cross-repo Purge is one throttle. (This settles [purge](../purge/requirements.md) open question 7.)
 
@@ -31,6 +33,14 @@ It is an `http.RoundTripper`, nested under [local-store](../local-store/requirem
 **R7.** The governor must account a conditional request returning 304 as costing zero primary allowance and a 200 as costing one. Measured by interleaving unconditional and conditional requests against one endpoint: `used` advanced by exactly one per round (120 → 121 → 122), attributable entirely to the 200.
 
 **R8.** The governor must publish a **Budget Readout** ([CONTEXT.md](../../CONTEXT.md)) to any component that asks: remaining allowance, the reset time, whether consumption is under pressure, and whether it is exhausted. The Readout is an observation and the Budget is a policy input, and the two must not be conflated in code any more than in prose. [live-run-feed](../live-run-feed/requirements.md) R30 and [polling-scheduler](../polling-scheduler/requirements.md) R16 consume the Readout to say "resumes 14:32" rather than going quietly stale.
+
+**R8a.** Consumption is **under pressure when the current burn rate would exhaust the remaining allowance before it resets**, and by no other test. The predicate is `remaining / burn < time_to_reset`. `remaining` and the reset instant are R5's headers, which R9 already handles, and `time_to_reset` is that instant less the injected clock's now (R21). **Burn is the primary allowance consumed over the last five minutes, divided by the full five minutes and never by the elapsed part of them.** R7 supplies the arithmetic: a 200 costs one and a 304 costs zero. **Where burn is zero the governor must report no pressure and must evaluate no quotient.** Nothing is projected to run out at a rate of nothing, and no division is performed to discover it.
+
+**A compiled percentage is exactly what [ADR-0007](../../adr/0007-adaptive-delete-throttle.md) rejects for the throttle, and the argument does not weaken here.** Enterprise Cloud has 3× the primary allowance, GitHub Apps scale differently, and a token shared with CI has less headroom than its limit suggests (R15). So no percentage is right for every account. It is also wrong in both directions at once on a single account: 75% consumed with 50 minutes to reset is fine and a percentage shouts, while 60% consumed and burning fast is doomed and a percentage stays silent. Projection is what makes [live-run-feed](../live-run-feed/requirements.md) R29's silence mean something, because a readout that fires on routine work trains the operator to ignore it.
+
+**The five-minute window is a constant, and pretending otherwise would be the same mistake in a smaller place.** It is chosen so a burst amortises instead of firing. The reference cold start issues ~189 primary requests (~163 discovery probes plus ~26 Feed payloads) inside a few seconds. Over five minutes that reads as ~38/min, which against a 5,000/hour allowance projects exhaustion ~127 minutes out, and no reset is ever more than 60 minutes away, so the cold start stays silent. A one-minute window reads the same burst as ~189/min, projects exhaustion in ~25 minutes, and fires on the most routine workload the tool has. A Purge's ~287-request crawl amortises the same way, to ~57/min and ~82 minutes. **Dividing by the window's full width rather than by the elapsed part is the other half of the choice**: it under-reports for the first five minutes of every session, and under-reporting is the safe direction here, because the failure R29 names is a readout nobody believes.
+
+**Exhaustion satisfies this predicate rather than competing with it.** At `remaining: 0` the projection is immediate and pressure is true, and the Readout's exhaustion flag is a separate field that stays authoritative for R9, for [live-run-feed](../live-run-feed/requirements.md) R30 and for [polling-scheduler](../polling-scheduler/requirements.md) R16. A Readout that is exhausted and under pressure at once is consistent. The Feed's R29 renders its readout, and its R30 states the pause.
 
 **R9.** The governor must derive the resumption time from `x-ratelimit-reset` where the response supplies it, and from `Retry-After` where a rate-limit response supplies that. Where neither is available it must report exhaustion without a time rather than inventing one.
 
@@ -108,9 +118,11 @@ The published-limit band of ~100 minutes to ~5 hours is a different claim about 
 
 **AC10: Exhaustion without a time.** Given exhaustion with neither `x-ratelimit-reset` nor `Retry-After`, the governor publishes exhaustion with no time. It does not synthesise one.
 
-**AC11: Pressure gates the Readout.** With consumption nominal, the governor reports no pressure and no Budget Readout is rendered anywhere. Below the pressure threshold, it reports pressure.
+**AC11: Pressure is a projection, and routine work does not trip it.** Replayed against a cassette and the injected clock, with no test sleeping. Given the reference cold start (~163 discovery probes and ~26 Feed payloads inside ten seconds) against headers reporting 4,811 remaining and a reset 45 minutes out, the governor reports no pressure and no Budget Readout is rendered anywhere. Given a sustained burn the same predicate projects past the reset, it reports pressure, and the Readout renders. The two runs differ in the cassette's headers and in nothing else: no percentage of the limit appears in the test, and the governor is given no configuration to tell them apart (R8a).
 
 **AC11a: `/rate_limit` is never the source.** Across every replay in this suite, the governor issues zero requests to `/rate_limit`, and its published primary accounting is reproducible from the response headers alone. Given a cassette in which `/rate_limit` reports `used: 90` while the headers report `used: 62` climbing to 78, the Readout follows the headers (R5a).
+
+**AC11b: Zero burn is not pressure, and divides by nothing.** Given a five-minute window of the injected clock in which every response was a 304, the governor reports no pressure whatever `remaining` says, and performs no division. Given `remaining: 0`, it reports pressure and exhaustion together, and AC9's resumption time is unaffected (R8a, R7).
 
 **AC12: One global throttle.** A Purge spanning 3 repositories issues writes at the same aggregate rate as a Purge of the same size confined to 1. The rate does not scale with repository count.
 
@@ -143,7 +155,7 @@ That disagreement is the entire reason this component is adaptive rather than a 
 
 **A 304 costs zero primary allowance. A 200 costs one.** Measured by interleaving: `used` 120 → 121 → 122, the increment belonging entirely to the 200 ([ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)). We assume conservatively that 304s do count against the **secondary** limit (PRD risk R4).
 
-**Only DELETE's point cost is documented.** Cancel, force-cancel, re-run and Dispatch are not. None of the four can be measured either, for R16's reason.
+**Only DELETE's point cost is documented.** Cancel, force-cancel, re-run, Dispatch, and Workflow enable and disable are not. None of the six can be measured either, for R16's reason.
 
 **Enterprise Cloud has 3× the primary allowance**, GitHub Apps scale differently, and a token shared with CI has less headroom than its limit suggests. There is no fixed number that is right for every account.
 
@@ -175,7 +187,7 @@ That disagreement is the entire reason this component is adaptive rather than a 
 
     **One narrow thing stays genuinely unverified**, and it is not this question: what a live secondary-limit response actually carries. Open question 1 covers it, resolves the discrimination rule by body shape rather than by header, and declines to provoke one.
 
-3. **The point cost of cancel, force-cancel, re-run and Dispatch is UNKNOWN.** Only DELETE has a **documented** cost, at 5 points, and nothing here was ever measured: a point cost is establishable only by tripping the secondary limit, which PRD risk R4 forbids permanently. So this question cannot be closed by measurement, and R16 requires conservative pacing in its absence. What would close it is documentation: if GitHub publishes a cost for the other four, that is the answer. Until then "conservative" has no number. Raised by [run-lifecycle](../run-lifecycle/requirements.md) open question 3 and owned here.
+3. **The point cost of cancel, force-cancel, re-run, Dispatch, and Workflow enable and disable is UNKNOWN.** Only DELETE has a **documented** cost, at 5 points, and nothing here was ever measured: a point cost is establishable only by tripping the secondary limit, which PRD risk R4 forbids permanently. So this question cannot be closed by measurement, and R16 requires conservative pacing in its absence. What would close it is documentation: if GitHub publishes a cost for the other six, that is the answer. Until then "conservative" has no number. Raised by [run-lifecycle](../run-lifecycle/requirements.md) open question 3 and owned here. Enable and disable joined the list when R2 did, and they arrive with no more of a number than the other five.
 
 4. **Resolved: the ramp caps at 2.5/sec against a documented ~3/sec, and never drops below 0.5/sec.** R11 required headroom and did not size it. Open question 5's ramp sizes it: 2.5/sec is 150/min against the ~180/min the published points model allows, so ~17% is held back. The floor of 0.5/sec is the other end of the same decision, because a multiplicative decrease with nothing under it converges on a stall. Neither number is load-bearing on its own, and that is the point of choosing a control law over a constant: AIMD approaches the account's real tolerance from below, so 2.5/sec caps the search rather than naming a target to converge on. R10 and R11 carry the numbers. AC2 verifies them.
 
@@ -189,7 +201,13 @@ That disagreement is the entire reason this component is adaptive rather than a 
 
     **The endpoints were already canon** (start at 1/sec, ramp toward the ceiling, back off hard) and the shape between them was not. R10 and R11 now carry it, and AC2 pins the behaviour against a cassette and the injected clock rather than against prose.
 
-6. **The pressure threshold at which the Budget readout appears is UNKNOWN.** R8 and [live-run-feed](../live-run-feed/requirements.md) R29 require silence when consumption is nominal and a readout under pressure. No number separates the two.
+6. **Resolved: pressure is projected exhaustion, not a fixed percentage.** Consumption is under pressure when the current burn rate would exhaust the remaining allowance before it resets: `remaining / burn < time_to_reset`. R8a carries the predicate, AC11 and AC11b pin it, and [BUILD-ORDER](../../BUILD-ORDER.md) no longer names this as the stage-2 blocker.
+
+    **A compiled constant is what [ADR-0007](../../adr/0007-adaptive-delete-throttle.md) already rejected one floor down**, on grounds that transfer whole: Enterprise Cloud has 3× the primary allowance, GitHub Apps scale differently, and a token shared with CI has less headroom than its limit suggests. A percentage is also wrong in both directions on one account. 75% consumed with 50 minutes to reset is fine and a percentage shouts. 60% consumed and burning fast is doomed and a percentage stays silent.
+
+    **The window is the part that is still a constant, and R8a says so rather than hiding it.** Five minutes, divided by its full width and never by its elapsed part, so a cold-start burst of ~189 requests reads as ~38/min and stays silent where a one-minute window would fire on it. That choice biases toward under-reporting, which is the safe direction when [live-run-feed](../live-run-feed/requirements.md) R29's failure mode is a readout nobody believes.
+
+    **What this does not settle is [polling-scheduler](../polling-scheduler/requirements.md) open question 4.** Pressure now has an onset, so R15's first demotion has a moment. Whether its three tiers demote together or in stages, and what separates the stages, is that document's and stays open.
 
 7. **Resolved: one Budget share, over the primary limit, and a Purge is not subject to it.** R19 previously applied one share to reads and writes alike, which contradicted [ADR-0007](../../adr/0007-adaptive-delete-throttle.md) outright. The ADR wins, on measurement: the two limits are different currencies, so a share of the primary one has nothing to say about a Purge bound by the secondary one. R19 and AC14 are corrected. The secondary limit gets no share of its own, because it exposes no counter to take a share of, and its control is the ramp rather than a budget. The observation that a workload can be comfortable on one limit while pinned against the other still holds and is exactly why the two are governed differently.
 
@@ -203,6 +221,7 @@ That disagreement is the entire reason this component is adaptive rather than a 
 - [polling-scheduler](../polling-scheduler/requirements.md). Consumes R8's Budget Readout. R4 draws the line between them, and R11 prices its reads into the write ceiling.
 - [repo-discovery](../repo-discovery/requirements.md). Its probe burst is accounted here. Shares open question 1.
 - [run-lifecycle](../run-lifecycle/requirements.md). Paced by R2. Owns open question 3's origin.
+- [workflow-management](../workflow-management/requirements.md). Its R5's enable and disable are two of R2's ten writes, and their point cost is open question 3's.
 - [cli-surface](../cli-surface/requirements.md). Its R14 throttle is this component.
 - [live-run-feed](../live-run-feed/requirements.md). R8 and R9 supply its R29 and R30.
 - [settings](../settings/requirements.md). Owns R19's intent-level share, and owns what R17 and R18 refuse to expose.

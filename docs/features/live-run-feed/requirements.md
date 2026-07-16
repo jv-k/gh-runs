@@ -74,7 +74,7 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 
 **R28.** The Feed must consume ~0 primary rate limit while idle, by revalidating conditionally.
 
-**R29.** The Feed must not display a Budget readout while consumption is nominal. It must display one only under pressure.
+**R29.** The Feed must not display a Budget readout while consumption is nominal. It must display one only under pressure. **Pressure is the [rate-governor](../rate-governor/requirements.md)'s to decide and never this Feed's**, and its R8a defines it as projected exhaustion (`remaining / burn < time_to_reset`) rather than as a percentage of the limit. The Feed reads the flag off the Budget Readout. It must not re-derive the condition from `remaining`, which R1 there already forbids by making the governor the single authority, and which would put a second pressure rule in the one place a user would see both.
 
 **R30.** On Budget exhaustion the Feed must pause live updates, state that it has paused, and state when updates resume ("resumes 14:32"). Where no resumption time is available it must still state that updates are paused. It must never continue presenting rows as live once revalidation has stopped.
 

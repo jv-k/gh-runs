@@ -18,7 +18,7 @@ Those two are the floor. Everything below stands on them.
 |---|---|---|
 | **0** | `go.mod`, `main.go`, `domain`, `clock`, `config`, `ghclient` | The skeleton of [ADR-0011](./adr/0011-package-layout-and-dependency-direction.md). **Every line of `go.mod` is [ADR-0013](./adr/0013-dependency-pins.md)**, including the Go floor that CI and the released binaries both read from it. `config` lands here rather than with the settings view, because the governor needs a Budget share before any view exists. `clock` is here because five later packages inject it and it imports nothing. |
 | **1** | **local-store** | The root. R19's RoundTripper, R19a's injected base, R19b's 304-to-200 reconstitution, ETags, payloads. [ADR-0012](./adr/0012-transport-chain-and-the-client-surface.md). |
-| **2** | **rate-governor** | The co-root, and a RoundTripper nested inside stage 1's ([ADR-0012](./adr/0012-transport-chain-and-the-client-surface.md)). Pacing, and the published **Budget Readout**. Its pressure threshold is still open, see below. |
+| **2** | **rate-governor** | The co-root, and a RoundTripper nested inside stage 1's ([ADR-0012](./adr/0012-transport-chain-and-the-client-surface.md)). Pacing, and the published **Budget Readout**, whose pressure flag is R8a's projection and needs no stub. |
 | **3** | **repo-discovery** | Needs local-store's persistence and the governor's accounting. |
 | **4** | **polling-scheduler** | Needs discovery's poll set, local-store's ETags, the governor's Budget Readout. |
 | **5** | **filter** | The engine both later consumers adapt. Over `domain` alone, so it could sit at stage 0. It sits here because nothing needs it sooner and stage 6 is where it gets used. |
@@ -50,7 +50,11 @@ The write flags wait for stage 9. R10's `--dry-run` resolves the affected set "b
 
 **Worse, it quoted a sentence that no longer exists.** "The most consequential gap here… Must be resolved by measurement before any Purge ships" was deleted from rate-governor when its open question 1 resolved, and this file was written afterwards, quoting it. A build order that quotes the canon rather than citing it will say that again. Cite requirement numbers, and let a reader who follows one find out whether it moved.
 
-**One real blocker sits at stage 2, and it was never listed.** [rate-governor](./features/rate-governor/requirements.md) **open question 6 is genuinely open**: the pressure threshold at which the Budget Readout appears. R8 requires the Readout to carry a pressure flag, [live-run-feed](./features/live-run-feed/requirements.md) R29 requires silence when consumption is nominal and a readout under pressure, and AC11 pins the behaviour. No number separates the two. Stage 2 can publish the Readout with the flag stubbed, and everything downstream reads a boolean either way, so this does not hold up the floor. It holds up AC11 and the Feed's R29 golden, which is stage 6.
+**The one real blocker sat at stage 2, and it is resolved.** [rate-governor](./features/rate-governor/requirements.md) open question 6 asked what pressure threshold makes the Budget Readout appear. There is no threshold. **R8a** answers it with a projection: consumption is under pressure when the current burn rate would exhaust the remaining allowance before it resets, `remaining / burn < time_to_reset`, over a five-minute window. Stage 2 builds the flag rather than stubbing it, because the predicate needs only R5's headers and the injected clock, both of which stage 2 already holds. AC11 and AC11b are checkable there, against a cassette.
+
+**That paragraph also put the Feed's R29 golden at stage 6, and stage 6 is the CLI.** The Feed is stage 7 and has no golden before it exists. Nothing downstream of stage 2 now waits on a number.
+
+**What stays open touches stage 4 and does not block it.** [polling-scheduler](./features/polling-scheduler/requirements.md) open question 4 asks when each tier demotes. R8a fixes the onset, so R15's first demotion has a moment, and the staging between its three tiers does not. The scheduler builds and its cassettes run either way.
 
 None of this blocks stage 0.
 

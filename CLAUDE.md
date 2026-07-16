@@ -31,7 +31,7 @@ Directory names follow the glossary. If a name feels wrong, read CONTEXT.md befo
 - **The Budget is a share of the primary limit and never throttles a Purge.** The two limits are different currencies. [ADR-0007](docs/adr/0007-adaptive-delete-throttle.md).
 - **Statelessness means nothing written is read back. It never meant nothing is written.** A job record, a resolved ID list and a progress file stay forbidden ([purge](docs/features/purge/requirements.md) R23). The append-only deletion log is required, because a Purge is irreversible and nothing else records what it destroyed ([purge](docs/features/purge/requirements.md) R29, `$XDG_STATE_HOME/gh-runs/deletions.log`). Nothing may read it, and if it cannot be written, the deletion does not happen. [ADR-0006](docs/adr/0006-stateless-bulk-jobs.md) carries the amendment and its decision is unchanged.
 - **There is no server-side `conclusion` parameter.** Measured: `?conclusion=failure` returns every Run, because the API ignores it. Never send it.
-- **Filtered Run listing silently caps at 1,000** while `total_count` still claims 18,260. Never trust `total_count` in a filtered view.
+- **Filtered Run listing silently caps at 1,000** while `total_count` keeps reporting the full match count. Never trust `total_count` in a filtered view. This file names no figure for it deliberately: the counts are point-in-time reference measurements that drift, they live in the [PRD](docs/PRD.md)'s constraints table, and a copy here is one more place for them to disagree. This one already had.
 - **`GH_TOKEN` is required for users without gh.** go-gh reaches the keyring only by shelling out to the gh binary. [ADR-0002](docs/adr/0002-go-gh-with-dual-distribution.md).
 
 ## Stack

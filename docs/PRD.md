@@ -108,7 +108,7 @@ Every one of these changed a design decision, and they are not all the same kind
 1. **Cold start paints in under a second** when launched inside a repository, with the rest of the Feed filling in behind it.
 2. **A Run invoked elsewhere appears without interaction**, within ~30s idle and ~3s when something is already in progress.
 3. **Idle polling consumes ~0 primary rate limit**, because revalidation returns 304.
-4. **You cannot delete the wrong Run.** Selection is ID-keyed, the confirm set is frozen, and rows never move while the cursor is in the list.
+4. **You cannot delete the wrong Run.** Selection is ID-keyed, the confirm set is frozen, rows never move while the cursor is in the list, and the frozen set can be read row by row before it is confirmed. The first three defend against the list moving under the cursor. The fourth defends against a filter matching more than you meant, which is the one that bites at reference scale, because a Purge's set is resolved by a predicate over Runs nobody looked at. → [purge](./features/purge/requirements.md) R30
 5. **A Purge of ~18,000 Runs completes** without being rate limited, without manual babysitting, and resumes correctly by re-running the same filter. At the governor's reachable rates that is ~2 hours to ~10 hours, and ~155 minutes with the Feed running.
 6. **The tool never lies about counts.** A capped view says it is capped.
 

@@ -46,6 +46,8 @@
 
 **R10.** Every non-interactive destructive command MUST support `--dry-run`, which resolves the affected set of Runs by the same code path as the real operation, reports exactly what would be deleted, deletes nothing, and exits 0. Deleting nothing, it MUST write no line to [purge](../purge/requirements.md) R29's deletion log, and it MUST NOT require that log to be writable. A line records an attempt, `--dry-run` makes none, and a command that issues no DELETE has nothing R29 protects.
 
+**"Exactly what would be deleted" means the Runs, not their count.** `--dry-run` MUST emit one row per Run in the resolved set, each naming its repository and its Run ID at minimum. A count on its own is a number the operator has no way to check, and this is the surface where checking is cheapest: the output is a file, a `grep` and a `wc -l`. [purge](../purge/requirements.md) R30 closes the same gap on the TUI, where the operator pages a viewport instead. One resolved set, two presentations, and R20 is what keeps them one set rather than two implementations that agree by luck.
+
 **R11.** Every non-interactive destructive command MUST require `--yes`, and MUST refuse to delete without it. `--yes` is gh's established spelling on `gh repo delete`. Passing it **is** the confirmation on this surface: an explicit act, made once per invocation, by the person typing the command. That is what a persistent setting can never be, which is why the flag is confirmation and a config key that waived it would be a skip. The flag is always required. No configuration setting, environment variable or mode may waive it ([settings](../settings/requirements.md) R13), and none may supply it on the operator's behalf.
 
 **R12.** A Purge MUST skip Runs whose Status is not `completed`, report them as **skipped** rather than failed, and count them separately in the summary. DELETE rejects in-progress Runs. Skipping them is one of the four things this CLI adds over the shell pipeline.
@@ -88,7 +90,7 @@
 
 **AC8: `--yes` is never waivable.** A Purge invoked without `--yes` deletes nothing and exits non-zero, whatever the config file contains. No config key makes `--yes` optional, and none supplies it.
 
-**AC9: `--dry-run` resolves the same set.** `--dry-run` over a filter matching N Runs reports N, issues no DELETE, and exits 0. It writes no line to the deletion log, and it still exits 0 with the state directory unwritable (R10). Removing `--dry-run` and adding `--yes` deletes exactly the same N and writes exactly N lines.
+**AC9: `--dry-run` resolves the same set.** `--dry-run` over a filter matching N Runs emits those N Runs, one row each, each row naming its repository and Run ID, issues no DELETE, and exits 0. It writes no line to the deletion log, and it still exits 0 with the state directory unwritable (R10). Removing `--dry-run` and adding `--yes` deletes exactly the same N and writes exactly N lines.
 
 **AC10: An in-progress Run is skipped, not failed.** A Purge over a set containing an `in_progress` Run reports it as skipped, not failed, and the command still exits 0 if all completed Runs were deleted.
 

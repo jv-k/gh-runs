@@ -74,6 +74,22 @@ Keying on the URL alone is the failure this guards against in the other directio
 
 go-gh's own `cacheKey` is the reference, and it does exactly this: SHA256 over `Method`, `URL`, `Accept`, `Authorization` and the body, rendered as hex. Note that it folds in **`Method` and the body**, which an earlier wording of this requirement omitted while claiming to mirror it. Both belong. A GET and a DELETE of one URL are different requests, and a POST body is part of what identifies one.
 
+### Concurrency
+
+**R21.** The local store must permit **exactly one writer at a time**, held by an **advisory file lock** at `store.lock` in the store's own directory, taken **non-blocking** at startup. A process that acquires it reads and writes for the rest of its lifetime. A process that does not **still reads the store and must never write to it**. A failed acquisition must degrade on the spot: it must not wait, must not poll the lock, and must not delay a launch.
+
+**The lock is per store directory, and it guards this store alone.** Open question 6 asks whether this store moves to a cache directory of its own, and the lock moves with it if it does. [purge](../purge/requirements.md) R29's deletion log shares the state directory today and is no part of this: it is append-only, nothing reads it back, and two Purges appending to it need no arbitration from here. A lock on this store must never gate a DELETE.
+
+**R22.** The lock must never wedge the store. Acquisition is the OS advisory lock (`flock(2)`), which the kernel releases when the holding process exits **by any means, SIGKILL included**, so a dead holder leaves no lock held and there is no stale-lock case to detect. The lock file's contents must be **empty and must stay empty**. An acquisition that fails for any reason other than contention, such as a filesystem that does not honour the lock, must degrade to reading exactly as contention does. R11 is unaffected: the lock file is derived, and deleting it costs nothing.
+
+**The lock is mutual exclusion and not state, and [ADR-0006](../../adr/0006-stateless-bulk-jobs.md)'s own test is what says so.** No schema, because nothing parses it. No reconciliation, because nothing resumes from it. No second source of truth to disagree with the API, because it claims nothing about the world beyond "a process holds this". That ADR's amendment draws its boundary at reading rather than at the filesystem, and an empty file nobody opens for reading sits well inside it. R4 is untouched: a lock is not a crawl, an ID list, or progress.
+
+**A PID in that file would be the design going wrong.** A lock file carrying a PID is a file something must read back and interpret, which needs staleness rules, which needs reconciling against a process that died holding it. `flock(2)` needs none of that, because the kernel drops the lock for us. Choose it because staleness is the kernel's problem, and keep the file empty so it stays the kernel's problem. `flock(2)` is reachable from the standard library on unix, so [ADR-0013](../../adr/0013-dependency-pins.md)'s pin set is unchanged. Windows has no `flock` and wants `LockFileEx`, and whether 2.0.0 ships a Windows limb at all is a question [settings](../settings/requirements.md) already carries open.
+
+**R23.** A degraded reader must apply R10's invalidation to its own in-memory view, and must not reach the persisted entry. An entry it could not invalidate can never be served stale regardless, because R8 forbids serving any entry without revalidating it, and a resource that changed answers 200. The cost of degrading is that one 200, which is exactly what R10 exists to save.
+
+**The honest price, stated once.** While a Purge holds the lock, a Feed in another terminal reads every persisted ETag, collects its free 304s, and persists none of its own. Its newly-observed ETags die with the process, so the next cold start is slightly colder. R11 is what keeps that the whole cost: the store is derived, so a session that never writes loses speed and nothing else.
+
 ## Acceptance criteria
 
 **AC1: Paint before the network.** Given a populated local store and a cassette whose responses are held, the Feed renders rows before any response is delivered.
@@ -112,6 +128,8 @@ go-gh's own `cacheKey` is the reference, and it does exactly this: SHA256 over `
 
 **AC17: Deterministic.** Every test in this feature advances the injected clock rather than sleeping, and completes without a network.
 
+**AC18: Two processes, one store directory.** Given two processes over one store directory against cassettes and the injected clock, one crawling and deleting while the other polls ~26 repositories, the store carries no corrupt entry and no partially-written one, and every read either process issues is served. The second process to start acquires no lock and writes nothing, while the first writes throughout. Its own reads still come from the store and still carry `If-None-Match`, so its 304s stay free (R21, R23). SIGKILLing the lock holder releases the lock, and a third process started afterwards acquires it and writes (R22). The lock file is empty at every point in this criterion, and deleting it mid-run costs nothing (R11).
+
 ## Constraints
 
 **Conditional requests are free against the primary limit, and persistence is what lets a cold start collect that.** Measured by interleaving unconditional and conditional requests against one endpoint: `used` advanced by exactly one per round (120 → 121 → 122), attributable entirely to the 200 ([ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)). ETags must persist across sessions or every cold start pays full 200s: ~26 repositories of full payload for the Feed, plus ~163 probes if discovery is not cached either.
@@ -132,7 +150,13 @@ go-gh's own `cacheKey` is the reference, and it does exactly this: SHA256 over `
 
 1. **Resolved: go-gh's client is TTL-only and never revalidates.** The check was the one this question named: issue a request, issue it again, and look at whether the second carried `If-None-Match`. It did not. Verified three ways. `pkg/api/cache.go` returns on a cache hit without ever calling the inner RoundTripper, and freshness is file mtime against a TTL, which is the entire policy. A grep across the whole v2 module for `etag`, `if-none-match`, `if-modified-since`, `StatusNotModified` and `revalidat` returns zero matches, tests included, and go.sum carries no caching library. Empirically, real go-gh v2.9.0 with `EnableCache: true, CacheTTL: 30s` against a counting server serving an ETag: two identical GETs produced 1 network hit and 0 requests carrying `If-None-Match`, where a revalidating cache would show 2. R8 stands and is unaffected. What changed is that it is met by R19's transport of our own rather than by the client, which is verified end to end: `If-None-Match` reached the wire, the server returned 304, the body was reconstituted from the local store, and the caller saw a normal 200. The remedy is contained but not small, and it is now a build requirement rather than an open question ([ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)).
 
-2. **Concurrent access is undecided.** Nothing prevents two gh-runs processes from running at once, and [ADR-0006](../../adr/0006-stateless-bulk-jobs.md)'s stateless Purge actively invites it. Running a ~155-minute Purge in one terminal while browsing the Feed in another is a normal thing to do, not an abuse. Both processes revalidate, and both write. Whether the local store is single-writer, locked, partitioned by process, or simply last-write-wins has not been decided. R13 bounds the damage (a corrupt cache is discarded and rebuilt), but bounding the damage is not the same as not causing it, and "your Feed got slower because your Purge trampled its ETags" is a real outcome.
+2. **Resolved: one writer at a time, held by an advisory lock, and a process that cannot take it still reads.** R21, R22 and R23 carry it and AC18 pins it. The case this question named has an answer: whichever process starts first writes, and the other reads every persisted ETag, collects its free 304s, and persists none of its own. No interleaved writes, no thrash, no corruption.
+
+    **Last-write-wins was the thing to avoid rather than the thing to bound.** R13 does discard a corrupt entry and rebuild it, and the rebuild costs exactly the requests this store exists to avoid. Bounding damage is not avoiding it, and "your Feed got slower because your Purge trampled its ETags" was the outcome, not the mitigation.
+
+    **Partitioning by process was rejected.** It removes contention by removing sharing, so every process cold-starts and N processes hold N copies of ~26 repositories of ETags.
+
+    **The cost is R23's and it is small.** A Feed that loses the lock persists no new ETags, so the next cold start is slightly colder. R11 is why that is the whole of it.
 
 3. **Whether the last-known Budget Readout should be persisted is undecided.** Without it, a cold start immediately after exhaustion fans out into a limit it already knew about and learns nothing it had not already been told. With it, the tool refuses to make requests on the strength of a possibly-stale number it can only confirm by making the request the number exists to prevent. The trade is real in both directions and the canon does not settle it.
 
@@ -147,7 +171,7 @@ go-gh's own `cacheKey` is the reference, and it does exactly this: SHA256 over `
 ## Related
 
 - [ADR-0004: Liveness via conditional ETag polling](../../adr/0004-conditional-polling-for-liveness.md) (R1, R6, R8, and the ETags-must-persist consequence this feature implements)
-- [ADR-0006: Purges are stateless, the filter is the job state](../../adr/0006-stateless-bulk-jobs.md) (R4)
+- [ADR-0006: Purges are stateless, the filter is the job state](../../adr/0006-stateless-bulk-jobs.md) (R4, and R21's lock, which is mutual exclusion rather than state, and which the ADR's read-boundary admits)
 - [ADR-0009: Repo identity is host-qualified](../../adr/0009-host-qualified-repo-identity.md) (R14)
 - [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) (R16's window, open question 5)
 - [ADR-0002: Build on go-gh, ship as both a gh extension and a standalone binary](../../adr/0002-go-gh-with-dual-distribution.md) (the client open question 1 interrogated, and which R19 now wraps)
