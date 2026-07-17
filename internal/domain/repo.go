@@ -1,22 +1,47 @@
-// Package domain holds the core types the tool reasons about. It performs no
-// I/O and imports nothing internal, which is the one rule ADR-0011 fixes at the
-// root of the tree.
 package domain
 
-import "fmt"
-
-// RepoID identifies a repository, host-qualified as host/owner/name per
-// ADR-0009. Host is a struct field from day one though 2.0.0 serves github.com
-// alone, so adding GHES later is an additive change rather than a rekeying of
-// every persisted entry.
+// RepoID identifies a repository as host/owner/name (ADR-0009).
 type RepoID struct {
 	Host  string
 	Owner string
 	Name  string
 }
 
-// String renders the identity as host/owner/name, the form every persisted key
-// and the API base URL use.
-func (r RepoID) String() string {
-	return fmt.Sprintf("%s/%s/%s", r.Host, r.Owner, r.Name)
+func (r RepoID) String() string { return r.Host + "/" + r.Owner + "/" + r.Name }
+
+// Repo is one discovered repository: identity, permissions, and the two
+// flags that gate destructive actions (repo-discovery R7).
+type Repo struct {
+	ID          RepoID      `json:"-"`
+	Permissions Permissions `json:"permissions"`
+	Archived    bool        `json:"archived"`
+	Disabled    bool        `json:"disabled"`
+}
+
+// Permissions is the API's five-boolean permissions object, verbatim.
+type Permissions struct {
+	Admin    bool `json:"admin"`
+	Maintain bool `json:"maintain"`
+	Push     bool `json:"push"`
+	Triage   bool `json:"triage"`
+	Pull     bool `json:"pull"`
+}
+
+// Capability is the recorded tri-state over a Repo's permissions
+// (CONTEXT.md): what the token may do there, or that we do not yet know.
+type Capability int
+
+const (
+	CapabilityUnknown Capability = iota
+	CapabilityPermitted
+	CapabilityRefused
+)
+
+// Capability derives the recorded value from an enumerated Repo
+// (live-run-feed R17: push, and not archived).
+func (r Repo) Capability() Capability {
+	if r.Permissions.Push && !r.Archived {
+		return CapabilityPermitted
+	}
+	return CapabilityRefused
 }

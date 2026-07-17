@@ -31,7 +31,7 @@ func main() {
 }
 
 func run() error {
-	clk := clock.System()
+	clk := clock.Real()
 
 	// The transport chain, nested per ADR-0012 and BUILD-ORDER's floor:
 	//

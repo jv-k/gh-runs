@@ -9,11 +9,11 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 )
 
-// TestFakeClockSatisfiesInterface pins the seam ADR-0011 designed the package
-// around: clockwork's fake is assignable to clock.Clock, so every timing test in
-// the tree advances virtual time rather than sleeping (local-store R17,
-// rate-governor R21).
-func TestFakeClockSatisfiesInterface(t *testing.T) {
+// TestFakeClockSatisfiesAlias pins the seam ADR-0011 and ADR-0014 designed the
+// package around: clock.Clock is an alias for clockwork.Clock, so clockwork's
+// fake is assignable to it directly and every timing test in the tree advances
+// virtual time rather than sleeping (local-store R17, rate-governor R21).
+func TestFakeClockSatisfiesAlias(t *testing.T) {
 	start := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	var c clock.Clock = clockwork.NewFakeClockAt(start)
 	if !c.Now().Equal(start) {
@@ -21,10 +21,10 @@ func TestFakeClockSatisfiesInterface(t *testing.T) {
 	}
 }
 
-// TestSystemClockReads is a smoke test that the production clock returns a real
+// TestRealClockReads is a smoke test that the production clock returns a real
 // time rather than the zero value.
-func TestSystemClockReads(t *testing.T) {
-	if clock.System().Now().IsZero() {
-		t.Fatal("system clock returned the zero time")
+func TestRealClockReads(t *testing.T) {
+	if clock.Real().Now().IsZero() {
+		t.Fatal("real clock returned the zero time")
 	}
 }

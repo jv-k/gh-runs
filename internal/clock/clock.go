@@ -4,21 +4,17 @@
 // (rate-governor R21), scheduler, discovery and ops all inject it, so that tests
 // of expiry, revalidation, the AIMD ramp and backoff advance time explicitly
 // rather than sleeping.
+//
+// It is an alias, not an abstraction (ADR-0014). Declaring an interface of our
+// own on top of clockwork would cost an adapter in every test that reaches for
+// clockwork.NewFakeClock. The alias gives the importers one name and the tests
+// the fake, unadapted.
 package clock
 
-import "time"
+import "github.com/jonboulle/clockwork"
 
-// Clock is the minimal reading surface the tool depends on. It is deliberately
-// just Now: clockwork's fake satisfies it directly, which is the seam every
-// timing-dependent test uses to make virtual time instant and deterministic.
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the injected clock five packages take (ADR-0011).
+type Clock = clockwork.Clock
 
-// System returns a Clock backed by the real wall clock. It is what main.go wires
-// in production.
-func System() Clock { return systemClock{} }
-
-type systemClock struct{}
-
-func (systemClock) Now() time.Time { return time.Now() }
+// Real returns the wall clock main.go injects in production.
+func Real() Clock { return clockwork.NewRealClock() }

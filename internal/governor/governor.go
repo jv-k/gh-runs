@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 )
@@ -25,6 +26,16 @@ const (
 	rampStep           = 0.25
 	cleanBeforeRamp    = 20 // R10: additive increase after 20 consecutive clean responses.
 )
+
+// Readout is the Budget Readout (CONTEXT.md): what the governor observed
+// about the primary limit at a moment. An observation, never a policy,
+// and never the Budget, which is the input it is most easily confused with.
+type Readout struct {
+	Remaining int       // primary allowance left, from the last response's headers (R5)
+	Reset     time.Time // the reset or resume instant. Zero when none is derivable (R9)
+	Pressure  bool      // R8a's projection. Never true while burn is zero
+	Exhausted bool      // authoritative for R9, live-run-feed R30, polling-scheduler R16
+}
 
 // Governor observes the primary Budget and paces writes. This build implements
 // the observation and accounting the floor test exercises; the ramp state is
@@ -141,6 +152,27 @@ func (g *Governor) Remaining() int64 {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.lastRemaining
+}
+
+// Readout publishes the Budget Readout (ADR-0014), computed under the governor's
+// lock and safe for any goroutine to call: rate-governor R8's "publish to any
+// component that asks" is a getter, asked. Remaining and Reset are wired from the
+// x-ratelimit-* headers observe already reads (R5). A zero Reset is R9 kept, not
+// a bug: with no reset instant observed, lastReset stays 0 and Reset stays the
+// zero time rather than an invented one. Pressure and Exhausted await burn
+// tracking (stage 2) and stay false while burn is zero.
+func (g *Governor) Readout() Readout {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	var reset time.Time
+	if g.lastReset != 0 {
+		reset = time.Unix(g.lastReset, 0)
+	}
+	return Readout{
+		Remaining: int(g.lastRemaining),
+		Reset:     reset,
+	}
 }
 
 // WriteRate reports the current AIMD write rate in writes per second (R10).
