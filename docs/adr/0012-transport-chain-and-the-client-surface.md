@@ -62,10 +62,14 @@ ADR-0005's crawl is unaffected either way, because a crawl walks fresh pages tha
 **Both are RoundTrippers, and main.go nests them.**
 
 ```go
-base := http.DefaultTransport
-transport := store.NewTransport(governor.New(base))
+base := http.DefaultTransport                     // a cassette, in a test
+clk := clock.Real()                               // injected clock (local-store R3, R17)
+dir := stateDir                                   // ETag directory main.go supplies (local-store R1)
+transport := store.NewTransport(governor.New(base, clk), dir, clk)
 opts := api.ClientOptions{Transport: transport, CacheTTL: 0}
 ```
+
+`clk` and `dir` are not decoration. Both constructors take the injected clock, the store takes the state directory, and a wiring that drops them fails to compile against the real signatures (`governor.New(base, clk)` and `store.NewTransport(base, dir, clk)`, both proven in the stage 0 floor). They appear here because an earlier draft of this snippet omitted them, and a reader who copied that draft would have missed two injections the rest of the canon requires.
 
 The governor sits **under** the store, so it observes real network exchanges and only those. A store hit that never reaches the network costs no rate limit, and the governor never sees it. A 304 reaches the governor **as a 304**, before the store rewrites it, so rate-governor R7's "a 304 costs zero, a 200 costs one" is read straight off the wire rather than inferred.
 
