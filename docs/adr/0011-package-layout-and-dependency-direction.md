@@ -58,7 +58,7 @@ Expanded, the edges that matter:
 | `store` | `domain`, `clock` | `ghclient`, `governor`, `scheduler` |
 | `governor` | `domain`, `clock`, `config` | `store`, `scheduler`, `ops` |
 | `discovery` | `domain`, `clock`, `ghclient`, `store`, `governor` | `scheduler`, `tui` |
-| `scheduler` | `domain`, `clock`, `config`, `store`, `governor`, `discovery` | `ops`, `tui` |
+| `scheduler` | `domain`, `clock`, `config`, `filter`, `store`, `governor`, `discovery` | `ops`, `tui` |
 | `ops` | `domain`, `clock`, `config`, `filter`, `ghclient`, `governor` | `scheduler`, `tui` |
 | `cli` | anything except `tui` | `tui` |
 | `tui` (root) | anything below, every tab, `settings` | nothing |
@@ -69,7 +69,7 @@ Expanded, the edges that matter:
 
 **`keys` is a package for the same reason `clock` is one, and it is a package rather than a tab's private code for the same reason `filter` is.** [live-run-feed](../features/live-run-feed/requirements.md) R7a declares both profiles as one registry, and its AC18 asserts a property over the whole of it ("no binding in either uses Cmd"). That assertion is over a data table and needs no terminal, so filing it under `tui` would put a pure enumeration in the one subtree whose tests exist to paint frames. It imports nothing of ours and everything above it may read it, which is `clock`'s shape exactly. `key.Binding` comes from `charm.land/bubbles/v2/key`, so the package depends on bubbles and on nothing else.
 
-**`filter` is a package, not a tab's private code.** [cli-surface](../features/cli-surface/requirements.md) says the Feed's "filter engine has to exist regardless. Flags are a thin adapter over it", and names [live-run-feed](../features/live-run-feed/requirements.md) as its owner. That cannot mean `tui/feed` owns it, because `cli` would have to import a tab and nothing imports `tui`. So the engine is `internal/filter`, over `domain` alone, and `cli`, `ops` and `tui/feed` are three consumers of one implementation. It precedes all three.
+**`filter` is a package, not a tab's private code.** [cli-surface](../features/cli-surface/requirements.md) says the Feed's "filter engine has to exist regardless. Flags are a thin adapter over it", and names [live-run-feed](../features/live-run-feed/requirements.md) as its owner. That cannot mean `tui/feed` owns it, because `cli` would have to import a tab and nothing imports `tui`. So the engine is `internal/filter`, over `domain` alone, and `cli`, `ops` and `tui/feed` are three consumers of one implementation. It precedes all three. [ADR-0016](./0016-the-filter-representation.md) later added a fourth: the Feed's filters are applied server-side and the scheduler owns the polls, so the scheduler's control surface takes the active Filter, and its row above carries `filter`.
 
 **`cli` never imports `tui`.** cli-surface R1 gives bare `gh runs` to the TUI, which reads like a dependency and is not one. `main.go` picks the surface: no subcommand opens `tui`, anything else runs `cli`. The composition root already knows both, and that is where the choice belongs.
 

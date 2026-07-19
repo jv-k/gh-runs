@@ -20,7 +20,7 @@ The engine learns four kinds of things, and the channel's catalog mirrors them e
 |---|---|---|---|
 | `ReposDiscovered` | `[]domain.Repo` | discovery yields a batch, incrementally | every tab. The Feed's capability gate reads the permissions ([live-run-feed](../features/live-run-feed/requirements.md) R17) |
 | `WorkflowsFetched` | `RepoID`, `[]domain.Workflow` | a repository's Workflow list lands | `workflows` renders it. The engine has already used it for the name join |
-| `RunsFetched` | `RepoID`, `[]domain.Run` | a repository's Run page lands with a 200 | every tab. The Feed's reveal, verbatim |
+| `RunsFetched` | `RepoID`, `[]domain.Run`, and a filtered listing's `total_count` (see below) | a repository's Run page lands with a 200 | every tab. The Feed's reveal, verbatim |
 | `RepoPollFailed` | `RepoID`, error | a repository's poll fails | the Feed, so a failed repository is distinguishable from one that has not answered yet |
 
 **The unit is one repository's response, never a Run and never a cycle.** [live-run-feed](../features/live-run-feed/requirements.md) R33's progressive reveal is per repository, so a per-repository snapshot is the reveal with no translation. Per-Run deltas would make the engine diff old against new, holding state it otherwise never needs, and a whole-cycle barrier would let the slowest repository gate every repaint, which R33 exists to forbid.
@@ -28,6 +28,8 @@ The engine learns four kinds of things, and the channel's catalog mirrors them e
 **A 304 emits nothing.** [polling-scheduler](../features/polling-scheduler/requirements.md) R19 forbids re-render work on a 304, and the cheapest work is none: nothing crosses the channel, so the TUI never learns the poll happened. The Feed's ~30s liveness (R27) is carried by the engine's cadence, not by heartbeat events.
 
 **Runs arrive stamped.** [ADR-0014](./0014-domain-types-and-the-budget-readout.md) has the fan-out stamp `Repo` and `WorkflowName` where it holds both sides of the join, so every `Run` in a `RunsFetched` event is already whole. No consumer joins anything.
+
+**A filtered listing's event carries the claimed total.** [live-run-feed](../features/live-run-feed/requirements.md) R24 labels a capped view with the reachable count first and the claimed count second ("1,000 of ~18,258"), and the claimed count exists only in the `total_count` of the response the engine consumed. When the active Filter makes a poll a filtered listing ([ADR-0016](./0016-the-filter-representation.md)), `RunsFetched` carries that reported total alongside the page and the Feed derives the label. An unfiltered poll carries none, and no consumer misses it. This is the catalog's one amendment, made when ADR-0016 fixed the filter representation, which is a decision opening the catalog exactly as the Consequences section requires.
 
 ## Live state: each tab accumulates its own projection
 
