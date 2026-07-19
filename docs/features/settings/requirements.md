@@ -10,7 +10,7 @@ Settings **expose intent, never mechanism**. A setting earns its place only if a
 
 **R1.** Settings MUST live in a single config file at `$XDG_CONFIG_HOME/gh-runs/config.yml`, defaulting to `~/.config/gh-runs/config.yml`. On Windows, where `$XDG_CONFIG_HOME` is unset, the fallback MUST be `$AppData/gh-runs/config.yml`, mirroring gh's own verified precedence (Constraints).
 
-**R2.** State and caches (persisted ETags, discovered repositories, window state) MUST live under the XDG state directory and MUST NOT be written into the config file. A person MUST be able to copy their config file to another machine, or commit it to a dotfiles repository, without carrying machine-local state with it.
+**R2.** Machine-local data MUST NOT be written into the config file. The local-store (persisted ETags, discovered repositories, window state) lives under the XDG cache directory, and the deletion log under the XDG state directory, per [ADR-0017](../../adr/0017-the-local-store-on-disk-contract.md). A person MUST be able to copy their config file to another machine, or commit it to a dotfiles repository, without carrying machine-local state with it.
 
 **R3.** Every key MUST be optional. A missing config file, and an empty one, MUST both be valid and MUST produce identical behaviour to a file containing every default.
 

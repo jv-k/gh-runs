@@ -86,7 +86,7 @@ Recovering repository storage by deleting Caches and Artifacts.
 _Avoid_: Cleanup, garbage collection
 
 **Local store**:
-This tool's own on-disk record of what it has already seen: ETags, last-seen response bodies, discovery results, kept under the XDG state directory. Derived, never authoritative, and always safe to delete.
+This tool's own on-disk record of what it has already seen: ETags, last-seen response bodies, discovery results, kept under the XDG cache directory ([ADR-0017](adr/0017-the-local-store-on-disk-contract.md)). Derived, never authoritative, and always safe to delete.
 _Avoid_: Cache (a Cache is a GitHub Actions Cache, the thing Reclamation deletes. The store is never called one, and that is the entire reason Cache is defined so narrowly.), database, state file.
 
 **Budget**:
