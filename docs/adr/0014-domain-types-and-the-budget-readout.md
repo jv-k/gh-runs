@@ -288,13 +288,15 @@ type Cache struct {
 package governor
 
 // Readout is the Budget Readout (CONTEXT.md): what the governor observed
-// about the primary limit at a moment. An observation, never a policy,
-// and never the Budget, which is the input it is most easily confused with.
+// about the account's rate limiting at a moment. An observation, never a
+// policy, and never the Budget, which is the input it is most easily
+// confused with.
 type Readout struct {
 	Remaining int       // primary allowance left, from the last response's headers (R5)
 	Reset     time.Time // the reset or resume instant. Zero when none is derivable (R9)
 	Pressure  bool      // R8a's projection. Never true while burn is zero
-	Exhausted bool      // authoritative for R9, live-run-feed R30, polling-scheduler R16
+	Exhausted bool      // authoritative for R9, live-run-feed R30, polling-scheduler R16.
+	                    // Also true through a secondary-limit backoff (ADR-0018)
 }
 ```
 
@@ -303,6 +305,8 @@ type Readout struct {
 **Delivery is a pull, and the value is a copy.** `governor` exposes `Readout() Readout`, computed under its own lock and safe for any goroutine to call. [rate-governor](../features/rate-governor/requirements.md) R8's "publish to any component that asks" is a getter, asked. How the value then travels into tabs is the routing table's row ("the Budget Readout reaches every tab and pane") and the async model's business, not this ADR's.
 
 **A zero `Reset` is R9 kept, not a bug.** R9 requires exhaustion reported without a time rather than with an invented one, and [live-run-feed](../features/live-run-feed/requirements.md) open question 9 already carries the fallback wording for exactly this case. `Reset.IsZero()` is that case's name in code.
+
+**`Exhausted` covers both limits, an amendment [ADR-0018](./0018-the-fanout-concurrency-shape.md) made in place.** The struct was drafted as a primary-limit observation. ADR-0018 has a rate-limit classified response (a secondary 403 or 429) publish exhaustion with the `Retry-After` derived resume, so the field reads "the account may not issue requests right now, and `Reset` says when that changes", whichever limit said so. No field was added or retyped, and every consumer's behaviour is unchanged.
 
 ## The clock is an alias, not an abstraction
 

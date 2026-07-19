@@ -44,6 +44,8 @@ It is an `http.RoundTripper`, nested under [local-store](../local-store/requirem
 
 **R9.** The governor must derive the resumption time from `x-ratelimit-reset` where the response supplies it, and from `Retry-After` where a rate-limit response supplies that. Where neither is available it must report exhaustion without a time rather than inventing one.
 
+**A rate-limit classification publishes exhaustion, whatever the primary headers say ([ADR-0018](../../adr/0018-the-fanout-concurrency-shape.md)).** A secondary-limit 403 or 429 can arrive with a healthy `x-ratelimit-remaining` (open question 1), and it names the whole token rather than the request that tripped it. So on classifying a response as rate limiting (R14), the governor must publish the Readout as exhausted, with the resumption time this requirement derives, or without one where nothing supplies it. The [polling-scheduler](../polling-scheduler/requirements.md) then stops exactly as it does at primary exhaustion (its R16), which is what keeps R13 honoured for reads without a retry queue: a poll's re-attempt is its next scheduled tick after the resume. This holds whichever request tripped the limit, so a write's rate-limit response publishes the same exhaustion alongside R12's backoff. `Exhausted` therefore describes the account's rate limiting rather than the primary limit alone, and [ADR-0014](../../adr/0014-domain-types-and-the-budget-readout.md)'s comment and [CONTEXT.md](../../CONTEXT.md)'s entry carry the widened meaning.
+
 ### Adaptive throttle
 
 **R10.** The governor must start writes at the documented-safe rate of 1.0 per second and ramp upward only while responses stay clean. The ramp is **additive increase, multiplicative decrease**: add 0.25/sec after every 20 consecutive clean responses, and halve the current rate on any rate-limit response, re-ramping from the halved rate. Open question 5 records why AIMD and not something else.
@@ -215,6 +217,7 @@ That disagreement is the entire reason this component is adaptive rather than a 
 
 - [ADR-0007: Adaptive delete throttle, not a fixed rate](../../adr/0007-adaptive-delete-throttle.md). R10, R11, R12, R17, R21.
 - [ADR-0012: The transport chain, and what ghclient may expose](../../adr/0012-transport-chain-and-the-client-surface.md). Why R5 is a RoundTripper's requirement and not a caller's, and where this component sits in the chain.
+- [ADR-0018: The fan-out's concurrency shape](../../adr/0018-the-fanout-concurrency-shape.md). The concurrency limiter under this governor, and R9's exhaustion-on-classification rule.
 - [ADR-0004: Liveness via conditional ETag polling](../../adr/0004-conditional-polling-for-liveness.md). R7's measurement. Why the secondary limit binds.
 - [ADR-0006: Purges are stateless, the filter is the job state](../../adr/0006-stateless-bulk-jobs.md). R20's duration is survivable because a resume is free.
 - [purge](../purge/requirements.md). R2 paces its R17. R13 implements its R19. R3 settles its open question 7.

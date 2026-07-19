@@ -94,7 +94,7 @@ The share of a person's primary GitHub API rate allowance that this tool is perm
 _Avoid_: Quota, rate limit (the rate limit is GitHub's. The Budget is the portion we are allowed.), Budget state (see below)
 
 **Budget Readout**:
-What the rate governor publishes about the primary limit at a moment: remaining allowance, reset time, whether consumption is under pressure, and whether it is exhausted. An **observation**, and never a policy.
+What the rate governor publishes about the account's rate limiting at a moment: remaining primary allowance, the reset or resume time, whether consumption is under pressure, and whether it is exhausted, which a secondary-limit backoff also sets ([ADR-0018](adr/0018-the-fanout-concurrency-shape.md)). An **observation**, and never a policy.
 _Avoid_: Budget state (it names the Readout with the Budget's word, and the two are opposites: one is what we are allowed to spend, the other is what is left. Code that conflates them will eventually throttle on the wrong number.)
 
 **Pressure**:

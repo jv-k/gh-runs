@@ -61,11 +61,15 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 **R16.** At Budget exhaustion the scheduler must stop polling and state when it resumes ("resumes 14:32"), taking the time from the rate-governor. It must never allow the Feed to go quietly stale. A paused Feed that says so is correct. One that looks live and is not is the failure this requirement exists to prevent.
 
+**A secondary-limit backoff rides this same path ([ADR-0018](../../adr/0018-the-fanout-concurrency-shape.md)).** A poll answered with a rate-limit 403 or 429 is an account condition, not a repository failure, so it never becomes a `RepoPollFailed`. The governor publishes the Readout as exhausted with the `Retry-After` derived resume, and this requirement's behaviour covers it unchanged: scheduling stops, in-flight polls complete and emit, and the Feed states the pause. A poll's re-attempt is its next scheduled tick after the resume.
+
 ### Fan-out
 
 **R17.** The scheduler must fan out with bounded concurrency. Serially, ~26 round-trips is ~5s per refresh, which exceeds the fast tier's ~3s target before a single repository has been considered.
 
 **R18.** The concurrency bound must be chosen by the tool and must stay well below the published cap of 100 concurrent requests, a pool shared across the REST and GraphQL APIs. See open question 2 for the verification.
+
+**The bound is chosen: 10, fixed, process-global, and innermost in the transport chain ([ADR-0018](../../adr/0018-the-fanout-concurrency-shape.md)).** It is octokit's own figure and a tenth of the published cap. It is not this scheduler's to enforce: the limiter is a RoundTripper under the governor, so every request the tool issues shares the one pool, discovery's burst and a Purge's crawl included. No state changes it. Pressure moves R15's intervals and never the bound, because shrinking wire concurrency saves zero points. Within the fan-out, polls are single-flight per repository: a tick that comes due while its repository's previous poll is still in flight is skipped, and cancellation exists only for quit.
 
 **R19.** The scheduler must distinguish a 304 from a 200 and must do no re-render work for a 304. Both count against the secondary limit under R11's pessimistic assumption. Only the 200 carries a change or costs primary allowance.
 
@@ -135,7 +139,7 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 1. **Do 304s count against the secondary limit? UNKNOWN (PRD risk R4).** Assumed yes, pessimistically. If they do not, every interval in R11 could tighten and a 100-repository poll set becomes affordable at 5s. Untestable without deliberately tripping a limit, so it is likely to stay unknown, which is why the assumption is the conservative one.
 
-2. **The concurrent-request cap is published: 100, shared across REST and GraphQL. RESOLVED.** GitHub documents it verbatim: "No more than 100 concurrent requests are allowed. This limit is shared across the REST API and GraphQL API." The counting unit (user, token or app) is not published, the best-practices page still advises making requests serially, and every secondary limit is subject to change without notice. Citations and the full readout live in [docs/research/secondary-limit-concurrency.md](../../research/secondary-limit-concurrency.md). R18's bound is now chosen against a known 100 rather than a rumour, and choosing it belongs to the fan-out's concurrency shape.
+2. **The concurrent-request cap is published: 100, shared across REST and GraphQL. RESOLVED.** GitHub documents it verbatim: "No more than 100 concurrent requests are allowed. This limit is shared across the REST API and GraphQL API." The counting unit (user, token or app) is not published, the best-practices page still advises making requests serially, and every secondary limit is subject to change without notice. Citations and the full readout live in [docs/research/secondary-limit-concurrency.md](../../research/secondary-limit-concurrency.md). R18's bound is now chosen against a known 100 rather than a rumour, and [ADR-0018](../../adr/0018-the-fanout-concurrency-shape.md) chose it: 10, fixed, process-global, innermost in the transport chain.
 
 3. **How the intent-level Budget share maps to a points/min ceiling is undecided.** A share of what? The primary 5,000/hour, the secondary ~900/min, or both? The two limits have different periods and different currencies, and the scheduler is bound by the secondary while the user most likely pictures the primary. Belongs jointly to [settings](../settings/requirements.md) and [rate-governor](../rate-governor/requirements.md).
 
@@ -156,6 +160,7 @@ The scheduler decides which repositories are revalidated and how often, so that 
 - [ADR-0004: Liveness via conditional ETag polling](../../adr/0004-conditional-polling-for-liveness.md). R1, R11, and the reason this feature exists.
 - [ADR-0003: Multi-repo Feed via client-side fan-out](../../adr/0003-multi-repo-via-client-side-fanout.md). R17's fan-out.
 - [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md). What is being polled.
+- [ADR-0018: The fan-out's concurrency shape](../../adr/0018-the-fanout-concurrency-shape.md). R18's bound, R17's execution, single-flight and quit, and the secondary-limit path R16 carries.
 - [ADR-0007: Adaptive delete throttle, not a fixed rate](../../adr/0007-adaptive-delete-throttle.md). R12's intent-not-mechanism principle.
 - [rate-governor](../rate-governor/requirements.md) owns the Budget Readout R13–R16 consume, and its R11 prices this scheduler's reads into the Purge's write ceiling.
 - [repo-discovery](../repo-discovery/requirements.md) supplies R2's poll set.
