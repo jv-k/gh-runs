@@ -65,7 +65,7 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 **R17.** The scheduler must fan out with bounded concurrency. Serially, ~26 round-trips is ~5s per refresh, which exceeds the fast tier's ~3s target before a single repository has been considered.
 
-**R18.** The concurrency bound must be chosen by the tool and must stay well below any suspected concurrent-request cap. See open question 2.
+**R18.** The concurrency bound must be chosen by the tool and must stay well below the published cap of 100 concurrent requests, a pool shared across the REST and GraphQL APIs. See open question 2 for the verification.
 
 **R19.** The scheduler must distinguish a 304 from a 200 and must do no re-render work for a 304. Both count against the secondary limit under R11's pessimistic assumption. Only the 200 carries a change or costs primary allowance.
 
@@ -135,7 +135,7 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 1. **Do 304s count against the secondary limit? UNKNOWN (PRD risk R4).** Assumed yes, pessimistically. If they do not, every interval in R11 could tighten and a 100-repository poll set becomes affordable at 5s. Untestable without deliberately tripping a limit, so it is likely to stay unknown, which is why the assumption is the conservative one.
 
-2. **The concurrent-request cap is UNKNOWN.** Research suggests the secondary limit also caps concurrent requests at ~100, but this project has not verified it. R18 requires the bound to stay well below a number we do not actually know, which is unsatisfying but is the only safe reading.
+2. **The concurrent-request cap is published: 100, shared across REST and GraphQL. RESOLVED.** GitHub documents it verbatim: "No more than 100 concurrent requests are allowed. This limit is shared across the REST API and GraphQL API." The counting unit (user, token or app) is not published, the best-practices page still advises making requests serially, and every secondary limit is subject to change without notice. Citations and the full readout live in [docs/research/secondary-limit-concurrency.md](../../research/secondary-limit-concurrency.md). R18's bound is now chosen against a known 100 rather than a rumour, and choosing it belongs to the fan-out's concurrency shape.
 
 3. **How the intent-level Budget share maps to a points/min ceiling is undecided.** A share of what? The primary 5,000/hour, the secondary ~900/min, or both? The two limits have different periods and different currencies, and the scheduler is bound by the secondary while the user most likely pictures the primary. Belongs jointly to [settings](../settings/requirements.md) and [rate-governor](../rate-governor/requirements.md).
 
