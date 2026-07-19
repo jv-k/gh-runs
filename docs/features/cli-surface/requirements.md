@@ -4,7 +4,7 @@
 
 ## Purpose
 
-`gh runs` with no arguments opens the TUI. The full non-interactive CLI exists alongside it as a **drop-in superset of `gh run`'s flags**, so that `gh run list` → `gh runs list` is muscle memory. It exists because the standalone binary must be self-sufficient for someone who does not have `gh` installed ([ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md)), and because the Feed's filter engine has to exist regardless. Flags are a thin adapter over it.
+`gh runs` with no arguments opens the TUI. The full non-interactive CLI exists alongside it as a **drop-in superset of `gh run`'s flags**, so that `gh run list` → `gh runs list` is muscle memory. It exists because the standalone binary must be self-sufficient for someone who does not have `gh` installed ([ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md)), and because the Feed's filter engine has to exist regardless. Flags are a thin adapter over it. Where gh has no behaviour to mirror, the surface's shape is fixed by [ADR-0022](../../adr/0022-the-cli-beyond-gh-precedent.md): cross-repository fan-out, the bare `delete`, and the match-all spelling (R22 through R27).
 
 ## Requirements
 
@@ -42,7 +42,7 @@
 
 **R8.** Repository identity MUST be host-qualified on every input path. A host may arrive by three routes, all verified as gh behaviour: `-R/--repo [HOST/]OWNER/REPO`, `GH_REPO` (same format), and `GH_HOST`. Each MUST be host-checked.
 
-**R9.** A host other than `github.com` MUST be rejected explicitly, naming the host, before any network request is made. `-R ghe.corp/o/r` MUST report that the host is not supported yet, never a 404, an auth error, or a confusing failure. An explicit `github.com` host (`-R github.com/o/r`) MUST be accepted and treated identically to the bare `-R o/r` form.
+**R9.** A host other than `github.com` MUST be rejected explicitly, naming the host, before any network request is made, never with a 404, an auth error, or a confusing failure. The message MUST be class-neutral: it names the host and states that 2.0.0 supports github.com only, and it MUST NOT claim the host is GHES or any other class. gh distinguishes github.com, `*.ghe.com` (Enterprise Cloud with data residency) and GHES, and a "GHES not supported" message shown to a `tenant.ghe.com` user is false. A message that makes no class claim cannot make a false one, and the CLI carries no host-class taxonomy whose only job is phrasing an error ([ADR-0009](../../adr/0009-host-qualified-repo-identity.md), amended). An explicit `github.com` host (`-R github.com/o/r`) MUST be accepted and treated identically to the bare `-R o/r` form.
 
 **R10.** Every non-interactive destructive command MUST support `--dry-run`, which resolves the affected set of Runs by the same code path as the real operation, reports exactly what would be deleted, deletes nothing, and exits 0. Deleting nothing, it MUST write no line to [purge](../purge/requirements.md) R29's deletion log, and it MUST NOT require that log to be writable. A line records an attempt, `--dry-run` makes none, and a command that issues no DELETE has nothing R29 protects.
 
@@ -51,6 +51,8 @@
 **R11.** Every non-interactive destructive command MUST require `--yes`, and MUST refuse to delete without it. `--yes` is gh's established spelling on `gh repo delete`. Passing it **is** the confirmation on this surface: an explicit act, made once per invocation, by the person typing the command. That is what a persistent setting can never be, which is why the flag is confirmation and a config key that waived it would be a skip. The flag is always required. No configuration setting, environment variable or mode may waive it ([settings](../settings/requirements.md) R13), and none may supply it on the operator's behalf.
 
 **R12.** A Purge MUST skip Runs whose Status is not `completed`, report them as **skipped** rather than failed, and count them separately in the summary. DELETE rejects in-progress Runs. Skipping them is one of the four things this CLI adds over the shell pipeline.
+
+**The conservative skip is deliberate, and the narrower set is not worth knowing.** Whether DELETE also rejects `queued`, `waiting`, `requested` and `pending` is unmeasured, and measuring it means issuing live DELETEs, which R21 forbids absolutely. The question is moot as well as unknowable: every skipped Status is transient, a skipped Run becomes deletable once it completes, and R17's resume rail picks it up on the next invocation for free. The one persistent case, a Run parked in `waiting` on an approval, is a cancel-then-delete flow that belongs to [run-lifecycle](../run-lifecycle/requirements.md). Attempting the DELETE and classifying the response was rejected because an unexpected success would destroy a Run this requirement promised to skip. Do not re-open this with a live probe.
 
 **R13.** A Purge MUST treat a 404 on DELETE as **success**. Under the stateless model ([ADR-0006](../../adr/0006-stateless-bulk-jobs.md)) racing a previous pass or another person is routine, and "the Run is gone" is exactly what was asked for.
 
@@ -62,6 +64,10 @@
 
 **R17.** Exit codes MUST follow gh's documented taxonomy (verified, `gh help exit-codes`): **0** on success, **1** on failure, **2** when a running command is cancelled, **4** when authentication is required. A Purge interrupted by the user MUST exit 2, leave already-deleted Runs deleted, and state that re-running the same filter resumes it.
 
+**A partially failed Purge MUST exit 1, with no distinct partial code.** The exit code carries one bit, not everything happened, and the summary and deletion log carry the detail. Minting a code would be the first departure from gh's documented set, and a script would still have to parse the summary to act.
+
+**A Purge whose filter matches zero Runs MUST exit 0.** Zero matches is the terminal state of every completed and resumed Purge, so a non-zero exit would make resume-to-completion end in failure. gh's contrary precedent (`gh cache delete --all` exits 1 on no caches, with `--succeed-on-no-caches` to opt out) is deliberately not followed, and no such opt flag exists here. A Purge that deletes nothing because every match was skipped under R12 also exits 0 (AC10).
+
 **R18.** Interrupting a Purge MUST be safe at any point. No job record, no resolved ID list and no progress file is written, and none is needed: the filter is the job state, and resuming means running the same command again. [purge](../purge/requirements.md) R29's append-only deletion log is none of those three and is written: nothing reads it back, so it is not what R17's resume runs on, and an interrupted Purge's log MUST hold every deletion issued before the interrupt. Statelessness here is a rule about reading, not about writing ([ADR-0006](../../adr/0006-stateless-bulk-jobs.md), amended).
 
 ### Seams
@@ -71,6 +77,20 @@
 **R20.** `--dry-run` MUST resolve its set through the same code path as the real operation and MUST NOT be a second implementation of it. R10 makes it a production rail, and AC9 pins the equivalence: removing `--dry-run` and adding `--yes` deletes exactly the N it reported. That equivalence is what makes it usable in a test as well as at a keyboard. It is also why `--dry-run` is not the seam that makes deletion safe to test. A bug living in its own branch is precisely what a test would be hunting, so it cannot be trusted to prove itself. Deletion is proven against R19's fixtures. `--dry-run` is the rail an operator gets, not the harness.
 
 **R21.** No test may issue a live DELETE. This tool deletes tens of thousands of Runs irreversibly and cannot undo one, and the measurements throughout this document (~28,700 Runs, `?status=success` narrowing to ~18,258, page 11 returning `[]`) were taken against real third-party repositories that other people depend on. Deletion is exercised against R19's fixtures, never against an account. This binds `--dry-run` as well: a flag an operator can forget is not a substitute for a test that never had a live endpoint to reach.
+
+### Where gh has no precedent ([ADR-0022](../../adr/0022-the-cli-beyond-gh-precedent.md))
+
+**R22.** `gh runs list`, invoked outside a repository with no `-R` and no `GH_REPO`, MUST fan out across every discovered repository ([repo-discovery](../repo-discovery/requirements.md), [ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)) rather than fail as gh does. Inside a repository, no `-R` MUST mean that repository, matching gh, so R2's parity holds. `--all-repos` (long form only, no shorthand, `-a` being taken) MUST force fan-out from anywhere, and MUST be accepted redundantly where fan-out is already the behaviour. The spelling is [settings](../settings/requirements.md) R19's own scope vocabulary, and the TUI's rule is the same: no repository means all repositories, not an error.
+
+**R23.** Under fan-out, `-L/--limit` MUST bound the **merged total**: one list, newest-first by `CreatedAt`, at most `L` rows, defaulting to 20. It MUST NOT mean `L` per repository. How many Runs each per-repository request fetches before the merge is implementation.
+
+**R24.** `--json` MUST offer a `repository` field, an object of `{name, nameWithOwner}`, requestable on any invocation including single-repo. The shape is gh's own on `gh search prs --json repository` (see Constraints), and it extends additively if multi-host ever adds a `host` key ([ADR-0009](../../adr/0009-host-qualified-repo-identity.md)). Under fan-out, the human table output MUST carry a repository column, because rows from different repositories are otherwise indistinguishable. R7's field set is unchanged: `repository` is a superset addition, never emitted unless requested.
+
+**R25.** `gh runs delete`, invoked with no Run ID and no filter flags, MUST open the TUI, plain, identically to bare `gh runs`, including R1's non-TTY refusal. The command is an intent-synonym: the person typed "delete", and the TUI is where deletion is one operation. This deliberately diverges from gh's bare `gh run delete`, which prompts an interactive single-Run picker (see Constraints). No interactive selector exists outside the TUI.
+
+**R26.** A match-all Purge MUST be asked for by name: `--all`. `gh runs delete --all --yes` deletes every Run in scope. `gh runs delete --yes` with no Run ID, no filter and no `--all` MUST fail with a usage diagnostic and delete nothing. [ADR-0016](../../adr/0016-the-filter-representation.md)'s zero-value Filter matches every Run, and this rule makes that zero filter unreachable by omission. The spelling is gh's own on `gh cache delete --all`, given no `-a` shorthand so it stays visually distinct from `list`'s unrelated `-a`.
+
+**R27.** `--all-repos` MUST work on `delete` with the same semantics as on `list`, so a cross-repository Purge is expressible non-interactively. The rails are the existing ones: `--yes` (R11), `--all` for match-all (R26), `--dry-run`'s per-repository rows (R10), and the deletion log ([purge](../purge/requirements.md) R29). The widest expressible command, `gh runs delete --all-repos --all --yes`, is three explicit opt-ins, and no default or working directory reaches it by accident.
 
 ## Acceptance criteria
 
@@ -102,11 +122,27 @@
 
 **AC14: Auth failure exits 4.** With no credentials resolvable, any command requiring auth exits 4, not 1.
 
+**AC15: Scope follows the working directory, and the flag overrides it.** Against R19's fixtures, `gh runs list` outside a repository issues one listing request per discovered repository and emits a merged list. The same command inside a repository issues requests against that repository alone. `gh runs list --all-repos` inside a repository fans out anyway.
+
+**AC16: The merged limit.** Under fan-out with repositories holding more than 20 Runs between them, `gh runs list` emits at most 20 rows, newest-first by creation time, and `-L 5` emits at most 5. No invocation emits `L` rows per repository.
+
+**AC17: The repository field.** `gh runs list --json repository,databaseId` emits `repository` as `{"name": ..., "nameWithOwner": ...}` for every row, under fan-out and single-repo alike. Without `repository` in the field list, no repository key appears.
+
+**AC18: Bare delete is the TUI.** `gh runs delete` with no arguments, on a TTY, opens the TUI exactly as bare `gh runs` does. With stdout redirected it exits non-zero with a diagnostic and writes no escape sequences.
+
+**AC19: Match-all needs its name.** `gh runs delete --yes` with no Run ID, no filter and no `--all` exits non-zero, deletes nothing, and issues zero DELETE requests. `gh runs delete --all --dry-run` resolves every Run in scope.
+
+**AC20: Purge exit codes.** Against R19's fixtures, a Purge whose deletes all succeed exits 0. A Purge with any real failure (a 403 among the deletes) exits 1. A Purge whose filter matches zero Runs exits 0 and prints a summary saying so.
+
 ## Constraints
 
 The flag names, shorthands, `-s` enum, `--json` field set, `-L` default of 20, the `ls` alias, and the exit-code taxonomy in this document were verified directly against **gh 2.92.0** (`gh run list --help`, `gh run delete --help`, `gh help exit-codes`, `gh help environment`). They are gh's contract, not ours, and they move when gh moves.
 
-`gh run delete` takes exactly one Run ID and, invoked bare, interactively selects a single Run. It has **no `--dry-run` and no confirmation flag**, only inherited flags. R10 and R11 therefore have no gh flag on `gh run` to mirror. `--yes` ("Confirm deletion without prompting") is gh's established spelling on `gh repo delete`, which is why R11 adopts that spelling rather than inventing one.
+`gh run delete` takes exactly one Run ID and, invoked bare, interactively selects a single Run. It has **no `--dry-run` and no confirmation flag**, only inherited flags. R10 and R11 therefore have no gh flag on `gh run` to mirror. `--yes` ("Confirm deletion without prompting") is gh's established spelling on `gh repo delete`, which is why R11 adopts that spelling rather than inventing one. `--all` is gh's established spelling for "everything" on `gh cache delete --all`, which is why R26 adopts it.
+
+**R25 is this surface's one deliberate divergence from a gh behaviour.** gh's bare `gh run delete` prompts an interactive picker, and ours opens the TUI instead ([ADR-0022](../../adr/0022-the-cli-beyond-gh-precedent.md)). Everywhere else the surface diverges only where gh has nothing, never against something gh does.
+
+**The `repository` object shape was verified against gh 2.92.0**: `gh search prs --json repository` emits `{"name": ..., "nameWithOwner": ...}`, which is the precedent R24 adopts.
 
 **There is no server-side `conclusion` parameter, and the API ignores an unknown query parameter silently.** Measured against the live API:
 
@@ -136,19 +172,20 @@ Historical note, recorded so nobody re-derives a false premise: **v1 was interac
 
 ## Open questions
 
-- **Does `gh runs list` outside a repository, or without `-R`, fan out across all discovered repositories, or fail as gh does?** Drop-in compatibility fixes the in-repo case (no `-R` inside a repo means that repo) but says nothing about the out-of-repo case, where gh errors and a cross-repo tool plausibly should not. Undecided. Note `-a/--all` is not available as the opt-in flag name (see Constraints).
-- **If the CLI can list across repositories, `--json` has no field identifying which repository a Run came from.** gh's 16 fields are all single-repo, so cross-repo JSON output would be ambiguous. Adding a repository field is a superset addition and safe, but is contingent on the question above.
+- **Resolved: outside a repository, `list` fans out.** The product is cross-repository first, and the TUI's own scope rule (settings R19) answers "no repository" with `all-repos` rather than an error. Inside a repository gh's rule holds, and `--all-repos` forces fan-out from anywhere. R22 and R23 carry it, [ADR-0022](../../adr/0022-the-cli-beyond-gh-precedent.md) records the options it beat, including failing with a diagnostic that names the flag.
+- **Resolved: `--json` gains a `repository` object.** `{name, nameWithOwner}`, gh's own shape on `gh search prs`, requestable on any invocation and extensible with a `host` key later. R24.
 - **Resolved: `--conclusion` is neither. No such parameter exists, and the flag is dropped.** It was asked whether a Conclusion filter was server-side or client-side. Measurement answered a third way: the API has no `conclusion` parameter to be either, and ignores one silently (see Constraints). Client-side was the only remaining option, it filters what was reachable rather than what matches, and R5 drops the flag instead. `-s/--status` already reaches Conclusion server-side, so nothing is lost but the Status-and-Conclusion combination.
 - **Resolved: `startup_failure` is a Conclusion.** Measured on real Runs across `cli/cli`, `home-assistant/core` and `microsoft/vscode`: `status=completed conclusion=startup_failure`. CONTEXT.md is corrected and now carries nine Conclusions. The arithmetic closes exactly: gh's 15-value `-s` enum is CONTEXT.md's six Statuses plus its nine Conclusions, with nothing unaccounted on either side (R4). It sat on the Status/Conclusion boundary the project treats as its defining distinction, and it fell on the Conclusion side.
-- **The exact set of Statuses for which DELETE is rejected is UNKNOWN.** Canon establishes that DELETE fails on in-progress Runs. Whether `queued`, `waiting`, `requested` and `pending` are also rejected has not been measured. R12 conservatively skips everything that is not `completed`. If the true rejected set is narrower, R12 skips Runs it could have deleted.
+- **Resolved: the rejected-Status set is unknowable within policy, and moot.** Measuring it means live DELETEs, which R21 forbids, and the answer would not change R12: every skipped Status is transient, so a skipped Run becomes deletable on completion and the resume rail collects it. R12 stands, carries the rationale, and forbids re-measuring with a live probe.
 - **Resolved: the confirmation flag is `--yes`.** gh's spelling on `gh repo delete`, adopted by R11. `gh run delete` set no precedent, so the nearest one in gh's own surface wins.
-- **What does `gh runs delete` with no Run ID do?** gh's bare `gh run delete` interactively selects one Run, while R1 gives bare `gh runs` to the TUI. The two conventions meet here and the resolution is undecided.
-- **What is the exit code when a Purge partially fails, say 900 deleted, 100 failed with 403?** gh's taxonomy has one failure code and notes that a command may define more. Also undecided: whether a Purge matching zero Runs exits 0 or 1. gh has precedent in both directions: `gh cache delete --all` exits 1 on no caches, with `--succeed-on-no-caches` to opt into 0.
-- **Does `*.ghe.com` reject correctly?** gh distinguishes three host classes: `github.com`, subdomains of `ghe.com` (Enterprise Cloud with data residency, authenticated by `GH_TOKEN`), and GHES hosts (authenticated by `GH_ENTERPRISE_TOKEN`). [ADR-0009](../../adr/0009-host-qualified-repo-identity.md) mandates an explicit "GHES not supported yet", but that message is **inaccurate for a `tenant.ghe.com` host**, which is not GHES. Since the ADR's whole point is choosing explicit rejection over silent misbehaviour, an inaccurate rejection message is a weak form of the thing it set out to avoid. The message needs to distinguish the classes, or the ADR needs to say why it need not.
+- **Resolved: bare `gh runs delete` opens the TUI.** An intent-synonym for bare `gh runs`, plain, with R1's non-TTY refusal. No second interactive picker exists beside the TUI, and the divergence from gh's bare-delete prompt is recorded in Constraints. R25, with the match-all guard in R26: `--yes` alone fails, and only `--all --yes` spells "everything". [ADR-0022](../../adr/0022-the-cli-beyond-gh-precedent.md).
+- **Resolved: a partially failed Purge exits 1, and a zero-match Purge exits 0.** One failure bit, no minted code, and the summary carries the detail. Zero matches is the terminal state of every resumed Purge, so it is success, and gh's `--succeed-on-no-caches` machinery is not carried. R17.
+- **Resolved: the rejection message is class-neutral.** It names the host and states that 2.0.0 supports github.com only, claiming nothing about what the host is, so it cannot be false for `tenant.ghe.com` and the CLI carries no host-class taxonomy. R9, and [ADR-0009](../../adr/0009-host-qualified-repo-identity.md) is amended in place.
 - **Resolved: risk R1 does not weaken this feature's scope.** Standalone coherence is one of ADR-0008's two arguments for a full CLI surface, and it depended on go-gh resolving a token with **no gh binary installed**. It does not: go-gh has no keyring code, its only keyring path is shelling out to `gh auth token`, and with gh off PATH the reference keyring token resolves empty. The product owner's decision is to **require `GH_TOKEN` for users without gh, and document it** ([ADR-0002](../../adr/0002-go-gh-with-dual-distribution.md)). `GH_TOKEN`/`GITHUB_TOKEN` are therefore the contract rather than an escape hatch, which is the normal contract for a CLI and what CI already does. The binary needs no gh, only a token, so ADR-0008's argument stands and this feature's scope is unchanged.
 
 ## Related
 
+- [ADR-0022: The CLI beyond gh's precedent: fan-out, the bare delete, and the match-all spelling](../../adr/0022-the-cli-beyond-gh-precedent.md)
 - [ADR-0008: A full CLI surface, mirroring gh's flags, despite the overlap](../../adr/0008-full-cli-surface-despite-gh-overlap.md)
 - [ADR-0009: Repo identity is host-qualified, though 2.0.0 ships github.com only](../../adr/0009-host-qualified-repo-identity.md)
 - [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md)
