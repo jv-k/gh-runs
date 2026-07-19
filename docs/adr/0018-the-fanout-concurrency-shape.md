@@ -78,4 +78,4 @@ This widens the Readout's remit from the primary limit alone to the account's ra
 
 **Slow responses degrade per repository, and that is the design.** A repository whose responses take longer than its tier interval polls at its response rate under single-flight, and no queue builds anywhere. It is not a defect to fix with cancellation.
 
-**What this ADR deliberately does not fix.** Whether demotion under pressure is staged across tiers, and its hysteresis, stays [polling-scheduler](../features/polling-scheduler/requirements.md) open question 4's. The crawl-versus-Feed priority stays its open question 5's. Both are cadence policy above this shape, and both consume it unchanged.
+**What this ADR deliberately did not fix, [ADR-0021](./0021-the-scheduler-cadence-policy.md) since has.** Demotion's staging and its hysteresis were [polling-scheduler](../features/polling-scheduler/requirements.md) open question 4's, and the crawl-versus-Feed priority its open question 5's. Both were cadence policy above this shape, both are now resolved there, and both consume this shape unchanged, as intended.

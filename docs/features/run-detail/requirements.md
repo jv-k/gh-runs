@@ -36,7 +36,7 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 **R12.** On selection change, the detail pane must show the new Run's Jobs or an explicit pending state, and must not leave the previous Run's Jobs on screen as though they belonged to the new selection.
 
-**R13.** The detail pane must refresh the selected Run's Jobs at the fast tier, approximately every 3 seconds, for exactly as long as that Run's Status is not `completed`, and must not refresh a Run whose Status is `completed`.
+**R13.** The detail pane must refresh the selected Run's Jobs at the fast tier, approximately every 3 seconds, for exactly as long as that Run's Status is `queued` or `in_progress`, and must not refresh a Run at any other Status. A Run parked at `waiting`, `requested` or `pending` updates at its repository's ambient tier instead, and the ~3s refresh resumes the moment its Status reaches `queued` ([ADR-0021](../../adr/0021-the-scheduler-cadence-policy.md), resolving open question 6).
 
 **R14.** The detail pane must stop refreshing a Run's Jobs once that Run is no longer selected.
 
@@ -108,7 +108,7 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 5. **Resolved: `run_attempt` rides on the list payload, so R4's badge is free.** `/actions/runs` items carry `run_attempt` alongside `previous_attempt_url`, the field R7 presents as prior Attempt metadata. The badge costs no per-row request, needs no folding into R10's debounce, and is renderable the moment a row paints. That matters most at R17's re-run, where the badge going N to N+1 is the only evidence on screen that anything happened.
 
-6. **Should a Run parked at `waiting` refresh at the fast tier?** R13 refreshes whenever Status is not `completed`, but a Run awaiting a pending deployment can sit at `waiting` for days. Refreshing it every 3s for days is defensible only if 304s are as cheap as measured. For the secondary limit that is PRD risk R4, assumed to go the wrong way.
+6. **Resolved: no, the ~3s refresh runs only while the Run is `queued` or `in_progress` ([ADR-0021](../../adr/0021-the-scheduler-cadence-policy.md)).** R13 carries the narrowed rule. A parked Run's next event is a human acting, so days of ~3s refreshing buys nothing under the pessimistic secondary-limit assumption, and the approval's effect surfaces within the repository's ambient tier interval before the fast refresh resumes on `queued`. [polling-scheduler](../polling-scheduler/requirements.md) open question 6, which raised this identically, closes with the same rule.
 
 7. **Are an Orphaned Run's Jobs still served?** **UNKNOWN.** CONTEXT says an Orphaned Run's history persists indefinitely, but says that of the Run, not of its Jobs. R8's marking is safe either way. R1's content is not.
 
