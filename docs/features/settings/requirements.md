@@ -42,7 +42,7 @@ Settings **expose intent, never mechanism**. A setting earns its place only if a
 
 | Rejected | Reason |
 |---|---|
-| Poll interval in seconds | Mechanism. Choosing it needs the token tier, the repo count and the points model. The scheduler has all three, the user has none |
+| The scheduler's poll interval in seconds | Mechanism. Choosing it needs the token tier, the repo count and the points model. The scheduler has all three, the user has none. The discovery refresh interval (R20) is not this key: [ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)'s two-tier re-probe makes it cheap by construction, so it passes the intent test this row fails |
 | Deletes per second | Mechanism, and dangerous. The adaptive governor beats any fixed number. This knob's only real function is letting someone get their account blocked |
 | Cache TTL | Meaningless. ETag revalidation is already free *and* correct, and a TTL could only make data staler |
 | Concurrency | Internal. Bounded by the secondary rate limit, not by taste |
@@ -77,6 +77,8 @@ Settings **expose intent, never mechanism**. A setting earns its place only if a
 
 **And R3's filter, plus R9's settable launch filter, already amount to a persistent this-repo scope by another name.** A launch filter pinned to the working directory's repository gives the Runs tab exactly what R19 gives the other two, reached through the filter rather than through a scope key. So the distinction R19 draws is about **mechanism, not capability**: the Feed expresses scope as a filter it already has, and the other two tabs have no filter to express it through. What R19 must not claim is that the Runs tab has no equivalent. It has one, spelled differently, and open question "How is the default launch filter expressed (R9)?" is where that spelling gets settled.
 
+**R20.** The discovery revalidation interval MUST be settable as `discovery_refresh_minutes`, MUST default to **5**, and MUST be bounded by a floor of **1** that the config cannot go under. A value below the floor MUST be clamped with a diagnostic, not honoured, the same shape as R12's clamp. The key governs only the fast tier of [repo-discovery](../repo-discovery/requirements.md) R11's two-tier re-probe, the tier that revalidates against held ETags. The hourly tier for repositories without one is a constant this key never touches, which is what keeps every value of this setting affordable and is why the key exists at all: it is intent-level under R13's test ("how quickly should a newly active repository appear" is answerable from the person's own context, in minutes), where the scheduler's poll interval is not. [ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md) carries the reasoning.
+
 ## Acceptance criteria
 
 **AC1: No config file is a valid config.** With `$XDG_CONFIG_HOME` set to a temporary directory containing no config file, the tool starts, and every setting reports its default. Writing an empty `config.yml` changes nothing.
@@ -89,7 +91,7 @@ Settings **expose intent, never mechanism**. A setting earns its place only if a
 
 **AC5: Exclusion reaches the network.** Excluding a repository removes it from the Feed and results in zero HTTP requests to it across a full polling cycle.
 
-**AC6: The Budget knob is intent, not mechanism.** The Budget setting's schema admits no unit of time and no unit of requests. There is no config key, flag, or environment variable whose value is a poll interval, a delete rate, a cache TTL, or a concurrency level (R13).
+**AC6: The Budget knob is intent, not mechanism.** The Budget setting's schema admits no unit of time and no unit of requests. There is no config key, flag, or environment variable whose value is the scheduler's poll interval, a delete rate, a cache TTL, or a concurrency level (R13). `discovery_refresh_minutes` (R20) is not among these: it is the discovery revalidation interval, admitted by [ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md), and no other time-valued key exists.
 
 **AC7: A rejected key gets its own reason.** Setting `poll_interval: 5` in `config.yml` starts normally and emits a diagnostic containing that key's reason from R13: that choosing it requires the token tier, repo count and points model. The same holds for the other four. Setting `some_future_key: 1` emits a generic unknown-key diagnostic and also starts normally.
 
@@ -105,7 +107,7 @@ Settings **expose intent, never mechanism**. A setting earns its place only if a
 
 **AC11: The view writes the file without damage.** Editing a setting in the TUI and quitting leaves `config.yml` changed in that key only, with unrelated comments and key order intact.
 
-**AC12: Goldens hold the Settings view.** Rendering the Settings view from held state, with no terminal and no network, reproduces the stored golden byte for byte. The golden contains no row, label, field or help text for a poll interval, deletes per second, a cache TTL, a concurrency level, or a stored setting that skips confirmation. Adding any of the five to the view fails it.
+**AC12: Goldens hold the Settings view.** Rendering the Settings view from held state, with no terminal and no network, reproduces the stored golden byte for byte. The golden contains no row, label, field or help text for the scheduler's poll interval, deletes per second, a cache TTL, a concurrency level, or a stored setting that skips confirmation. Adding any of the five to the view fails it. The discovery refresh row (R20) is a different setting and does appear.
 
 ## Constraints
 
@@ -148,4 +150,4 @@ Historical note: v1's `SKIP`/`GOOD`/`FAIL` labels were derived by string-substit
 - [ADR-0009: Repo identity is host-qualified, though 2.0.0 ships github.com only](../../adr/0009-host-qualified-repo-identity.md) (R7's identity format)
 - [ADR-0003: Multi-repo Feed via client-side fan-out](../../adr/0003-multi-repo-via-client-side-fanout.md) (why exclusion has a direct rate cost)
 - [ADR-0008: A full CLI surface, mirroring gh's flags, despite the overlap](../../adr/0008-full-cli-surface-despite-gh-overlap.md)
-- Siblings: [polling-scheduler](../polling-scheduler/requirements.md) and [rate-governor](../rate-governor/requirements.md) (own the mechanism R8 refuses to expose), [notifications](../notifications/requirements.md) (owns R11's events, deferred to 2.1), [repo-discovery](../repo-discovery/requirements.md) (owns the set R7 filters), [local-store](../local-store/requirements.md) (owns R2's state directory), [purge](../purge/requirements.md) (owns R12's confirmation), [cli-surface](../cli-surface/requirements.md) (owns R4's flags), [live-run-feed](../live-run-feed/requirements.md) (owns R9's filter)
+- Siblings: [polling-scheduler](../polling-scheduler/requirements.md) and [rate-governor](../rate-governor/requirements.md) (own the mechanism R8 refuses to expose), [notifications](../notifications/requirements.md) (owns R11's events, deferred to 2.1), [repo-discovery](../repo-discovery/requirements.md) (owns the set R7 filters and the re-probe R20 paces), [local-store](../local-store/requirements.md) (owns R2's state directory), [purge](../purge/requirements.md) (owns R12's confirmation), [cli-surface](../cli-surface/requirements.md) (owns R4's flags), [live-run-feed](../live-run-feed/requirements.md) (owns R9's filter)

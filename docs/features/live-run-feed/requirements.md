@@ -239,7 +239,7 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 
 9. **Is a concrete resumption time always derivable?** R30 requires "resumes 14:32". ADR-0007 cites `Retry-After` on secondary-limit responses. The canon does not establish that a reset timestamp is available for primary exhaustion. **UNKNOWN**, which is why R30 carries a fallback.
 
-10. **What happens when the local repository is not in the discovered set?** R32's fast path resolves the repository from the git remote and needs no discovery, but its permissions come from `/user/repos`, where a clone the account does not own may never appear. Undecided whether such a repository joins the Feed ad-hoc, and what learning its permissions costs.
+10. **Resolved: adopted for the session, at a cost of one request ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)).** When enumeration completes without it, one `GET /repos/{owner}/{repo}` learns its permissions, `archived` and `disabled`, and the repository joins the Feed (and the poll set if it has Runs) for this session only: its record and ETags persist for revalidation economy, but only a launch inside it re-admits it. [repo-discovery](../repo-discovery/requirements.md) R22 carries the mechanism.
 
 ## Related
 

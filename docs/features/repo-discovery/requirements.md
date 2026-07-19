@@ -10,7 +10,7 @@ Discovery establishes which of the account's repositories actually have Runs, so
 
 ### Enumeration
 
-**R1.** Discovery must enumerate every repository the token can see from the authenticated user's repository list, following pagination until it is exhausted. For the reference account this is 163 repositories across exactly two pages of 100, so enumeration itself costs two requests.
+**R1.** Discovery must enumerate every repository the token can see from the authenticated user's repository list, following pagination until it is exhausted. Enumeration covers `affiliation=owner,collaborator,organization_member` with `type=all`, forks included, which is the API default, named here explicitly per [ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md) rather than inherited. For the reference account this is 163 repositories across exactly two pages of 100, so enumeration itself costs two requests.
 
 **R2.** Discovery must not infer Actions usage from any field of the repository object. There is no `has_actions` field. The object exposes `has_issues`, `has_discussions`, `has_pages`, `has_wiki`, `has_projects`, `has_downloads` and `has_pull_requests`, and none of them say anything about Actions. Whether a repository has Runs is answerable only by asking for its Runs.
 
@@ -38,6 +38,8 @@ Discovery establishes which of the account's repositories actually have Runs, so
 
 **R11.** Discovery must be re-runnable on a schedule and on demand. A repository with no Runs today may have Runs tomorrow, and a classification cached forever is a classification that is wrong forever.
 
+**The schedule is two-tier, split by what each repository holds ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)).** A repository with a persisted ETag re-probes on the revalidation interval: settable ([settings](../settings/requirements.md) R20, `discovery_refresh_minutes`), default 5 minutes, floor 1 minute. A repository without one re-probes on a fixed hourly constant that no setting alters. The split is what makes the settable tier cheap by construction and bounds the expensive case at ~163 unconditional requests per hour, whatever open question 4's measurement finds. An on-demand refresh runs the full pass.
+
 **R12.** A re-probe must be conditional, carrying the ETag persisted from the previous probe. Per [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md) a 304 costs zero primary rate limit, so re-probing all ~163 repositories costs ~zero against the primary limit while nothing has changed, and a repository that acquires its first Run breaks its own ETag and reveals itself with a 200. This is what makes R11 affordable rather than a recurring 4% of the hourly allowance.
 
 **R13.** Discovery must never be used as the steady-state poll set. The ~163-repo probe is a discovery pass. The poll set is the ~26 repositories it classified as having Runs. The distinction is the whole reason this feature exists. Polling 163 repositories at the Feed's tiers would exceed the secondary limit outright.
@@ -63,6 +65,8 @@ R14 is where go-gh's `repository.Current()` trap lands, so it must not be met by
 **R20.** Discovery must be exercisable end-to-end against recorded HTTP fixtures, with no live network: enumeration paginating to two pages, probes returning populated and empty Run lists, and the conditional re-probe's 304s. Cassettes replay true payloads, which is what catches the API changing underneath us. A hand-written fake would encode our current beliefs and stay green while reality moved.
 
 **R21.** Discovery's scheduled re-probe (R11) must take its timing from an injected clock, so that a test of the refresh cadence advances time explicitly and completes instantly rather than sleeping through the interval.
+
+**R22.** When enumeration completes and the fast-path repository (R14) is not in the enumerated set, discovery must adopt it **for the session** ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)): spend one `GET /repos/{owner}/{repo}` to learn its `permissions`, `archived` and `disabled`, admit it to the Feed, and admit it to the poll set if it has Runs. Its classification, capability and ETags persist like any other repository's, so revalidation stays free, but membership does not: only a launch inside the repository re-admits it. A session launched elsewhere never sees it, and the Feed never accretes past clones.
 
 ## Acceptance criteria
 
@@ -122,7 +126,7 @@ R14 is where go-gh's `repository.Current()` trap lands, so it must not be met by
 
 ## Open questions
 
-1. **The fine-grained PAT header behaviour is UNKNOWN as measured.** The canon states that `x-oauth-scopes` exists only for classic tokens. But the observation was made **with a classic token**, where the header was present. That a fine-grained token omits it is documented belief, not something this project measured. Verify against an actual fine-grained PAT before any code depends on the distinction. R10 holds either way, which is why this is a verification task rather than a design risk.
+1. **Resolved: moot by rule, no code path reads `x-oauth-scopes` ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)).** The canon's claim that the header exists only for classic tokens was observed with a classic token and never verified against a fine-grained one, and it never will be, because nothing may read the header. R10 already makes capability advisory and keeps every consumer's error handling, so ruling the header unread turns the verification task into a standing prohibition and closes the question without a measurement.
 
 2. **Resolved: tell them apart by the body's shape, and bound the safe direction at three.** R10 requires a 403 to be surfaced as an authorization outcome. [ADR-0007](../../adr/0007-adaptive-delete-throttle.md) requires a 403 to trigger hard backoff. Both are canon and they send the same status code to opposite handlers. [rate-governor](../rate-governor/requirements.md) open question 1 owns the resolution and this question defers to it.
 
@@ -132,15 +136,15 @@ R14 is where go-gh's `repository.Current()` trap lands, so it must not be met by
 
     **What is not resolved**, and never will be by us, is what a live secondary-limit 403 carries. Provoking one is the hazard PRD risk R4 refuses, so the rule is asymmetric on purpose and errs toward backing off.
 
-3. **The re-probe cadence is UNKNOWN.** R11 requires a schedule. No number is decided. R12 makes the pass cheap enough that the honest constraint is the secondary limit's tolerance for a ~163-request burst, not the primary allowance.
+3. **Resolved: two-tier, and the fast tier is settable ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)).** Repositories holding a persisted ETag revalidate on `discovery_refresh_minutes` ([settings](../settings/requirements.md) R20), default 5 minutes, floor 1 minute. Repositories without one re-probe hourly, a constant. R11 carries the cadence. The split decouples the cadence from question 4's unknown: whatever the measurement finds, the expensive case is bounded at ~163 unconditional requests per hour, about 3% of the primary allowance, and the burst runs under [ADR-0018](../../adr/0018-the-fanout-concurrency-shape.md)'s bound of 10.
 
-4. **Whether a Run-list response for a repository with no Runs carries an ETag is UNKNOWN.** R12's economics for the 137 repositories without Runs depend on it: with an ETag, re-probing them is free and a first Run announces itself with a 200. Without one, every re-probe of them is a full 200 and the cadence in question 3 gets expensive.
+4. **Commissioned, and no longer load-bearing.** Question 3's two-tier resolution self-adapts to either answer, so the measurement now informs cost accounting rather than design. The observation (does a Run-list 200 with zero Runs carry an ETag?) is folded into [Measure whether a filtered listing's ETag is body-faithful](https://github.com/jv-k/gh-runs/issues/19), which uses the same instrumentation. This note records the answer when it lands.
 
-5. **What `disabled` means for Actions is UNKNOWN.** R7 records it because it arrives free. Whether it indicates a disabled repository, disabled Actions, or something else has not been measured, and nothing may act on it until it has been. It must not be assumed to be a synonym for `archived`.
+5. **Resolved from documentation: `disabled` means disabled by GitHub, and it stays inert ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)).** The field marks a repository GitHub itself has disabled (DMCA takedown, billing failure, terms-of-service action). It is not "Actions disabled", which lives at `GET /repos/{owner}/{repo}/actions/permissions` as an `enabled` boolean, and it is not a synonym for `archived`. Only GitHub can produce a disabled repository, so this answer is unmeasurable by us and documentation is its only source. R7 keeps recording it because it arrives free, nothing acts on it in 2.0.0, and gating keys on `archived` and `permissions` alone.
 
-6. **Which affiliations enumeration should cover is undecided.** The measured 163 is whatever the default returned for the reference account. It has not been established whether organization repositories, forks, and repositories the account merely collaborates on should be in the Feed, nor whether reaching them costs more than two requests.
+6. **Resolved: the API default, named explicitly ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)).** Enumeration covers `affiliation=owner,collaborator,organization_member` with `type=all`, forks included, which is what the reference 163 was measured under. R1 carries the set. Narrowing was rejected because an organization repository the user works in would silently never appear, and widening beyond the default is not possible.
 
-7. **What happens when the local repository is not in the discovered set is undecided.** R14's fast path resolves a repository from the git remote and needs no enumeration, but a clone the account does not own may never appear in `/user/repos`. Its capability would then stay not-yet-known indefinitely under R8, permanently disabling its destructive actions. Whether such a repository joins the Feed ad-hoc, and what learning its capability costs, is open. Raised jointly by [live-run-feed](../live-run-feed/requirements.md) open question 10.
+7. **Resolved: adopted for the session, at a cost of one request ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)).** R22 carries it: one `GET /repos/{owner}/{repo}` learns capability, the repository joins the Feed (and the poll set if it has Runs), its record and ETags persist for revalidation economy, and only a launch inside it re-admits it. Resolved jointly with [live-run-feed](../live-run-feed/requirements.md) open question 10.
 
 ## Related
 
@@ -148,6 +152,8 @@ R14 is where go-gh's `repository.Current()` trap lands, so it must not be met by
 - [ADR-0004: Liveness via conditional ETag polling](../../adr/0004-conditional-polling-for-liveness.md). R12.
 - [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md). R4.
 - [ADR-0009: Repo identity is host-qualified](../../adr/0009-host-qualified-repo-identity.md). R18.
+- [ADR-0020: Discovery's scope, ad-hoc adoption, and refresh cadence](../../adr/0020-discovery-scope-adoption-and-refresh.md). R1's affiliations, R11's cadence, R22, and the disposition of open questions 1, 4 and 5.
+- [settings](../settings/requirements.md). Its R20 owns the `discovery_refresh_minutes` key R11's fast tier reads.
 - [polling-scheduler](../polling-scheduler/requirements.md). Consumes R13's poll set. Must never inherit the probe set.
 - [local-store](../local-store/requirements.md). Persists R19's results and R12's ETags.
 - [rate-governor](../rate-governor/requirements.md). Accounts R17's burst. Shares open question 2.
