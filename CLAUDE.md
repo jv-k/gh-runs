@@ -86,3 +86,17 @@ Amending an ADR to close a risk is established practice here. R1, R2 and R3 were
 ## Ground truth beats recall
 
 Every number in the PRD's constraints table was measured, and several contradict what the API's documentation implies. Where a doc here disagrees with the GitHub API, **the API is right and the doc is a bug worth reporting**. Where a doc disagrees with another doc, say so rather than picking one. That has happened, and it is how the Budget contradiction survived as long as it did.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues on `jv-k/gh-runs`, operated via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage labels are used as-is: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: the binding glossary is `docs/CONTEXT.md` and decisions live in `docs/adr/`. See `docs/agents/domain.md`.
