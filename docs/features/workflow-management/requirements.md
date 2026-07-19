@@ -18,7 +18,7 @@ List Workflows with their state, across every repository or the one you are in, 
 
 **R4.** Never describe a Workflow's state as its Status, and never describe a Run's or a Job's Status as its state. State belongs to a Workflow. Status and Conclusion belong to a Run and a Job.
 
-**R5.** Enable a Workflow that is disabled, and disable a Workflow that is active. Both are writes, so both MUST be paced by [rate-governor](../rate-governor/requirements.md) R2, which names them among the ten writes it owns, and both MUST be issued from `ops` rather than from this tab ([ADR-0011](../../adr/0011-package-layout-and-dependency-direction.md)). Their point cost is undocumented, which is rate-governor open question 3.
+**R5.** Enable a Workflow that is disabled, and disable a Workflow that is active. Both are writes, so both MUST be paced by [rate-governor](../rate-governor/requirements.md) R2, which names them among the ten writes it owns, and both MUST be issued from `ops` rather than from this tab ([ADR-0011](../../adr/0011-package-layout-and-dependency-direction.md)). Their point cost is the published 5-point default that prices every PUT, per rate-governor open question 3, resolved.
 
 **R6.** Gate enable and disable on `permissions.push && !archived` for the repository. When the gate fails, the action must be absent or visibly unavailable with the reason stated. Archived repositories are permanently read-only, and that is a different sentence from "you lack push".
 
