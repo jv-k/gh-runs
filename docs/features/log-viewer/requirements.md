@@ -16,7 +16,7 @@ Read a Job's log inside the tool, rendered the way the web UI renders it (folded
 
 **R3.** Strip the UTF-8 BOM carried on the first line. It must never reach the display, and it must never be counted as part of the first line's content.
 
-**R4.** Strip the 29-character ISO timestamp prefix from every line by default, and provide a toggle that restores it. When the toggle is on, the restored prefix must be byte-identical to the one the API sent.
+**R4.** Strip the 29-character ISO timestamp prefix from every line by default, and provide a toggle that restores it. When the toggle is on, the restored prefix must be byte-identical to the one the API sent. The toggle is the view's session state, not a [settings](../settings/requirements.md) key: showing timestamps is mechanism, and settings hold intent (settings R2).
 
 **R5.** Present each `##[group]` … `##[endgroup]` span as one collapsible fold, labelled with the text following the `##[group]` marker and collapsed by default. Folds must be expandable and re-collapsible.
 
@@ -30,7 +30,7 @@ Read a Job's log inside the tool, rendered the way the web UI renders it (folded
 
 **R10.** Suppress colour when `NO_COLOR` is set, and remain fully legible without it, which R9 guarantees.
 
-**R11.** Provide an explicit "download whole Run" export that fetches the run-level archive and writes it to disk as received. This is the one place where fetching everything is the user's actual intent.
+**R11.** Provide an explicit "download whole Run" export that fetches the run-level archive and writes it to disk as received. This is the one place where fetching everything is the user's actual intent. The archive is written as the single file received, not unpacked, because unpacking assumes a directory the export was not asked for.
 
 **R12.** Never derive a Job name, a Step name, or any other domain value from a filename inside the archive. Archive filenames are lossily sanitised and cannot be reversed. Correlate by index if correlation is ever needed.
 
@@ -48,9 +48,13 @@ Read a Job's log inside the tool, rendered the way the web UI renders it (folded
 
 **R18.** Render an empty state (not a blank pane and not an error) when a Job's log has no content, whatever the cause: an in-progress Job, a Job that emitted no log content, or logs already deleted.
 
-**R19.** Never emit raw terminal control sequences from log content to the terminal. Whether they are interpreted or stripped is an open question. That they must not corrupt the display is not.
+**R19.** Strip terminal control sequences (ANSI escapes) from log content rather than interpreting them, and never emit a raw control sequence to the terminal. R7's marker styling and R9's text-first distinctions carry the meaning, so nothing legible is lost by stripping, while interpreting arbitrary sequences in a pane the tool does not fully control risks corrupting the display.
 
 **R20.** Render to a frame from held log content alone, with no live terminal and no network, and verify that frame with golden-file tests. The goldens must cover at minimum: the BOM stripped from the first line (R3), the 29-character timestamp prefix absent by default and byte-identically restored when toggled (R4), `##[group]`/`##[endgroup]` spans folded and labelled (R5), and `##[error]` and `##[warning]` lines styled apart from ordinary lines and from each other (R7). Every one of those is a byte-level transformation of text the API sent, applied to content the tool did not author and cannot predict. A golden compares exactly that, and it is the only check here that would notice a fold quietly swallowing a line or a prefix returning one character short.
+
+**R21.** Provide a search within the open log: a case-insensitive find that marks matches and moves between them. A Job log has no upper bound on size, and where the folds (R5) do not structure it, search is the only navigation a long log offers. The search runs over the already-fetched content in memory and issues no request.
+
+**R22.** Soft-wrap long lines by default, wrapping at the pane width rather than scrolling horizontally or truncating. A log is one column of text, and stripping the 29-character timestamp prefix (R4) already returns 29% of the width, so wrapping keeps every character visible without a horizontal scroll surface.
 
 ## Acceptance criteria
 
@@ -71,6 +75,10 @@ Read a Job's log inside the tool, rendered the way the web UI renders it (folded
 **AC8: Only the latest Attempt's logs.** A Run with more than one Attempt offers logs for the latest Attempt's Jobs only, and offers no path to a prior Attempt's logs.
 
 **AC9: Goldens hold the rendered log.** Rendering the measured 4,153-byte Job log from held content, with no terminal and no network, reproduces the stored golden byte for byte. Separate goldens fix the default view (no U+FEFF, no timestamp prefix, 12 folds collapsed and labelled), the timestamps-on view, a fold expanded, and a log carrying `##[error]` and `##[warning]` lines styled apart from ordinary lines and from each other. Changing any of those transformations fails its golden.
+
+**AC10: In-log search finds and moves between matches.** Opening a log and searching for a substring present on several lines marks every match and moves between them, and issues no request while doing so.
+
+**AC11: Long lines wrap, not truncate.** A line wider than the pane wraps to the next row rather than being cut off or requiring horizontal scroll, and no character of it is hidden.
 
 ## Constraints
 
@@ -107,19 +115,19 @@ Note also that archive filenames are **lossily sanitised**: a space-slash-space 
 
 ## Open questions
 
-**UNKNOWN: do real logs contain ANSI escape sequences?** A grep for them errored out and was never re-run. The answer decides whether R19 is satisfied by interpreting them or by stripping them. Either way the display must not corrupt.
+**Resolved: strip them (R19).** Whether a given log carries ANSI is moot: R19 now strips terminal control sequences rather than interpreting them, so the display is safe whether they are present or not. A sampled real Job log was ANSI-clean, consistent with GitHub emitting `##[…]` workflow commands rather than raw ANSI, and R7 and R9 carry the styling in colour and in text of our own.
 
-**UNKNOWN: in-progress Run and Job log behaviour** (PRD open risk R5). Whether the per-Job endpoint returns partial text, an empty body, or a 404 for a Job that has not completed is unmeasured. R18's empty state is required regardless of the answer, but the answer decides whether an in-progress Job is worth opening at all.
+**Resolved by design: R18's empty state covers it, and opening is allowed (R15, R18).** Whether the per-Job endpoint returns partial text, an empty body or a 404 for an incomplete Job, R18 renders the same empty state and R15's explicit refetch updates it, so opening an in-progress Job's log is permitted and shows whatever is served. The exact behaviour stays unmeasured, since catching a Job mid-run is timing-dependent, and the pane is correct without it. PRD risk R5 closes on this basis, resolved by design rather than by measurement, and the PRD risk table is updated to match.
 
-**UNKNOWN: what a deleted log returns.** Whether re-requesting a log after `DELETE` yields 404 or an empty 200 is unmeasured, and both must land in R18's empty state.
+**Resolved: R18 handles both, and they are not distinguished (R18).** Re-requesting a log after `DELETE` yields either a 404 or an empty 200, both of which mean no content and both of which land in R18's empty state. Measuring which means a live log DELETE, which policy forbids, and the pane behaves identically either way.
 
-**Undecided: search within a log.** Not specified. Given that a single Job log is small (4,153 bytes measured, though nothing bounds it), searching may be unnecessary or may be the main way anyone navigates a long one.
+**Resolved: yes, a minimal in-log search (R21).** A single Job log has no upper bound, and where the folds do not structure a long one, search is the main way to navigate it. R21 provides a case-insensitive find over the fetched content in memory, issuing no request.
 
-**Undecided: long-line handling.** Wrap, or horizontal scroll, or truncate with an expander. Stripping the 29-char prefix buys back 29% of the 100-column minimum (R4, [live-run-feed](../live-run-feed/requirements.md) R4a) and may make this moot.
+**Resolved: soft-wrap by default (R22).** Long lines wrap at the pane width rather than scrolling horizontally or truncating, so no character is hidden. A log is one column of text, and stripping the 29-char prefix (R4, [live-run-feed](../live-run-feed/requirements.md) R4a) already returns 29% of the 100-column minimum, which keeps most lines within the pane before wrapping applies.
 
-**Undecided: whether the timestamp toggle persists.** Settings are intent-level only (PRD), and "show timestamps" is mechanism, so this may belong to the view's session state rather than to [settings](../settings/requirements.md).
+**Resolved: view session state, not a settings key (R4).** "Show timestamps" is mechanism, and settings hold intent (settings R2, R13's test), so the toggle lives in the view's session state rather than the config file. R4 now says so. Persisting it across sessions in the local-store, as window state is, stays a later option and needs no settings key either way.
 
-**Undecided: whether the export writes one archive or unpacks it.** R11 says "as received". Whether a user who exports actually wants a directory is unasked.
+**Resolved: one archive, as received (R11).** The export writes the single zip the API returns and does not unpack it, because unpacking assumes a directory the user did not ask for and they can unpack it themselves. R11 now says so.
 
 ## Related
 
