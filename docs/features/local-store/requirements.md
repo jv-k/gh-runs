@@ -16,6 +16,8 @@ The local store persists ETags, last-seen payloads and discovery results across 
 
 **R2.** The local store must persist [repo-discovery](../repo-discovery/requirements.md)'s results (the classification of which repositories have Runs, and the recorded capability for each), so a cold start does not re-probe 163 repositories before it can paint.
 
+**R2a.** The local store must persist a Workflow's last-used Dispatch inputs, keyed by the host-qualified repository and the Workflow `path`, so [workflow-dispatch](../workflow-dispatch/requirements.md) R25 can pre-fill the form. The store holds the values verbatim and reconciles nothing: matching a remembered value against the current ref's schema is the form's job (R25), not the store's. Like every entry here the record is derived and safe to delete (R11), and losing it costs only the pre-fill.
+
 **R3.** The local store must record, per entry, when it was last revalidated, taken from the injected clock.
 
 **R4.** The local store must not persist a Purge's crawl: not the resolved Run IDs, not the pages walked, not the progress. [ADR-0006](../../adr/0006-stateless-bulk-jobs.md) makes the filter the durable state precisely to avoid a job store, and persisting a ~287-page unfiltered crawl would rebuild that job store (with its schema, its reconciliation, and its capacity to disagree with reality) under a different name.
