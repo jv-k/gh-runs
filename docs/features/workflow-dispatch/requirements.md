@@ -44,19 +44,17 @@ Dispatch a Workflow from a typed form generated from that Workflow's YAML at the
 
 **R14.** Gate Dispatch on `permissions.push && !archived` for the repository, and treat the API as the final authority. A 403 can arrive despite `permissions.push: true` because fine-grained PATs expose no scopes.
 
-**R15.** Offer no Dispatch for a Workflow in state `deleted`. There is no YAML at the head of any branch to fetch, so R2's order cannot complete.
+**R15.** Offer no Dispatch for a Workflow in state `deleted`. A Dispatch by workflow ID is rejected with a 404 whatever ref it names (measured), because the Workflow no longer exists to target. The YAML itself survives in history and is fetchable at an older ref, so the barrier is the missing Workflow, not missing YAML. See [docs/research/workflow-dispatch-measurements.md](../../research/workflow-dispatch-measurements.md).
 
-**R16.** Report a Dispatch as accepted on a 204 and display no Run ID. The response carries none, and inventing one would be a lie about the central object of this tool.
+**R16.** Send `return_run_details: true` on every Dispatch, and report the Run from the 200 response's `workflow_run_id`. The response carries the Run ID (measured), so a Dispatch resolves to a known Run with no inference. The 204-with-no-Run-ID response is only the `return_run_details: false` path, which the tool never takes. See [docs/research/workflow-dispatch-measurements.md](../../research/workflow-dispatch-measurements.md).
 
-**R17.** Correlate a Dispatch to its Run on a best-effort basis by polling for Runs of that Workflow with `event=workflow_dispatch` at or after the Dispatch's timestamp, and label the match as probable, never as certain.
+**R17 through R19 (retired).** The Dispatch-to-Run correlation poll, its probable-not-certain label, and its ambiguity handling are superseded by R16's `return_run_details` path, which returns the Run ID directly. Their numbers are retired rather than reused. Correlation survives only as the deferred [notifications](../notifications/requirements.md) feature's 2.1 starting point, defined in [CONTEXT.md](../../CONTEXT.md) under *Correlation*.
 
-**R18.** State the ambiguity when correlation finds more than one candidate. Two people dispatching the same Workflow at once cannot be reliably disambiguated, and the tool must say so rather than pick.
-
-**R19.** Never report a Dispatch as failed because correlation failed or timed out. The 204 already established that it was accepted. Only the linkage is unknown, and the Feed remains the source of truth.
-
-**R20.** Provide a non-interactive Dispatch. [ADR-0002](../../adr/0002-go-gh-with-dual-distribution.md) ships a standalone binary, and a user without `gh` installed has no `gh workflow run` to fall back on. Command and flag spelling belong to [cli-surface](../cli-surface/requirements.md).
+**R20.** Provide a non-interactive Dispatch, and surface the Run ID R16 returns. [ADR-0002](../../adr/0002-go-gh-with-dual-distribution.md) ships a standalone binary, and a user without `gh` installed has no `gh workflow run` to fall back on. Command and flag spelling belong to [cli-surface](../cli-surface/requirements.md).
 
 **R21.** Render the generated form to a frame from held state alone, with no live terminal and no network, and verify that frame with golden-file tests covering one control of each type R6 declares: free text for `string`, a toggle for `boolean`, a select for `choice` and for `environment`, and numeric entry for `number`. The form is generated from YAML the tool did not write and cannot predict, so the painted frame is the only evidence R6's mapping held. A golden over the checked-in `deployment.yml` fixture fixes the five-control case this document is specified against, and R10's promise that a `choice` is a select rather than free text is a claim about a widget, which is a thing only a rendering test can check.
+
+**R22.** Offer no direct Dispatch for a Workflow in a disabled state. A Dispatch to a disabled Workflow is rejected with a 422 (measured), so the tool surfaces enabling the Workflow first rather than issuing a Dispatch that will fail. Enabling is [workflow-management](../workflow-management/requirements.md) R5's operation, which makes reaching a Run two steps, not one. See [docs/research/workflow-dispatch-measurements.md](../../research/workflow-dispatch-measurements.md).
 
 ## Acceptance criteria
 
@@ -70,9 +68,9 @@ Dispatch a Workflow from a typed form generated from that Workflow's YAML at the
 
 **AC4: No untyped fallback exists.** A Workflow whose YAML cannot be parsed produces an error naming the ref and the `path`, and no key=value entry surface appears anywhere in the product.
 
-**AC5: Correlation is probable, never certain.** On a 204, the UI reports the Dispatch accepted and shows no Run ID. Where a correlated Run is found it is labelled probable. Where two candidates match the window, the UI states the ambiguity rather than selecting one. Where none is found before the window closes, the Dispatch is still reported as accepted.
+**AC5: The Run ID comes from the response.** On a 200, the UI reports the Dispatch accepted and shows the Run ID from `workflow_run_id`, linked to its Run. The tool sends `return_run_details: true` on every Dispatch, so it never depends on the 204 path and never labels a Run as probable or states a correlation ambiguity.
 
-**AC6: The gate costs no request.** Dispatch is unavailable for an archived repository and for one where `permissions.push` is false, determined with no API request beyond the repository listing that already ran. A Workflow in state `deleted` offers no Dispatch.
+**AC6: The gate costs no request.** Dispatch is unavailable for an archived repository and for one where `permissions.push` is false, determined with no API request beyond the repository listing that already ran. A Workflow in state `deleted` offers no Dispatch, and a disabled Workflow offers enabling first rather than a direct Dispatch (R22).
 
 **AC7: Goldens hold the generated form.** Rendering the form from the held `deployment.yml` fixture, with no terminal and no network, reproduces the stored golden byte for byte: `tag_name` as free text marked required, `platforms` as free text pre-filled with its default, `release` and `dry_run` as toggles each pre-filled with their declared `true`, and `environment` as a select pre-filled with `production`. A further golden covers a Workflow declaring `choice` and `number` inputs, rendering a select over the declared `options` and a numeric entry, and one declaring an unrecognised type, rendering free text labelled as unrecognised. Changing any control's type fails its golden.
 
@@ -95,15 +93,15 @@ Five inputs, five controls, three of R6's five types. Neither `choice` nor `numb
 | Fact | Source | Consequence |
 |---|---|---|
 | `type: environment` requires a separate call to `/repos/{o}/{r}/environments` | Measured | R7. One extra request, and only when the type appears |
-| **Dispatch returns 204 with no Run ID** | Measured | R16–R19: correlation is best-effort and **racy by construction** |
+| **Dispatch with `return_run_details: true` returns 200 with `{workflow_run_id, run_url, html_url}`** | Measured (#27) | R16: the Run ID comes from the response, so there is no correlation poll. The 204 is only the `return_run_details: false` path |
+| **A Dispatch to a disabled Workflow is rejected with 422** | Measured (#33) | R22: enable then dispatch is two steps, not one |
+| **A deleted Workflow's YAML is fetchable at an older ref, but a Dispatch there is rejected with 404** | Measured (#34) | R15: the barrier is the missing Workflow, not missing YAML |
 | **Max 25 input properties** | GitHub's official OpenAPI spec, `maxProperties: 25` on `inputs` | R13 reports 25 as authoritative. The schema enforces it, so the API's rejection is predictable rather than opaque |
 | Total payload ≤ 65,535 chars | Community discussion 120093. **Not in the official REST docs for this endpoint (UNVERIFIED)** | R13 reports it labelled community-sourced. The official spec carries 65,535 for gist comments, check-run output and advisory descriptions, never for Dispatch inputs |
 | Repo permissions and `archived` ride along free on `/user/repos` | PRD | Gating R14 costs nothing |
 | Fine-grained PATs expose no `x-oauth-scopes` | PRD | Pre-flight checks are impossible. The API is final authority (R14) |
 | Archived repos are permanently read-only | PRD | They can never be dispatched to |
-| A 304 costs zero primary rate limit | [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md) | R17's correlation poll is nearly free, and a 304 is itself the "no new Run yet" signal |
-| Filtered listing caps at 1,000, reaching the **newest** matches | [ADR-0005](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) | Harmless for R17: the Run just dispatched is the newest match, which is the end of the list the cap does reach. `total_count` is still not to be trusted |
-| 2.0.0 serves github.com only | [ADR-0009](../../adr/0009-host-qualified-repo-identity.md) | n/a |
+| 2.0.0 serves github.com only | [ADR-0009](../../adr/0009-host-qualified-repo-identity.md) | The `return_run_details` 200 path is available at API version 2022-11-28, so R16 needs no fallback |
 
 ## Open questions
 
@@ -111,11 +109,11 @@ Five inputs, five controls, three of R6's five types. Neither `choice` nor `numb
 
 **UNKNOWN: where the 65,535-character limit comes from, and whether it applies here at all.** The two limits arrived together as "research" and only one of them survived being checked. 65,535 is not in the official REST documentation for this endpoint. The official spec carries that number for gist comments, check-run output and advisory descriptions, and never for Dispatch inputs. It traces to community discussion 120093 rather than to documentation. R13 must surface it as community-sourced and unverified rather than attribute it to GitHub, and the API's rejection stays the only true signal for it.
 
-**UNKNOWN, and it would delete R16 to R19: does `return_run_details` work?** GitHub's current OpenAPI spec (v1.1.4, committed 2026-07-14) adds a `return_run_details: boolean` body parameter to "Create a workflow dispatch event". With it `false`, the response is the 204 this document is built on. With it `true`, the documented response is **200 carrying `{workflow_run_id, run_url, html_url}`**, all three required. The spec and the rendered documentation agree independently, and **neither was verified by dispatching**, because a Dispatch is a write and was out of the measurement's remit. If it works, the Run ID arrives in the response itself: R16's "display no Run ID" is simply wrong, and R17 to R19's correlation poll, its probable-not-certain label, its ambiguity case and the entire race are deletable rather than hedgeable. That is the largest single simplification available to this feature. Confirming it needs exactly one live dispatch against a repository the user owns. R16 to R19 stand unchanged until someone runs it, because a documented response nobody has seen is not a measurement. The PRD's constraints table records the same supersession.
+**Resolved: `return_run_details` works, and R16 to R19 collapse (#27).** A live dispatch with the parameter `true` returned 200 carrying `{workflow_run_id, run_url, html_url}`, all three populated, the id resolving to the dispatched Run. R16 now sends the parameter and reads the Run ID from the response, and R17 to R19 are retired: the correlation poll, its probable-not-certain label, and its ambiguity case are gone rather than hedged. This was the largest single simplification available to this feature. Verbatim in [docs/research/workflow-dispatch-measurements.md](../../research/workflow-dispatch-measurements.md), and the PRD's constraints table records the same. Correlation survives only as the deferred [notifications](../notifications/requirements.md) feature's 2.1 starting point.
 
-**UNKNOWN: does the API accept a Dispatch for a Workflow in a `disabled_*` state?** Unmeasured. It decides whether [workflow-management](../workflow-management/requirements.md) should offer "enable, then dispatch" as one flow or two.
+**Resolved: no, a disabled Workflow rejects a Dispatch with 422 (#33).** So [workflow-management](../workflow-management/requirements.md) offers "enable, then dispatch" as two flows, not one, and R22 carries the rule. This measures `disabled_manually`. `disabled_inactivity` is not inducible on demand and stays inferred. Verbatim in [docs/research/workflow-dispatch-measurements.md](../../research/workflow-dispatch-measurements.md).
 
-**UNKNOWN: is a `deleted` Workflow's YAML still fetchable at an older ref, and would a Dispatch at that ref be accepted?** R15 declines to ask, but the question is real: `deleted` means the file is gone from the head of the branch, not from history.
+**Resolved: the YAML is fetchable at an older ref, the Dispatch there is not (#34).** At a commit predating the deletion the YAML returns 200, but a Dispatch by workflow ID at that ref is rejected with 404, because the Workflow no longer exists to target. R15's outcome stands and its rationale is corrected accordingly. A run-less deleted Workflow also vanishes from the Actions API rather than showing a `deleted` state, though a Workflow with Run history was not measured. Verbatim in [docs/research/workflow-dispatch-measurements.md](../../research/workflow-dispatch-measurements.md).
 
 **UNKNOWN: can Actions-write be separated from `push` for a fine-grained PAT?** R14 gates on `push` as the conservative choice. The question is unanswerable pre-flight regardless, since fine-grained PATs expose no scopes.
 
@@ -123,19 +121,17 @@ Five inputs, five controls, three of R6's five types. Neither `choice` nor `numb
 
 **Undecided: does the ref picker offer tags as well as branches?** Unasked.
 
-**Undecided: how long is the correlation window, and what happens when a Dispatch queues behind a concurrency group and no Run appears for minutes?** R19 makes a timeout non-fatal, which bounds the damage but does not answer it.
+**Resolved as moot: there is no correlation window.** `return_run_details` returns the Run ID in the Dispatch response (#27), so nothing polls and nothing waits. A Dispatch that queues behind a concurrency group still returns its Run ID immediately.
 
 **Undecided: should the last-used inputs for a Workflow be remembered?** It would be the largest single ergonomic win after the typed form itself, and it is state, not intent, so it does not obviously belong in [settings](../settings/requirements.md) (PRD: settings are intent-level only).
 
 ## Related
 
 - [ADR-0002: Build on go-gh, ship as both a gh extension and a standalone binary](../../adr/0002-go-gh-with-dual-distribution.md). The standalone-coherence argument behind R20.
-- [ADR-0004: Liveness via conditional ETag polling](../../adr/0004-conditional-polling-for-liveness.md). Why R17's poll is affordable.
-- [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md). Why the 1,000 cap does not hurt R17.
 - [ADR-0008: A full CLI surface, mirroring gh's flags](../../adr/0008-full-cli-surface-despite-gh-overlap.md)
 - [ADR-0009: Host-qualified repo identity](../../adr/0009-host-qualified-repo-identity.md)
 - [workflow-management](../workflow-management/requirements.md) lists the Workflows and the `path` and `state` this form depends on.
-- [live-run-feed](../live-run-feed/requirements.md) is where R17's correlated Run appears, and the source of truth when correlation fails.
-- [run-detail](../run-detail/requirements.md) is where a correlated Run leads.
+- [live-run-feed](../live-run-feed/requirements.md) is where the dispatched Run appears, and the source of truth for Run state.
+- [run-detail](../run-detail/requirements.md) is where the dispatched Run leads.
 - [repo-discovery](../repo-discovery/requirements.md) supplies the free `permissions` and `archived` behind R14.
 - [cli-surface](../cli-surface/requirements.md) owns R20's command and flag spelling.

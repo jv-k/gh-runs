@@ -81,6 +81,7 @@ The list is described as inclusive, not exhaustive, which is why R3 exists.
 | Any filter caps listing at 1,000 while `total_count` reports 18,258 | [ADR-0005](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) | R15, "the tool never lies about counts" (PRD success criterion 6) |
 | No cross-repository Run query exists | [ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md) | A cross-repo Workflow view would be a fan-out too (see Open questions) |
 | `gh run list -w` excludes disabled Workflows without `-a` | gh's behaviour, per [ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md) | R16 |
+| A Dispatch to a disabled Workflow is rejected with 422 | Measured (#33), [workflow-dispatch](../workflow-dispatch/requirements.md) R22 | Enabling a disabled Workflow and dispatching it are two steps. R5's enable is the first |
 | 2.0.0 serves github.com only | [ADR-0009](../../adr/0009-host-qualified-repo-identity.md) | Repo identity is `host/owner/name` here as everywhere |
 
 ## Open questions
@@ -108,7 +109,7 @@ The list is described as inclusive, not exhaustive, which is why R3 exists.
 - [ADR-0005: Filtered listing for the Feed, unfiltered crawl for a Purge](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md). The 1,000 cap behind R15.
 - [ADR-0008: A full CLI surface, mirroring gh's flags](../../adr/0008-full-cli-surface-despite-gh-overlap.md). The `-a` behaviour in R16.
 - [ADR-0009: Host-qualified repo identity](../../adr/0009-host-qualified-repo-identity.md)
-- [workflow-dispatch](../workflow-dispatch/requirements.md) is the sibling action on the same object. Its form needs the `path` this surface lists.
+- [workflow-dispatch](../workflow-dispatch/requirements.md) is the sibling action on the same object. Its form needs the `path` this surface lists, and a disabled Workflow must be enabled here before it can be dispatched (its R22).
 - [live-run-feed](../live-run-feed/requirements.md) is where Orphaned Runs are labelled and R13 navigates to.
 - [purge](../purge/requirements.md) is what R14's Runs are ultimately for.
 - [repo-discovery](../repo-discovery/requirements.md) supplies the free `permissions` and `archived` behind R6.

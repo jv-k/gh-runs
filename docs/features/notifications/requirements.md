@@ -6,6 +6,8 @@ Notifications ship in 2.1, not 2.0.0. The product owner ruled on 2026-07-16, and
 
 **The requirements below are preserved unchanged as 2.1's starting point, not deleted.** When 2.1 picks the feature up, `beeep v0.11.2` is the pin, R13 needs rewording to what a subprocess can support, and the two macOS caveats ship with it. See [ADR-0013](../../adr/0013-dependency-pins.md) and [PRD](../../PRD.md) Scope.
 
+**Correlation is superseded, and 2.1 will not need it.** Since these requirements were written, [workflow-dispatch](../workflow-dispatch/requirements.md)'s `return_run_details` was measured to return the Run ID in the Dispatch response (#27), which retired that feature's R16 to R19 and the whole correlation mechanism for 2.0.0 (see [CONTEXT.md](../../CONTEXT.md) *Correlation*). R6, AC8 and AC9 below are written against correlation and preserved as-is, but when 2.1 builds this feature the Dispatch event should fire on the Run ID the Dispatch already returned, with no correlation, no probable label and no ambiguity case. The citations to workflow-dispatch R16 to R19 below name requirements that are now retired.
+
 > Terms are defined in [CONTEXT.md](../../CONTEXT.md). Status and Conclusion are two different fields: a Run **completes** on Status and **fails** on Conclusion.
 
 ## Purpose
@@ -33,7 +35,7 @@ Interrupt someone, through their operating system, when something has happened t
 
 **R5.** Use the approvals predicate for the approval event rather than a copy of it. The badge and the notification must be incapable of disagreeing, and the predicate spans two fields. See [approvals](../approvals/requirements.md) R2.
 
-**R6.** Fire the Dispatch event only where correlation resolved to exactly one Run. [workflow-dispatch](../workflow-dispatch/requirements.md) R17 labels a correlated Run probable and never certain, and R18 requires ambiguity to be stated rather than resolved by picking. A notification naming the wrong Run is worse than no notification, and a system toast has nowhere to put a hedge.
+**R6.** Fire the Dispatch event only where correlation resolved to exactly one Run. [workflow-dispatch](../workflow-dispatch/requirements.md)'s retired R17 to R19 labelled a correlated Run probable and never certain and required ambiguity to be stated rather than resolved by picking (superseded for 2.0.0, see the note above). A notification naming the wrong Run is worse than no notification, and a system toast has nowhere to put a hedge.
 
 **R7.** Keep every event other than R4's two defaults available and off.
 
@@ -88,7 +90,7 @@ Interrupt someone, through their operating system, when something has happened t
 | Status `completed` does **not** mean the Run finished its work: a fork-PR Run awaiting approval is `completed` with Conclusion `action_required` | Measured on `cli/cli`, `home-assistant/core` | R4's Dispatch event reads Status alone, so a Run that stopped for a human would read as finished. See Open questions |
 | ETags persist across sessions | [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md) | R2. A cold start is precisely when the largest batch of unseen transitions arrives |
 | A 304 costs zero primary rate limit, and the Feed already polls ~26 repositories | [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md) | R1 is free. Notifications add no polling and no Budget |
-| Dispatch returns 204 with no Run ID. Correlation is best-effort and racy by construction | PRD, [workflow-dispatch](../workflow-dispatch/requirements.md) R16–R19 | R6. The Dispatch event is only as reliable as a correlation the canon labels *probable* |
+| Dispatch once returned 204 with no Run ID, making correlation best-effort. Superseded: `return_run_details` returns the Run ID (#27) | PRD, [workflow-dispatch](../workflow-dispatch/requirements.md) retired R16–R19 | R6, preserved for 2.1. In 2.0.0 there is no correlation to be probable about |
 | Reference scale: 163 repositories, ~26 with Runs, push access to 159 | PRD, decided design | R9. "Any failure you can push to" is a dozen a day for branches that are not yours |
 | The reference repository holds ~28,700 Runs | PRD | R2's baseline is not a theoretical concern |
 | Repo permissions ride along free on `/user/repos` | PRD | R4's push-gated event costs no request to evaluate |
@@ -137,7 +139,7 @@ Interrupt someone, through their operating system, when something has happened t
 - [ADR-0007: Adaptive delete throttle, not a fixed rate](../../adr/0007-adaptive-delete-throttle.md). The intent-versus-mechanism argument R10 applies.
 - [ADR-0003: Multi-repo Feed via client-side fan-out](../../adr/0003-multi-repo-via-client-side-fanout.md). Why every repository is already being watched.
 - [approvals](../approvals/requirements.md) owns R5's predicate. The badge is the ambient state, a notification is the transition.
-- [workflow-dispatch](../workflow-dispatch/requirements.md) owns R6's correlation, and labels it probable rather than certain.
+- [workflow-dispatch](../workflow-dispatch/requirements.md) once owned R6's correlation. It now returns the Run ID directly (#27), so correlation is superseded for 2.0.0 and R6 will be reworked in 2.1.
 - [live-run-feed](../live-run-feed/requirements.md): the transitions every event is derived from, and R2's baseline.
 - [local-store](../local-store/requirements.md): the cross-session state R2 must not mistake for news.
 - [polling-scheduler](../polling-scheduler/requirements.md) sets how quickly a transition is noticed. Notifications add no polling of their own.
