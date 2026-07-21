@@ -142,7 +142,8 @@ The validation table: `FrictionNone` accepts any Input. `FrictionYN` accepts `An
 ## Confirmed proves three things
 
 ```go
-// Confirmed is proof of confirmation. Unexported fields, single use.
+// Confirmed is proof of confirmation. Unexported fields, and a shared
+// spent cell (below) makes it single use even when passed by value.
 type Confirmed struct { /* unexported */ }
 
 func (o *Ops) Execute(ctx context.Context, c Confirmed) error
@@ -152,9 +153,11 @@ A `Confirmed` in a caller's hands proves:
 
 1. **Its set came out of `Plan`**: frozen at modal open (purge R5), eligibility stamped (R10 to R12), friction priced (R7, R8). Both links are unforgeable, so this holds for every Confirmed in existence.
 2. **The priced friction was satisfied by an explicit act**: the modal's answer or the CLI's flag, once per invocation, never a stored setting (purge R9).
-3. **At most one execution**: it carries a spent flag, and a second `Execute` returns `ErrSpent` and issues nothing.
+3. **At most one execution**: it carries a spent cell, a pointer that `Confirm` allocates and every copy of the `Confirmed` shares. The first `Execute` flips it with a compare-and-swap and proceeds. A second finds it already set, returns `ErrSpent`, and issues nothing.
 
-**Single use is cheap, and the alternative is quietly wrong.** Executing one confirmation twice issues every DELETE twice: mostly 404s the second time, each logged, each spent against the write budget, and none of it anything anyone meant. The flag makes "one act, one operation" a runtime property instead of a habit.
+**Single use is cheap, and the alternative is quietly wrong.** Executing one confirmation twice issues every DELETE twice: mostly 404s the second time, each logged, each spent against the write budget, and none of it anything anyone meant. The spent cell makes "one act, one operation" a runtime property instead of a habit.
+
+**The cell is a pointer, and that is the load-bearing part.** `Execute` takes `Confirmed` by value, so a spent `bool` stored inline would flip only the callee's copy, and the next call would find it clear. A caller who copied the `Confirmed` first would launder a second execution whichever way the field was stored. A cell every copy points at is the one shape that survives both, so `Confirm` allocates an `atomic.Bool` and the value carries the pointer. `atomic.Bool` also makes the compare-and-swap safe under a concurrent `Execute`, and the pointer stays unexported like every other field, so only `Confirm` can produce one.
 
 **No expiry, deliberately.** R5 freezes the set, and purge R12 already weighed revalidation and refused it: the API's write-time rejection is the guard, synchronous with the write in a way no check of ours can be. A TTL on `Confirmed` would be a policy no requirement asks for, aimed at a race somebody else already closes.
 
@@ -173,6 +176,10 @@ A `Confirmed` in a caller's hands proves:
 **Bare tuples with rows on the side.** AC22 says the rows are the tuples `Execute` is handed, and parallel collections are the drift that wording exists to forbid.
 
 **A TTL on `Confirmed`.** Covered above: revalidation was already refused where it was cheaper.
+
+**An inline `spent bool` on `Confirmed`.** The obvious form, and it fails silently. `Execute` takes the value, so the flag flips on a copy while the caller's original stays clear, and copying the `Confirmed` before the first call defeats it outright. Recorded because a plain field is what a reader reaches for, and by-value single use needs a shared cell instead.
+
+**A consumed-set on `*Ops`.** `Ops` remembers which `Confirmed`s have run, keyed by a nonce each carries. It works and keeps `Execute` by value, but it moves the guarantee off the type built to carry it and grows unbounded state on `Ops` for what one pointer already gives. Single use stays on `Confirmed`, where the confirmation it proves already lives.
 
 **Dispatch, and Workflow enable and disable, in `Operation` now.** Both are stage 11's, their confirmation shape is that fog's to decide, and both are additive when it does: a new `Operation` value, and for the Workflow pair a fourth object pointer on Item. [ADR-0014](./0014-domain-types-and-the-budget-readout.md)'s rule prices that as a diff.
 
