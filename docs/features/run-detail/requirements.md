@@ -100,7 +100,7 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 **Conditional requests cost nothing against the primary limit.** Measured by interleaving, `used` advanced by exactly one per round (120 → 121 → 122) and that one belonged entirely to the 200. A ~3s refresh of an unchanged Run is therefore ~free against the primary limit, though we assume conservatively that 304s do count against the secondary one (~900 points/min, GET = 1 point, PRD risk R4). go-gh's own client is TTL-only and never revalidates (PRD risk R2, resolved), so those 304s come from a transport of our own ([local-store](../local-store/requirements.md) R19) rather than from the client.
 
-**The ~150ms debounce is chosen, not measured.** Its justification is arithmetic rather than empirical: eager fetching while arrow-keying a 100-row Feed costs one request per keystroke. Per ADR-0007's principle (expose intent, not mechanism), it must not become a user-facing setting.
+**The ~150ms debounce is chosen, not measured.** Its justification is arithmetic rather than empirical: eager fetching while arrow-keying a 100-row Feed costs one request per keystroke. Per ADR-0007's principle (expose intent, not mechanism), it must not become a user-facing setting. The debounce is this pane's own `tea.Tick`, not the scheduler's ([ADR-0015](../../adr/0015-the-async-model.md), which reassigned it from [polling-scheduler](../polling-scheduler/requirements.md) R9), so it runs on the tea runtime's clock rather than the scheduler's injected one. AC1 therefore asserts it by fabricating the settle message and counting the single fetch that follows, not by advancing virtual time.
 
 ## Open questions
 

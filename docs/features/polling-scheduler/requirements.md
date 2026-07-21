@@ -36,9 +36,9 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 **R8.** The scheduler must meet the Feed's liveness contract: a Run invoked elsewhere must surface within ~30s with no user interaction, and a repository already containing a Run whose Status is `queued` or `in_progress` must reflect changes within ~3s. The ~3s figure matches `gh run watch`'s default.
 
-**R9.** The scheduler must provide a debounce of ~150ms on selection settle for selection-driven fetches, so that moving the cursor through the Feed issues one request where the cursor lands rather than one request per keystroke. [run-detail](../run-detail/requirements.md) R10 is the consumer. The timing seam is the scheduler's.
+**R9.** The selection debounce is not the scheduler's, and this requirement records the reassignment. Moving the cursor through the Feed must still issue one Job request where the cursor lands rather than one per keystroke, but that ~150ms debounce on selection settle is [run-detail](../run-detail/requirements.md) R10's, owned by the `rundetail` pane as a `tea.Tick` ([ADR-0015](../../adr/0015-the-async-model.md), [ADR-0011](../../adr/0011-package-layout-and-dependency-direction.md)). The pane holds the timer, the in-flight request and the discard rule as one state machine, and routing the fetch through this scheduler would split the debounce from the fetch across the package boundary ADR-0011 refused to split. The scheduler schedules no selection-driven fetch and does not know 150ms exists. An earlier form of this requirement placed the timing seam here. ADR-0015 moved it to the pane, on the ground that the debounce and the fetch it gates are one machine, and this requirement now points there rather than claiming it.
 
-**R10.** The scheduler must make a response attributable to the request that asked for it, so that a response whose reason has passed (a Job fetch for a Run the cursor has already left) can be discarded rather than rendered.
+**R10.** The detail fetch's discard rule is the pane's, and this requirement records where it lives. A Job fetch for a Run the cursor has already left must be discardable rather than rendered, which [run-detail](../run-detail/requirements.md) R11 does by tagging each response with its Run ID and dropping any whose Run is no longer selected ([ADR-0015](../../adr/0015-the-async-model.md)). The scheduler's own per-repository poll responses are never discarded: a superseded poll is skipped before it fires, and a late one emits as the freshest data held ([ADR-0018](../../adr/0018-the-fanout-concurrency-shape.md)). So the scheduler owns no attribution machinery, and the discard the earlier wording asked of it belongs to the pane.
 
 ### Budget
 
@@ -79,7 +79,7 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 ### Seams
 
-**R20.** All of the scheduler's timing must come from an injected clock. Every interval, every tier decision, every debounce and every backoff must be driven by it, with no reliance on wall-clock time.
+**R20.** All of the scheduler's timing must come from an injected clock. Every interval, every tier decision and every backoff must be driven by it, with no reliance on wall-clock time. The one timer this document once listed here and no longer owns is the selection debounce: it is the `rundetail` pane's `tea.Tick` (R9, [run-detail](../run-detail/requirements.md) R10), which runs on the tea runtime's clock rather than this injected one, so run-detail AC1 asserts it by fabricating the settle message rather than by advancing virtual time.
 
 **R21.** Tests of the scheduler must be deterministic and instant: a test asserting the ~30s slow tier must advance virtual time and complete in microseconds, and no test may sleep through a real interval. This is a design constraint from day one, not a retrofit. A scheduler that reads the wall clock directly cannot be made testable later without rewriting its control flow.
 
@@ -111,9 +111,9 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 **AC12: Foreign consumption counts.** With the rate-governor reporting remaining Budget consumed by traffic the scheduler did not issue, the scheduler demotes exactly as it would for its own consumption.
 
-**AC13: Debounce.** Twenty selection changes within 150ms of virtual time produce exactly one selection-driven fetch: the one for the final selection.
+**AC13: The selection debounce is the pane's.** The ~150ms debounce that collapses cursor movement into one Job fetch is [run-detail](../run-detail/requirements.md)'s, owned by `rundetail` as a `tea.Tick` (R9, [ADR-0015](../../adr/0015-the-async-model.md)), and it is asserted by run-detail AC1. That test fabricates the settle message rather than advancing this scheduler's virtual clock, because a `tea.Tick` runs on the tea runtime's clock and not the injected one. This scheduler issues no selection-driven fetch, so it has no debounce of its own to assert.
 
-**AC14: Stale response discarded.** A response for a request whose selection has since moved is discardable and is attributable to the superseded request.
+**AC14: Stale detail response discarded.** A Job response for a request whose selection has since moved is discardable and attributable to the superseded request. This is the detail pane's discard rule (R10, [run-detail](../run-detail/requirements.md) R11, AC2), done by tagging the response with its Run ID. The scheduler's own per-repository poll responses are never discarded: they emit as the freshest data held ([ADR-0018](../../adr/0018-the-fanout-concurrency-shape.md)).
 
 **AC15: Concurrency bound.** At no instant of virtual time are more than the configured number of requests in flight. No user-facing setting alters the bound.
 
@@ -179,6 +179,6 @@ The scheduler decides which repositories are revalidated and how often, so that 
 - [repo-discovery](../repo-discovery/requirements.md) supplies R2's poll set.
 - [local-store](../local-store/requirements.md) supplies R1's ETags, and its R19 owns the transport PRD risk R2 resolved into.
 - [live-run-feed](../live-run-feed/requirements.md): R8 meets its R27 and R16 meets its R30.
-- [run-detail](../run-detail/requirements.md) consumes R9's debounce and R5's fast tier.
+- [run-detail](../run-detail/requirements.md) owns the selection debounce R9 and R10 point to (ADR-0015), and consumes R5's fast tier for its live refresh.
 - [purge](../purge/requirements.md): its open question 8, which this feature's open question 5 owns. Purge's open question 5 is the `rel="next"` terminal signal and is a different question entirely.
 - [settings](../settings/requirements.md) owns the intent-level share R12 permits.
