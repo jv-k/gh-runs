@@ -74,7 +74,9 @@ So this is a single bytes-first view led by Caches rather than an Artifact brows
 
 **R23.** Route multi-row deletion through the rate governor rather than deleting as fast as the list allows.
 
-**R24.** Report bytes reclaimed when a deletion completes, and adjust the displayed totals by exactly the deleted rows' sizes.
+**R23a.** Multi-row deletion MUST reuse the Purge's failure contract ([purge](../purge/requirements.md) R18–R22) wholesale: rate-limit responses feed the throttle's backoff and are not failures, permission and unexpected errors skip the row and continue, 50 consecutive failures circuit-break, and the summary groups failures by reason with a one-key retry of the recorded failures only. The all-repos scope can span 163 repositories, so the contract written for a long operation earns its weight here too, and one failure contract across the Purge, run lifecycle and this view beats three.
+
+**R24.** Report bytes reclaimed when a deletion completes, and adjust the displayed totals by exactly the deleted rows' sizes. A subsequent refresh MUST NOT raise the total back above this adjusted figure on account of the just-deleted rows, so an `active_caches_size_in_bytes` that lags a deletion never reads as a failed reclaim.
 
 ### Seams
 
@@ -160,23 +162,23 @@ setup-go-macOS-arm64-go-1.26.5-20b85b5b8   302,421,029
 
 ## Open questions
 
-**UNKNOWN: is the per-repository cache size limit readable by a non-admin?** Displaying "10.59 GB / limit" would turn a number into a judgement, and R1's total is otherwise context-free. Do not invent the limit: if no endpoint reachable by a non-admin token returns it, the view shows the total alone.
+**Resolved: no, show the total alone (R1).** `GET /repos/{o}/{r}/actions/cache/usage` returns `active_caches_size_in_bytes` and `active_caches_count` and no limit (measured), and the per-repository limit is an organisation or enterprise policy rather than a field a non-admin repository token can read. So the view shows the total context-free, as R1 already does, and invents no limit.
 
-**UNKNOWN: does deleting by key remove every Cache sharing that key?** [CONTEXT.md](../../CONTEXT.md) defines a Cache as scoped to a repository *and a ref*, so one key may correspond to several Caches across refs. R16 targets the id precisely because the blast radius of a key-targeted delete is unmeasured. Measure before offering key-targeted deletion anywhere.
+**Resolved: never offer key-targeted deletion, so the blast radius is moot (R16).** R16 targets the id, which is precise, so a key-targeted delete is never issued and its unmeasured blast radius cannot bite. [CONTEXT.md](../../CONTEXT.md) defines a Cache as scoped to a repository and a ref, so one key may name several Caches, and measuring the effect of a key delete would mean a live Cache DELETE, which policy forbids. Id-targeting removes the reason to.
 
-**UNKNOWN: does the 1,000-result cap apply to Cache or Artifact listing?** [ADR-0005](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) measured it on Run listing under a filter. At 83 and 581 neither came near it, and the Artifact enumeration paginated to 6 pages without truncating. R2 makes the Cache list honest either way, but no equivalent oracle protects R3's Artifact total.
+**Resolved: R2 and R3 keep the view honest either way.** For Caches, `active_caches_count` is the oracle R2 reconciles against, so a truncated list is labelled incomplete while R1's total stands. For Artifacts, R3 labels the total an estimate whenever the enumeration cannot complete. [ADR-0005](../../adr/0005-hybrid-filtered-live-unfiltered-purge.md) measured the cap on Run listing under a filter, and whether it reaches these endpoints is unmeasured, since no repository with enough Caches or Artifacts was found (83 and 581 did not come near it). The design does not depend on the answer.
 
-**UNKNOWN: does `active_caches_size_in_bytes` reflect a deletion immediately?** R24 adjusts the total locally by the deleted rows' sizes. Whether a subsequent refresh agrees, or lags, is unverified. A total that jumps back up after a successful reclaim reads as a bug.
+**Resolved: hold R24's local adjustment, a refresh does not bounce the total up (R24).** R24 now forbids a refresh from raising the total back above the locally-adjusted figure on account of the just-deleted rows, so an endpoint that lags a deletion never reads as a failed reclaim. Whether `active_caches_size_in_bytes` lags is unmeasured, because confirming it means a live Cache DELETE, which policy forbids.
 
 **Resolved: an expired Artifact keeps its original `size_in_bytes`.** 30 of 30 sampled expired Artifacts reported a non-zero size and none reported zero: 23 on `kubernetes/kubernetes`, ranging 13,852 to 234,131 bytes, and 7 on `cli/cli` at ~258 to 259 KB apiece. R10 no longer needs to be correct either way, and it now states the measured case. The size is always present, and it is always a lie about what deleting the Artifact reclaims, which is precisely what R9's tombstone and R11's zero-byte confirmation exist to say out loud.
 
-**UNKNOWN: do these endpoints support ETag revalidation?** [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)'s free 304s were measured against a Run listing. This view is opened and refreshed deliberately rather than polled, so nothing here depends on the answer.
+**Resolved: not load-bearing.** [ADR-0004](../../adr/0004-conditional-polling-for-liveness.md)'s free 304s were measured against a Run listing. This view is opened and refreshed deliberately rather than polled, so conditional revalidation is an optimisation it does not require and nothing here depends on the answer. Left unmeasured.
 
 **Resolved: both, and the person chooses. The cross-repo rollup is the default.** "Which of my 163 repositories is hoarding Caches?" is the question this view exists to answer, and the per-repo view cannot answer it at all, so the rollup leads. It is affordable at one request per repository over the fan-out [ADR-0003](../../adr/0003-multi-repo-via-client-side-fanout.md) already builds, and `active_caches_size_in_bytes` is exact and free per repository (PRD). `this-repo` stays available as a scope for the case where you are cleaning one repository deliberately. [settings](../settings/requirements.md) R19 owns the setting and defines what `this-repo` resolves to.
 
 **R0 now carries this into the requirements, which is where it was missing.** This resolution said "both code paths must exist" while R1 and the Purpose line specified one, describing a single repository's totals throughout. A decision recorded only in an open question is a decision an implementer reads last, and this one changes the shape of the view's top-level state. R0 is the normative form. Rows 5 and 20 below still read "the repository" and now mean each repository in scope.
 
-**Undecided: should multi-row deletion reuse a Purge's failure contract wholesale?** [purge](../purge/requirements.md) R18–R22 define 404-as-success, rate-limit-is-not-failure, and a 50-failure circuit breaker. R22 adopts the first. The other two are written for an operation lasting hours. 83 Caches is a minute's work, and whether the machinery is worth its weight here is unasked.
+**Resolved: yes, wholesale (R23a).** R22 already adopts 404-as-success, and R23a now adopts the rate-limit-is-not-a-failure rule and the 50-failure breaker too. The all-repos scope can span 163 repositories, so the contract written for a long operation is not overkill at that scale, and one failure contract shared across the Purge, run lifecycle and this view is simpler than a storage-specific variant. run-lifecycle R21 makes the same choice.
 
 ## Related
 
