@@ -30,7 +30,7 @@ Those two are the floor. Everything below stands on them.
 | **11** | **workflow-management**, **workflow-dispatch** | Independent of the Feed. Parallelisable with 9 and 10. |
 | **12** | **approvals** | A predicate and a badge over the Feed. |
 | **13** | **settings**, the view | The view is last. The file was stage 0. |
-| **14 (2.1)** | **notifications**, deferred | Out of 2.0.0 scope, deferred to 2.1 ([ADR-0013](./adr/0013-dependency-pins.md), [PRD](./PRD.md) Scope). Four upstreams when 2.1 builds it: approvals' predicate, the Feed's transitions, local-store's baseline, dispatch's correlation. Last then, and last now. |
+| **14 (2.1)** | **notifications**, deferred | Out of 2.0.0 scope, deferred to 2.1 ([ADR-0013](./adr/0013-dependency-pins.md), [PRD](./PRD.md) Scope). Four upstreams when 2.1 builds it: approvals' predicate, the Feed's transitions, local-store's baseline, and dispatch's returned Run ID (correlation is superseded, #27). Last then, and last now. |
 
 **Stages 0 to 13 are 2.0.0. Stage 14 is 2.1.** notifications defers to 2.1 because delivery cannot be confirmed on macOS from a precompiled binary ([ADR-0013](./adr/0013-dependency-pins.md)): `osascript` exits 0 whether or not a toast rendered. [settings](./features/settings/requirements.md) R11's notification options defer with it, so the last thing 2.0.0 builds is stage 13, the Settings view. When 2.1 builds notifications it is still last, standing on the same four upstreams.
 

@@ -62,9 +62,9 @@ This closes purge open question 8.
 
 ## The Dispatch correlation poll is not a tier
 
-If [workflow-dispatch](../features/workflow-dispatch/requirements.md)'s verification of `return_run_details` shows the correlation race still exists, the dispatch path owns a bounded, purpose-built fetch loop, following the pane-owned shape [ADR-0015](./0015-the-async-model.md) gave the detail pane. It rides the same transport chain, so ADR-0018's limiter bounds it and the governor accounts it with no new rules, and R10's attributability applies: a correlation response whose dispatch context has passed is discardable.
+There is no Dispatch correlation poll. [workflow-dispatch](../features/workflow-dispatch/requirements.md)'s `return_run_details` verification (#27) confirmed the Dispatch response carries the Run ID, so nothing polls to correlate a Dispatch to its Run, and whether such a poll fits a tier is moot. Had the race survived, the dispatch path would have owned a bounded, pane-owned fetch loop following [ADR-0015](./0015-the-async-model.md)'s detail-pane shape, riding the same transport chain so ADR-0018's limiter bounded it and the governor accounted it with no new rules. It did not survive, so no such loop exists.
 
-"Fits no tier in R5" was the answer, not the problem. Tiers are steady-state, repository-level policy computed from Status and visibility (R4, R6). An expectant poll is event-driven, short-lived, and bound to one user action, and forcing it into the tier model means entry and exit rules keyed to something that is not Status, for a case the verification may delete outright. Whether the loop is needed at all, and its bounds, stay with workflow-dispatch.
+"Fits no tier in R5" was the right instinct regardless. Tiers are steady-state, repository-level policy computed from Status and visibility (R4, R6), and an expectant poll would have been event-driven, short-lived and bound to one user action, which is not Status. The point is now settled by there being nothing to poll.
 
 ## Considered Options
 
@@ -90,7 +90,7 @@ If [workflow-dispatch](../features/workflow-dispatch/requirements.md)'s verifica
 
 **Demoting the Feed for the crawl's duration.** Spends visible liveness on a one-off burst R8a was explicitly sized to absorb silently.
 
-**A fourth, expectant tier for Dispatch.** Extends the tier model beyond Status for a mechanism that `return_run_details` may make unnecessary.
+**A fourth, expectant tier for Dispatch.** Would have extended the tier model beyond Status for a mechanism `return_run_details` made unnecessary (#27): the Dispatch response carries the Run ID, so there is nothing to poll.
 
 ## Consequences
 

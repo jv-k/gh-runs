@@ -102,7 +102,7 @@ The condition where the current burn rate would exhaust the remaining primary al
 _Avoid_: Load, congestion, running low (a small remaining count is not Pressure if nothing is spending it).
 
 **Correlation**:
-The best-effort linking of a Dispatch to the Run it triggered, when the trigger returns no Run ID and the link must be inferred from event type and timestamp. Probable, never certain: a correlated Run is our best guess, not a fact the API confirmed.
+The best-effort linking of a Dispatch to the Run it triggered, when the trigger returns no Run ID and the link must be inferred from event type and timestamp. Probable, never certain: a correlated Run is our best guess, not a fact the API confirmed. **Superseded for 2.0.0**: `return_run_details: true` returns the Run ID in the Dispatch response (measured, #27), so 2.0.0 does not correlate. The term is preserved only for the deferred [notifications](./features/notifications/requirements.md) feature (2.1), whose R6 was built on it and which will be revisited when 2.1 is built.
 _Avoid_: Match, association (those imply a certainty Correlation deliberately withholds).
 
 **Baseline**:
