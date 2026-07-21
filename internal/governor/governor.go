@@ -28,13 +28,14 @@ const (
 )
 
 // Readout is the Budget Readout (CONTEXT.md): what the governor observed
-// about the primary limit at a moment. An observation, never a policy,
-// and never the Budget, which is the input it is most easily confused with.
+// about the account's rate limiting at a moment. An observation, never a
+// policy, and never the Budget, which is the input it is most easily confused with.
 type Readout struct {
 	Remaining int       // primary allowance left, from the last response's headers (R5)
 	Reset     time.Time // the reset or resume instant. Zero when none is derivable (R9)
 	Pressure  bool      // R8a's projection. Never true while burn is zero
-	Exhausted bool      // authoritative for R9, live-run-feed R30, polling-scheduler R16
+	Exhausted bool      // authoritative for R9, live-run-feed R30, polling-scheduler R16.
+	// Also true through a secondary-limit backoff (ADR-0018)
 }
 
 // Governor observes the primary Budget and paces writes. This build implements

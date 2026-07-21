@@ -35,7 +35,7 @@ func run() error {
 
 	// The transport chain, nested per ADR-0012 and BUILD-ORDER's floor:
 	//
-	//     store.NewTransport(governor.New(base))
+	//     store.NewTransport(governor.New(base, clk), dir, clk)
 	//
 	// The store is outermost of ours and dials through the governor, which sits
 	// under it and above the network so it observes real network exchanges and
@@ -58,17 +58,18 @@ func run() error {
 	return nil
 }
 
-// storeDir returns the local store's directory under the XDG state home
-// (local-store R1). main.go supplies the path so the store owns no directory
-// policy of its own (ADR-0011), exactly as it will supply the deletion log's path
-// to ops.
+// storeDir returns the local store's directory under the XDG cache home
+// (local-store R1, ADR-0017). Everything this tool derives lives there, while the
+// deletion log alone keeps the XDG state home. main.go supplies the path so the
+// store owns no directory policy of its own (ADR-0011), exactly as it will supply
+// the deletion log's path to ops.
 func storeDir() string {
-	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "gh-runs", "store")
+	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
+		return filepath.Join(dir, "gh-runs")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(os.TempDir(), "gh-runs", "store")
+		return filepath.Join(os.TempDir(), "gh-runs")
 	}
-	return filepath.Join(home, ".local", "state", "gh-runs", "store")
+	return filepath.Join(home, ".cache", "gh-runs")
 }

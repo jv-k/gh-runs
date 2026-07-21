@@ -39,9 +39,9 @@ type Transport struct {
 }
 
 // NewTransport returns a Transport dialing through base and persisting ETags and
-// payloads under dir. main.go supplies dir (the XDG state directory in
-// production); a test supplies a temp dir. The clock records each entry's
-// last-revalidated time (local-store R3, R17).
+// payloads under dir. main.go supplies dir (the XDG cache directory in
+// production, per ADR-0017); a test supplies a temp dir. The clock records each
+// entry's last-revalidated time (local-store R3, R17).
 func NewTransport(base http.RoundTripper, dir string, clk clock.Clock) *Transport {
 	return &Transport{base: base, dir: dir, clk: clk}
 }
