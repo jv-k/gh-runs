@@ -22,7 +22,7 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **R5.** A 409 from cancel means the Run is not cancelable. The tool MUST present this as a fact about the Run's Status rather than as an error, and MUST offer force-cancel where the gate in R2 permits it.
 
-**R6.** Force-cancel MUST be a distinct operation against a distinct endpoint, offered as the escalation for when plain cancel does not take effect. It MUST NOT be the default, and MUST NOT be silently substituted for cancel.
+**R6.** Force-cancel MUST be a distinct operation against a distinct endpoint, offered as the escalation for when plain cancel does not take effect. It MUST NOT be the default, and MUST NOT be silently substituted for cancel. The tool MUST offer it on a 409 from plain cancel (R5), and otherwise on demand as an escalation the user chooses. It MUST NOT infer from a timer that an accepted cancel is stuck, because an asynchronous cancel has no reliable stuck-signal.
 
 **R7.** The tool MUST NOT render `cancelled` as a Status. A cancelled Run has Status `completed` and Conclusion `cancelled`, and every surface MUST show them in their own fields.
 
@@ -40,7 +40,7 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **R13.** Re-run failed Jobs MUST be a distinct operation from re-run, offered only where the Run has Jobs that failed. Both are re-runs and both MUST obey R8 through R12.
 
-**R14.** Re-run MUST offer a debug-logging option at the point of invocation, defaulting to off.
+**R14.** Re-run and re-run failed Jobs MUST each offer a debug-logging option at the point of invocation, defaulting to off. Both endpoints accept `enable_debug_logging`, and `gh run rerun` exposes `--debug` alongside `--failed`.
 
 **R15.** The tool MUST NOT hide, disable, or pre-emptively reject a re-run based on the Run's age. If the API rejects a re-run, the tool MUST surface the API's own reason. This follows R3: the API is the authority, and the age limit described in open question 1 is unverified.
 
@@ -52,7 +52,7 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **R18.** Single-Run cancel and force-cancel MUST take a `y`/`N` confirmation. Single-Run re-run and re-run failed Jobs MUST NOT, since neither destroys a Run and correcting a failed Run is the Feed's most common action.
 
-**R19.** The confirm modal MUST report Runs in the frozen set that are ineligible for the chosen operation (by repository permission under R2, and by Status for the operation at hand) in the shape "3 of 47 selected Runs are in read-only repos and will be skipped". Ineligible Runs MUST be skipped, not attempted.
+**R19.** The confirm modal MUST report Runs in the frozen set that are ineligible for the chosen operation (by repository permission under R2, and by Status for the operation at hand) in the shape "3 of 47 selected Runs are in read-only repos and will be skipped". Ineligible Runs MUST be skipped, not attempted. For cancel and force-cancel, whose cancelable-Status set is unmeasured (open question 5), no Status pre-filter is applied and a request-time 409 skips the Run (R20). The permission pre-filter is exact and always applied.
 
 **R20.** Status observed at freeze time is a snapshot of a live Feed. A Run may complete between freeze and request, so a 409 from cancel MUST be recorded as a skip rather than a failure, and MUST NOT advance the consecutive-failure counter.
 
@@ -108,7 +108,7 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **AC13: A 404 reads by the requested end state.** Given a re-run against a Run that has been deleted, the 404 is recorded as a failure. Given a cancel against the same Run, the 404 is recorded as a skip.
 
-**AC14: Debug logging is opt-in.** Given a re-run invoked with the debug-logging option enabled, the issued request carries it. Given the default path, it does not.
+**AC14: Debug logging is opt-in.** Given a re-run or a re-run failed Jobs invoked with the debug-logging option enabled, the issued request carries `enable_debug_logging`. Given the default path, it does not.
 
 **AC15: Age does not pre-gate a re-run.** Given a Run old enough to fall outside any suspected age limit, re-run is still offered, a request is still issued, and any rejection is reported using the API's stated reason.
 
@@ -135,14 +135,14 @@ Measured against the live API. Numbers are from the [PRD](../../PRD.md) unless m
 
 ## Open questions
 
-1. **The re-run age limit is UNKNOWN.** Research suggested re-runs are only possible within roughly 30 days of the original Run, but this was **not verified directly**. R15 deliberately declines to gate on it. Verify against the live API. If real, the limit changes what the Feed should offer on old Runs.
-2. **What a re-run of failed Jobs produces is UNKNOWN.** Whether the new Attempt contains only the re-run Jobs, or all Jobs with prior successes carried across, determines what Run detail shows afterwards. Not established by the canon.
+1. **Resolved: no age gate (R15 stands), and the limit stays unverified by policy.** Confirming a roughly 30-day re-run limit means issuing a live re-run of an old Run, which spends Actions minutes and cannot be undone, the class R28 bars from tests. R15 declines to gate on age and surfaces the API's own reason if it rejects, which R3 makes the authority regardless. The limit stays a possibility, not a canon fact.
+2. **Resolved: Run detail renders the new Attempt's Jobs as served, assuming no carry-forward model ([run-detail](../run-detail/requirements.md) R1).** Whether GitHub's re-run-failed-Jobs Attempt contains only the re-run Jobs or carries prior successes across is its behaviour to reflect, not ours to assume: the pane shows whatever the Attempt's Jobs endpoint returns and is correct either way. A live re-run could measure it, but that is a write and not required for the display to be right.
 3. **Resolved: cancel, force-cancel and re-run carry the same published 5-point default as DELETE.** The points model prices by method, "Most REST API POST, PATCH, PUT, or DELETE requests: 5" points, so R23's budget maths stops being an assumption on top of a citation and becomes the citation itself. DELETE never had endpoint-specific documentation to be the exception. The published caveat is symmetric ("Some REST API endpoints have a different point cost that is not shared publicly") and unmeasurable (PRD risk R4, permanently). One new caution for R23 specifically: the separate content-creation dimension caps content-generating requests at 80/min and 500/hour with no published request list, and re-run creates Runs, so a bulk re-run stream may be bound at 80/min rather than the points model's ~180/min. [rate-governor](../rate-governor/requirements.md) open question 3 owns the resolution and its Constraints carry the content-creation numbers. Full citations in [docs/research/write-point-costs.md](../../research/write-point-costs.md).
-4. **Whether the debug-logging option applies to re-run failed Jobs as well as re-run is UNKNOWN.** R14 claims it only for re-run.
-5. **The set of cancelable Status values is UNKNOWN.** R5 and R20 rely on 409 meaning "not cancelable", but which of `queued`, `in_progress`, `waiting`, `requested` and `pending` are cancelable has not been measured, so R19's pre-filter by Status cannot yet be written precisely.
-6. **When to offer force-cancel is undecided.** R6 offers it when cancel "does not take effect", but cancel is asynchronous, so there is no immediate failure to detect. The observable signal that separates "cancel accepted and still working" from "cancel accepted and stuck" (and how long to wait before escalating) is undecided, and a plain 409 (R5) is the only unambiguous trigger identified so far.
-7. **Whether to warn before a re-run that discards inspectable Jobs is undecided.** R12's constraint means re-running a Run whose Jobs are open makes those Jobs permanently unreachable. That is a one-way door with no warning attached.
-8. **R18's asymmetry is a judgement call.** Single-Run re-run takes no confirmation, though it spends Actions minutes and cannot be undone. If that proves wrong in use, it is a one-line change.
+4. **Resolved: yes, debug-logging applies to both (R14, AC14).** Both `POST /runs/{id}/rerun` and `POST /runs/{id}/rerun-failed-jobs` accept `enable_debug_logging`, and `gh run rerun` exposes `--debug` alongside `--failed`. R14 now offers the option on both operations.
+5. **Resolved: rely on the 409, do not pre-filter cancel by Status (R5, R19, R20).** Which of `queued`, `in_progress`, `waiting`, `requested` and `pending` are cancelable is unmeasured, and probing means live cancels (R28). So R19 pre-filters cancel on permission only, and a request-time 409 is the authoritative "not cancelable" that R20 records as a skip. The unknown does not block, because the 409 draws the line the measurement would have.
+6. **Resolved: on a 409, and otherwise on demand (R6).** Force-cancel is offered the moment a plain cancel returns 409 (R5, the one unambiguous trigger), and is otherwise available as an escalation the user chooses. The tool does not infer from a timer that an accepted cancel is stuck, because an asynchronous cancel has no reliable stuck-signal and any timeout would be arbitrary. gh models the same shape as an explicit `gh run cancel --force`.
+7. **Resolved: no blocking warning (R18 stands); a passive note is permitted where the Jobs are on screen.** Re-running replaces the Jobs you were inspecting, but those are the failed Jobs you are re-running, the Attempt badge (R8) records that the door was opened, and a confirmation on the Feed's most common corrective action is exactly the friction R18 removes. The detail pane may show a one-line, non-blocking note that the current Jobs will be replaced, but no surface may block or confirm a single re-run on this ground.
+8. **Resolved: R18 stands.** Single-Run re-run and re-run failed Jobs take no confirmation, though they spend Actions minutes, because correcting a failed Run is the Feed's most common action and bulk re-run still confirms (R17). The asymmetry is deliberate and, as this question noted, a one-line change if usage proves it wrong.
 
 ## Related
 
