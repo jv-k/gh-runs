@@ -56,6 +56,12 @@ Dispatch a Workflow from a typed form generated from that Workflow's YAML at the
 
 **R22.** Offer no direct Dispatch for a Workflow in a disabled state. A Dispatch to a disabled Workflow is rejected with a 422 (measured), so the tool surfaces enabling the Workflow first rather than issuing a Dispatch that will fail. Enabling is [workflow-management](../workflow-management/requirements.md) R5's operation, which makes reaching a Run two steps, not one. See [docs/research/workflow-dispatch-measurements.md](../../research/workflow-dispatch-measurements.md).
 
+**R23.** Default the ref picker to the repository's default branch, for every repository. This matches `gh workflow run` ([ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md)), it is the only ref where a `workflow_dispatch` is guaranteed present, and it is consistent whether the tool was launched inside the target repository or not, where a current-branch default has no meaning cross-repo. R4 keeps the chosen ref visible and R3 re-renders on a change, so selecting a working branch instead is one action.
+
+**R24.** Offer both branches and tags in the ref picker, labelled distinctly, with tags fetched lazily and at most once per picker session. `gh`'s `--ref` accepts a branch or a tag, so the non-interactive Dispatch (R20) resolves a tag ref regardless, and a picker offering only branches would make the interactive surface a strict subset of the CLI. A repository with no tags shows branches alone.
+
+**R25.** Remember a Workflow's last-used inputs and pre-fill them on the next Dispatch of that Workflow. The values persist in the [local-store](../local-store/requirements.md) R2a, keyed by the host-qualified repository and the Workflow `path`, never in [settings](../settings/requirements.md), which holds intent rather than captured state (settings R2). This is read-back cache, not the job-state [ADR-0006](../../adr/0006-stateless-bulk-jobs.md) forbids, whose line is reading job-state rather than the filesystem. On recall, pre-fill each input from its remembered value only where that value still validates against the current ref's schema: the input still exists, a `choice` value is still among its `options` (R10), and a `required` input stays required (R9). Anything that no longer fits falls back to the declared `default` (R8). The store is derived and safe to delete (local-store R11), so a lost cache costs only the pre-fill. Remembering is on by default, and no 2.0.0 setting governs it. An opt-out would be intent-level and can be added later without reworking the mechanism.
+
 ## Acceptance criteria
 
 **AC1: The ref comes first.** No form is rendered, and no Contents request is issued, before a ref is selected. Selecting a second ref for a Workflow whose inputs differ between two branches produces two visibly different forms.
@@ -73,6 +79,10 @@ Dispatch a Workflow from a typed form generated from that Workflow's YAML at the
 **AC6: The gate costs no request.** Dispatch is unavailable for an archived repository and for one where `permissions.push` is false, determined with no API request beyond the repository listing that already ran. A Workflow in state `deleted` offers no Dispatch, and a disabled Workflow offers enabling first rather than a direct Dispatch (R22).
 
 **AC7: Goldens hold the generated form.** Rendering the form from the held `deployment.yml` fixture, with no terminal and no network, reproduces the stored golden byte for byte: `tag_name` as free text marked required, `platforms` as free text pre-filled with its default, `release` and `dry_run` as toggles each pre-filled with their declared `true`, and `environment` as a select pre-filled with `production`. A further golden covers a Workflow declaring `choice` and `number` inputs, rendering a select over the declared `options` and a numeric entry, and one declaring an unrecognised type, rendering free text labelled as unrecognised. Changing any control's type fails its golden.
+
+**AC8: The ref picker defaults safely and offers tags.** Opening the form pre-selects the repository's default branch, whatever branch the working directory is on and whether or not the tool is inside the target repository. The picker lists both branches and tags, distinguishable from one another, and a repository with no tags lists branches only.
+
+**AC9: Remembered inputs reconcile with the live schema.** After a Dispatch of a Workflow, re-opening its form pre-fills each input with the value last submitted, except where the current ref's schema no longer admits it: an input the schema dropped is absent, a `choice` value no longer among its `options` falls back to the declared `default`, and a `required` input is still enforced (R9). Deleting the local-store returns every input to its declared `default`.
 
 ## Constraints
 
@@ -117,13 +127,13 @@ Five inputs, five controls, three of R6's five types. Neither `choice` nor `numb
 
 **UNKNOWN: can Actions-write be separated from `push` for a fine-grained PAT?** R14 gates on `push` as the conservative choice. The question is unanswerable pre-flight regardless, since fine-grained PATs expose no scopes.
 
-**Undecided: what ref does the picker default to?** The current branch when launched inside a repository, or the repository's default branch. The first matches where you already are. The second matches what most Dispatch forms expect.
+**Resolved: the repository's default branch, always (R23).** It matches `gh workflow run`, it is the only ref where a `workflow_dispatch` is guaranteed dispatchable, and it avoids an inside-versus-outside-a-repository inconsistency, since a cross-repo Dispatch has no current branch. The chosen ref stays visible (R4), and switching to a working branch is one action.
 
-**Undecided: does the ref picker offer tags as well as branches?** Unasked.
+**Resolved: yes, branches and tags (R24).** `gh`'s `--ref` accepts either, so the non-interactive path resolves a tag regardless, and a branches-only picker would make the interactive surface a subset of the CLI. Tags are fetched lazily.
 
 **Resolved as moot: there is no correlation window.** `return_run_details` returns the Run ID in the Dispatch response (#27), so nothing polls and nothing waits. A Dispatch that queues behind a concurrency group still returns its Run ID immediately.
 
-**Undecided: should the last-used inputs for a Workflow be remembered?** It would be the largest single ergonomic win after the typed form itself, and it is state, not intent, so it does not obviously belong in [settings](../settings/requirements.md) (PRD: settings are intent-level only).
+**Resolved: yes, remembered in the local-store (R25).** It is the largest ergonomic win after the typed form, and it is read-back cache rather than forbidden job-state, since [ADR-0006](../../adr/0006-stateless-bulk-jobs.md) draws its line at reading job-state rather than at disk. So it lives in the local-store (R2a) beside window state, not in settings, which holds intent rather than captured state (settings R2). Recall reconciles each remembered value against the current ref's schema. Remembering is on by default with no 2.0.0 setting, an opt-out being intent-level and addable later.
 
 ## Related
 
@@ -134,4 +144,6 @@ Five inputs, five controls, three of R6's five types. Neither `choice` nor `numb
 - [live-run-feed](../live-run-feed/requirements.md) is where the dispatched Run appears, and the source of truth for Run state.
 - [run-detail](../run-detail/requirements.md) is where the dispatched Run leads.
 - [repo-discovery](../repo-discovery/requirements.md) supplies the free `permissions` and `archived` behind R14.
+- [local-store](../local-store/requirements.md) persists R25's remembered inputs (its R2a), and is safe to delete.
+- [settings](../settings/requirements.md) holds intent, not R25's captured inputs, which is why they live in the local-store (settings R2).
 - [cli-surface](../cli-surface/requirements.md) owns R20's command and flag spelling.
