@@ -36,6 +36,8 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 **R12.** On selection change, the detail pane must show the new Run's Jobs or an explicit pending state, and must not leave the previous Run's Jobs on screen as though they belonged to the new selection.
 
+**R12a.** For a Run that has not started (Status `queued`, `waiting`, `requested` or `pending`), the pane must render an explicit "no Jobs yet" state, and must treat an empty Jobs list, a partial one, and an error response alike rather than branching on which the API returns. R13's fast tier refreshes a `queued` or `in_progress` Run until its Jobs appear, so the state is transient by construction for any Run that will start.
+
 **R13.** The detail pane must refresh the selected Run's Jobs at the fast tier, approximately every 3 seconds, for exactly as long as that Run's Status is `queued` or `in_progress`, and must not refresh a Run at any other Status. A Run parked at `waiting`, `requested` or `pending` updates at its repository's ambient tier instead, and the ~3s refresh resumes the moment its Status reaches `queued` ([ADR-0021](../../adr/0021-the-scheduler-cadence-policy.md), resolving open question 6).
 
 **R14.** The detail pane must stop refreshing a Run's Jobs once that Run is no longer selected.
@@ -48,7 +50,7 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 **R17.** When the selected Run is re-run, the detail pane must reflect that the Run mutated in place (Status returns to `queued`, Conclusion returns to null, `run_attempt` increments), and must not imply that a new Run was created. A user who expects a new row will not find one, so the Attempt number is the only evidence the re-run happened. R4's badge must be legible at that moment.
 
-**R18.** The detail pane must gate re-run and every other mutating action on `permissions.push && !archived` for the owning repository, consistently with the Feed. The mechanics of the operations themselves belong to [run-lifecycle](../run-lifecycle/requirements.md).
+**R18.** The detail pane must gate re-run and every other mutating action on `permissions.push && !archived` for the owning repository, consistently with the Feed, and must not offer re-run when the Workflow is `deleted` (an Orphaned Run), because a deleted Workflow can produce no further Run. The mechanics of the operations themselves belong to [run-lifecycle](../run-lifecycle/requirements.md).
 
 ### Seams
 
@@ -82,6 +84,10 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 **AC13: Goldens hold the pane's frame.** Rendering a recorded frame from held state, with no terminal and no network, reproduces the stored golden byte for byte. Separate goldens fix a Run's Jobs with their Steps rendered under them, a Job at Status `in_progress` with an empty Conclusion field, and a Run with `run_attempt: 3` rendering "Attempt 3" against the Run's identity and not within the Jobs list. Moving the badge into the Jobs list fails its golden.
 
+**AC14: A not-started Run shows a uniform empty state.** Selecting a Run at Status `queued` or `waiting` renders an explicit "no Jobs yet" state, whether the Jobs endpoint returns an empty list, a partial list, or an error. A `queued` Run's Jobs then appear within ~3s of the API serving them, with no user interaction (R13).
+
+**AC15: No re-run for an Orphaned Run.** For a Run whose Workflow is `deleted`, the pane marks the Workflow deleted (AC11) and offers no re-run, even where `permissions.push` is true.
+
 ## Constraints
 
 **Prior Attempts' Jobs are not served.** `/runs/{id}/attempts/1/jobs` returns `total_count: 0`, and `filter=all` was verified to return only the latest Attempt's Jobs, identical to `filter=latest`. `previous_attempt_url` exposes prior Attempt *metadata* only. Attempt history is therefore not buildable, and the PRD scopes it out on that ground rather than deferring it. R4's badge is not a simplification of a richer view. It is the whole of what the API supports.
@@ -104,17 +110,17 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 3. **Resolved: the Jobs list paginates, 30 per page by default and 100 at most.** Measured on a 38-job Run, which served 30 and a `Link` header carrying `rel="next"` at `page=2`. `per_page=200` clamps to 100 rather than erroring. R13's fast tier therefore costs one request per Run for any Run up to 100 Jobs, which was every Run in the sample. **Untested: the multi-page case.** No Run with more than 100 Jobs was found across ~160 scanned, so a Run wide enough to need a second page at `per_page=100` is a possibility rather than an observation, and the crawl that would handle it has nothing to be tested against.
 
-4. **What does a Run that has not started serve?** **UNKNOWN** whether a Run at Status `queued`, `waiting`, `requested` or `pending` returns an empty Jobs list, a partial one, or an error. This defines the pane's empty state and decides whether R13's fast tier has anything to render for the Runs most likely to be selected.
+4. **Resolved: a not-started Run shows a uniform empty state (R12a).** Whatever the Jobs endpoint returns for a `queued`, `waiting`, `requested` or `pending` Run (empty, partial or error), the pane renders "no Jobs yet" and does not branch on the shape. R13's fast tier refreshes a `queued` or `in_progress` Run until Jobs appear, so the state is transient for any Run that will start. A benign read-probe could confirm the exact payload, but the pane is correct without it.
 
 5. **Resolved: `run_attempt` rides on the list payload, so R4's badge is free.** `/actions/runs` items carry `run_attempt` alongside `previous_attempt_url`, the field R7 presents as prior Attempt metadata. The badge costs no per-row request, needs no folding into R10's debounce, and is renderable the moment a row paints. That matters most at R17's re-run, where the badge going N to N+1 is the only evidence on screen that anything happened.
 
 6. **Resolved: no, the ~3s refresh runs only while the Run is `queued` or `in_progress` ([ADR-0021](../../adr/0021-the-scheduler-cadence-policy.md)).** R13 carries the narrowed rule. A parked Run's next event is a human acting, so days of ~3s refreshing buys nothing under the pessimistic secondary-limit assumption, and the approval's effect surfaces within the repository's ambient tier interval before the fast refresh resumes on `queued`. [polling-scheduler](../polling-scheduler/requirements.md) open question 6, which raised this identically, closes with the same rule.
 
-7. **Are an Orphaned Run's Jobs still served?** **UNKNOWN.** CONTEXT says an Orphaned Run's history persists indefinitely, but says that of the Run, not of its Jobs. R8's marking is safe either way. R1's content is not.
+7. **Resolved: render whatever is served, and the empty state covers none (R1, R12a).** R8's deleted-marking is independent of whether an Orphaned Run's Jobs come back, R1 shows them if they do, and R12a's "no Jobs yet" state covers the case where they do not. The pane is correct either way, so the unknown does not gate it. A benign read-probe could settle the API's behaviour but is not required.
 
-8. **Is re-run rejected on an Orphaned Run?** **UNKNOWN.** CONTEXT says nothing remains that could ever produce another Run, which suggests the API refuses, but the canon does not establish it. R18's gate tests permission, not Workflow state, so as written an Orphaned Run in a writable repository still offers re-run.
+8. **Resolved: no re-run for an Orphaned Run (R18).** R18 now excludes a `deleted` Workflow from the re-run gate, so an Orphaned Run offers no re-run even in a writable repository. This matches [workflow-dispatch](../workflow-dispatch/requirements.md) R15, where a Dispatch to a deleted Workflow was measured to fail with 404 (#34). That re-run fails identically is inferred rather than measured, but offering an action that cannot succeed is the thing to avoid, and CONTEXT's "nothing remains to produce another Run" is the reason.
 
-9. **Does re-running failed Jobs only behave like a full re-run here?** The PRD scopes both operations. **UNKNOWN** whether "re-run failed Jobs" increments `run_attempt` and returns Status to `queued` identically, which is what R17's display assumes.
+9. **Resolved: the display treats both re-run variants identically (R17), and [run-lifecycle](../run-lifecycle/requirements.md) owns the confirmation.** Full re-run and re-run-failed-Jobs both act in place on the same Run, so R17's in-place mutation and its N-to-N+1 badge hold for either. Whether "re-run failed Jobs" increments `run_attempt` identically is a re-run mechanic, owned and confirmed by run-lifecycle (#23), not re-derived in the pane.
 
 ## Related
 
