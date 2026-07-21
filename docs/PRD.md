@@ -116,7 +116,7 @@ Every one of these changed a design decision, and they are not all the same kind
 
 ## Open risks
 
-R1, R2 and R3 are **resolved**, and each resolved into a build requirement rather than an unknown to design around. R5 stays an open build-time check. R4 can never be resolved, so it is a permanent assumption rather than a pending question.
+R1, R2 and R3 are **resolved**, and each resolved into a build requirement rather than an unknown to design around. R5 is now **resolved by design**: log-viewer R18's empty state handles the in-progress case whatever the endpoint returns, so it too is a build requirement rather than an unknown to design around. R4 can never be resolved, so it is a permanent assumption rather than a pending question.
 
 | # | Risk | Verdict |
 |---|---|---|
@@ -124,7 +124,7 @@ R1, R2 and R3 are **resolved**, and each resolved into a build requirement rathe
 | **R1** | Does go-gh's token resolution work with **no gh binary installed**? The reference token lives in the OS keyring, not `hosts.yml`. | **Resolved: it does not.** go-gh has no keyring code, and its only keyring path is shelling out to `gh auth token`. With gh off PATH the reference token resolves empty. **Decision: require `GH_TOKEN` for users without gh, and document it.** [ADR-0002](./adr/0002-go-gh-with-dual-distribution.md) and [ADR-0008](./adr/0008-full-cli-surface-despite-gh-overlap.md) both stand: the binary needs no gh, only a token. A build requirement now, not a risk. |
 | **R3** | Exact asset naming required for `gh extension install` to find a precompiled Go binary. | **Resolved: the name must end with `{GOOS}-{GOARCH}`**, plus `.exe` on Windows. gh selects with `HasSuffix(name, platform+ext)` (`pkg/cmd/extension/manager.go`, `installBin`), so `darwin-arm64` matches and goreleaser's stock `Darwin_arm64` does not. Case and separator are both load-bearing, and a mismatch ships a release that looks complete and installs nowhere. Release automation uses `cli/gh-extension-precompile`, which already names to the convention. A build requirement now, not a risk. [ADR-0002](./adr/0002-go-gh-with-dual-distribution.md) |
 | **R4** | Do 304s count against the **secondary** limit? | **Permanently assumed, never to be resolved.** Testing it means deliberately tripping a limit and risking a block on the user's account, so it will not be tested. Assumed yes throughout, which makes the polling scheduler's budget maths pessimistic by construction. |
-| **R5** | In-progress Run log behaviour. | Open. Log viewer needs an empty state. Live tailing is impossible regardless. |
+| **R5** | In-progress Run log behaviour. | **Resolved by design.** log-viewer R18's empty state renders whatever the per-Job endpoint returns for an incomplete Job (partial text, empty body, or 404), so the viewer is correct without the measurement, and opening an in-progress Job's log is allowed and refetchable (R15). The exact behaviour stays unmeasured, which the design does not require. Live tailing is impossible regardless: no streaming endpoint exists. A build requirement now, not a risk. |
 
 ## Features
 
