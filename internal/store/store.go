@@ -125,17 +125,26 @@ func (t *Transport) acquire() {
 }
 
 // sweepTempFiles reclaims orphaned atomic-write temporaries left by a writer that
-// died between os.CreateTemp and os.Rename (local-store R11). enforceBound globs
-// only *.json, so an orphan store.tmp-* would otherwise never count toward the
-// bound nor be reclaimed. It runs once at startup for the writer, best-effort: a
+// died between os.CreateTemp and os.Rename (local-store R11). Both the entry writes
+// at the store root and the document writes under docs/ (doc.go) place temporaries
+// with os.CreateTemp, so both directories are swept: a crash mid-document-write
+// otherwise leaks an orphan under docs/ that no sweep reaches. enforceBound globs
+// only *.json, so an orphan store.tmp-* would never count toward the bound nor be
+// reclaimed on its own. It runs once at startup for the writer, best-effort: a
 // failure costs a little disk and nothing else.
 func (t *Transport) sweepTempFiles() {
-	matches, err := filepath.Glob(filepath.Join(t.dir, "store.tmp-*"))
-	if err != nil {
-		return
+	patterns := []string{
+		filepath.Join(t.dir, "store.tmp-*"),
+		filepath.Join(t.dir, docsSubdir, "store.tmp-*"),
 	}
-	for _, f := range matches {
-		_ = os.Remove(f)
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			continue
+		}
+		for _, f := range matches {
+			_ = os.Remove(f)
+		}
 	}
 }
 
