@@ -14,37 +14,49 @@ package textsan
 
 import "strings"
 
-// Sanitize drops each ESC-introduced CSI sequence whole, drops a bare ESC, and drops the
-// remaining C0 control bytes, including the tab and newline that would otherwise tear a row
-// across columns. It never removes a printable rune, so the visible text keeps its
-// characters. The fast path returns the input unchanged and allocates nothing when it
-// carries no control byte, which is the overwhelmingly common case.
+// Sanitize drops each ESC-introduced CSI sequence whole, drops a bare ESC, and drops every C0
+// and C1 control code, including the tab and newline that would otherwise tear a row across
+// columns and the 8-bit CSI (U+009B) a terminal in UTF-8 mode would read as a control
+// introducer with no ESC in sight (security review). It never removes a printable rune, so the
+// visible text keeps its characters. The fast path returns the input unchanged and allocates
+// nothing when it carries no control rune, which is the overwhelmingly common case. isStripped
+// is the single predicate for both the fast-path scan and the strip below, so the two cannot
+// drift, and the loop is over runes so a C1 code point in its two-byte UTF-8 form is one unit.
 func Sanitize(s string) string {
-	if !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+	if !strings.ContainsFunc(s, isStripped) {
 		return s
 	}
+	runes := []rune(s)
 	var b strings.Builder
 	b.Grow(len(s))
-	for i := 0; i < len(s); {
-		c := s[i]
+	for i := 0; i < len(runes); {
+		r := runes[i]
 		switch {
-		case c == 0x1b: // ESC: drop a CSI sequence whole, else drop the bare ESC alone
+		case r == 0x1b: // ESC: drop a CSI sequence whole, else drop the bare ESC alone
 			i++
-			if i < len(s) && s[i] == '[' {
+			if i < len(runes) && runes[i] == '[' {
 				i++
-				for i < len(s) && (s[i] < 0x40 || s[i] > 0x7e) {
+				for i < len(runes) && (runes[i] < 0x40 || runes[i] > 0x7e) {
 					i++
 				}
-				if i < len(s) {
+				if i < len(runes) {
 					i++ // the final byte of the CSI sequence
 				}
 			}
-		case c < 0x20 || c == 0x7f: // other C0 control: tab, newline, CR, DEL
+		case isStripped(r): // C0, DEL and C1 control codes
 			i++
 		default:
-			b.WriteByte(c) // printable ASCII and UTF-8 continuation bytes pass through
+			b.WriteRune(r) // every printable rune passes through
 			i++
 		}
 	}
 	return b.String()
+}
+
+// isStripped reports whether a rune is a control code the sanitiser removes: the C0 range and
+// DEL (U+0000 to U+001F, U+007F) and the C1 range (U+0080 to U+009F), which includes the 8-bit
+// CSI and OSC. ESC (U+001B) matches too, so the fast path detects a lone ESC, but the strip
+// gives ESC its own case so it can consume a trailing CSI sequence whole rather than one rune.
+func isStripped(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
 }

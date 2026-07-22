@@ -104,6 +104,7 @@ func (m Model) View() string {
 	if m.showHelp {
 		bottom = append(bottom, m.helpLine())
 	}
+	bottom = append(bottom, m.detailBlock()...)
 
 	rows := m.renderRows(m.rowCapacityFor(len(top) + len(bottom)))
 
@@ -161,7 +162,29 @@ func (m Model) chromeLineCount() int {
 	if m.showHelp {
 		n++
 	}
+	n += len(m.detailBlock()) // the detail pane and its divider, when open (stage 8)
 	return n
+}
+
+// detailBlock is the Run detail pane painted below the list when it is open, preceded by a
+// divider (run-detail, BUILD-ORDER stage 8). It is empty while the pane is closed, so the
+// list occupies the whole frame and R36's closed-state goldens are unchanged. Its lines
+// count against the row capacity through chromeLineCount, so opening the pane shrinks the
+// list rather than overrunning the frame.
+func (m Model) detailBlock() []string {
+	if !m.detailOpen {
+		return nil
+	}
+	view := m.detail.View()
+	if view == "" {
+		return nil
+	}
+	rule := m.width
+	if rule < 0 {
+		rule = 0 // strings.Repeat panics on a negative count; Bubble Tea never emits one (defence in depth)
+	}
+	block := []string{styleDim.Render(strings.Repeat("─", rule))}
+	return append(block, strings.Split(view, "\n")...)
 }
 
 // viewportBounds returns the half-open row range the viewport shows, scrolling to keep

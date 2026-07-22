@@ -1,0 +1,10 @@
+[1mcli/cli · CI[m   [38;2;138;138;138mRun #4821[m
+[38;2;138;138;138mcompleted[m  [38;2;95;175;95msuccess[m
+
+[1mJOB / STEP                                                     STATUS      CONCLUSION      ELAPSED  [m
+build                                                          [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;138;138;138m1m4s     [m
+[38;2;138;138;138m    1 Set up job                                              [m [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;138;138;138m2s       [m
+[38;2;138;138;138m    2 Run tests                                               [m [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;138;138;138m58s      [m
+test (ubuntu-latest)                                           [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;138;138;138m56s      [m
+[38;2;138;138;138m    1 Set up job                                              [m [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;138;138;138m3s       [m
+[38;2;138;138;138m    2 Go test                                                 [m [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;138;138;138m53s      [m

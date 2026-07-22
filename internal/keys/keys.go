@@ -53,6 +53,7 @@ type Profile struct {
 	ToggleSelect key.Binding // space: toggle row selection (purge R4)
 	Refresh      key.Binding // r: apply deferred changes, refresh (R10, R11)
 	OpenDetail   key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
+	CloseDetail  key.Binding // esc: close the Run detail pane (BUILD-ORDER stage 8, run-detail)
 	Filter       key.Binding // /: filter (R22, R23)
 	Help         key.Binding // ?: help (bubbles/help renders the registry)
 	Quit         key.Binding // q, ctrl+c: quit, and ctrl+c binds nothing else (R7)
@@ -85,6 +86,7 @@ func shared(name string) Profile {
 		ToggleSelect: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select")),
 		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		OpenDetail:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
+		CloseDetail:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close detail")),
 		Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:         key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
@@ -184,7 +186,7 @@ func (p Profile) Bindings() []key.Binding {
 	bindings := []key.Binding{
 		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
 		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect,
-		p.Refresh, p.OpenDetail, p.Filter, p.Help, p.Quit,
+		p.Refresh, p.OpenDetail, p.CloseDetail, p.Filter, p.Help, p.Quit,
 		p.FilterAccept, p.FilterCancel,
 		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,
 	}

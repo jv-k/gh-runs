@@ -24,11 +24,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/tui/feed"
+	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
 )
@@ -76,6 +78,11 @@ type Options struct {
 	Revalidated func() time.Time
 	SetViewport func([]domain.RepoID)
 	Profile     keys.Profile
+	// DetailFetch and Clock are the run-detail pane's seams, constructed in main.go and
+	// handed down through the Feed that opens the pane (ADR-0015): DetailFetch backs its Job
+	// fetch over ghclient, and Clock is the wall clock its timing column reads.
+	DetailFetch rundetail.Fetch
+	Clock       clock.Clock
 }
 
 // Model is the root. It holds the three tabs, the focused index, and the seams it pulls
@@ -100,7 +107,12 @@ type Model struct {
 // Workflows and Storage are their stage-11 and stage-10 placeholders, present so the
 // three-tab routing is real and the finished tabs slot in without a rewrite.
 func New(opts Options) Model {
-	f := feed.New(feed.Options{Profile: opts.Profile, SetViewport: opts.SetViewport})
+	f := feed.New(feed.Options{
+		Profile:     opts.Profile,
+		SetViewport: opts.SetViewport,
+		DetailFetch: opts.DetailFetch,
+		Clock:       opts.Clock,
+	})
 	return Model{
 		tabs: []tab{
 			feedTab{m: f.SetActive(true)},
