@@ -85,7 +85,8 @@ type Model struct {
 	jobs  []domain.Job
 	state loadState
 
-	readout governor.Readout // R16: the pane pauses on the same Budget as the Feed
+	fetching bool             // a fetch is issued and its result not yet in; gates the resume below
+	readout  governor.Readout // R16: the pane pauses on the same Budget as the Feed
 }
 
 // settleMsg fires when the debounce elapses for the Run it names (R10). It is tagged with
@@ -210,7 +211,7 @@ func (m Model) onSettle(msg settleMsg) (Model, tea.Cmd) {
 	if m.readout.Exhausted {
 		return m, nil // paused; resumes on the Readout clear (R16)
 	}
-	return m, m.fetchCmd(m.run)
+	return m.issueFetch()
 }
 
 // onRefresh re-fetches on the fast tier's tick, but only while the pane still holds this
@@ -223,7 +224,7 @@ func (m Model) onRefresh(msg refreshMsg) (Model, tea.Cmd) {
 	if m.readout.Exhausted {
 		return m, nil // paused; the Readout clear resumes it (R16, AC12)
 	}
-	return m, m.fetchCmd(m.run)
+	return m.issueFetch()
 }
 
 // onJobs consumes a fetch result. A response whose Run is no longer selected is discarded,
@@ -233,6 +234,7 @@ func (m Model) onRefresh(msg refreshMsg) (Model, tea.Cmd) {
 // a queued Run whose Jobs the fast tier just revealed (AC14). While the Run stays live the
 // fast tier re-arms (R13); a completed Run arms nothing, so the loop ends (AC6).
 func (m Model) onJobs(msg jobsMsg) (Model, tea.Cmd) {
+	m.fetching = false // a fetch round trip has completed, stale or not
 	if !m.open || !m.haveRun || msg.runID != m.run.ID {
 		return m, nil // stale: the selection moved on (R11, AC2)
 	}
@@ -253,11 +255,14 @@ func (m Model) onJobs(msg jobsMsg) (Model, tea.Cmd) {
 // pane reads the exhaustion flag the governor published. When exhaustion clears it resumes
 // a paused selection, so a Run selected or refreshed under exhaustion is not stranded: a
 // live Run re-arms its fast tier and a not-yet-loaded Run issues its held fetch (R16, AC12).
+// It resumes only when no fetch is outstanding: an exhaust/recover flip within one round trip
+// would otherwise inject a fetch while the in-flight one still re-arms the tier on arrival,
+// leaving two concurrent fast-tier loops (code review).
 func (m Model) onReadout(r governor.Readout) (Model, tea.Cmd) {
 	was := m.readout.Exhausted
 	m.readout = r
-	if was && !r.Exhausted && m.open && m.haveRun && m.needsFetch() {
-		return m, m.fetchCmd(m.run)
+	if was && !r.Exhausted && m.open && m.haveRun && !m.fetching && m.needsFetch() {
+		return m.issueFetch()
 	}
 	return m, nil
 }
@@ -273,6 +278,15 @@ func (m Model) needsFetch() bool {
 // pending updates at its repository's ambient tier, not here (ADR-0021).
 func live(r domain.Run) bool {
 	return r.Status == domain.StatusQueued || r.Status == domain.StatusInProgress
+}
+
+// issueFetch marks a fetch outstanding and returns the Cmd that runs it. Every issue site
+// routes through here, so the outstanding-fetch flag is set at all of them and onReadout's
+// resume can tell whether a fetch is already circulating (code review). The flag clears in
+// onJobs when the result arrives.
+func (m Model) issueFetch() (Model, tea.Cmd) {
+	m.fetching = true
+	return m, m.fetchCmd(m.run)
 }
 
 // fetchCmd runs the injected Fetch off the Update loop and tags its result with the Run ID

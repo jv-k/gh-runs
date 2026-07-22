@@ -228,6 +228,40 @@ func TestBudgetPauseAndResume(t *testing.T) {
 	}
 }
 
+// TestResumeDoesNotDoubleFetchWhileFetchOutstanding pins the resume guard: when a fetch is
+// still in flight, an exhaust-then-recover flip within that one round trip must not inject a
+// second fetch, because the outstanding fetch already re-arms the fast tier on arrival. Two
+// injected fetches would leave two concurrent ~3s loops (code review). The recover returns no
+// Cmd while the fetch is outstanding, and the single in-flight response arms exactly one loop.
+func TestResumeDoesNotDoubleFetchWhileFetchOutstanding(t *testing.T) {
+	f := &fakeFetch{byRun: map[int64][]domain.Job{7: {mkJob("build", inProgress, "")}}}
+	m := newPane(f.fn())
+	m, _ = m.Open(run(7, inProgress))
+
+	var fetchC tea.Cmd
+	m, fetchC = m.Update(settleMsg{runID: 7}) // the settle issues a fetch; it is now in flight
+	if fetchC == nil {
+		t.Fatal("the settle issued no fetch")
+	}
+	// The Budget exhausts and recovers before the in-flight fetch returns.
+	m, _ = m.Update(governor.Readout{Exhausted: true, Reset: t0.Add(30 * time.Minute)})
+	var resumeC tea.Cmd
+	m, resumeC = m.Update(governor.Readout{Exhausted: false})
+	if resumeC != nil {
+		t.Fatalf("resume injected a second fetch while one was outstanding, risking a double refresh loop (code review)")
+	}
+	// The one outstanding fetch returns and arms exactly one fast-tier loop.
+	before := f.calls
+	var armC tea.Cmd
+	_, armC = m.Update(fetchC()) // execute the in-flight fetch and deliver its response
+	if f.calls != before+1 {
+		t.Fatalf("the outstanding fetch did not run exactly once: calls delta %d", f.calls-before)
+	}
+	if armC == nil {
+		t.Fatalf("the outstanding fetch did not re-arm the fast tier on arrival (R13)")
+	}
+}
+
 // TestSelectionChangeShowsPendingNotPreviousJobs pins R12: a selection change replaces the
 // previous Run's Jobs with an explicit pending state, never leaves them on screen under the
 // new identity.
