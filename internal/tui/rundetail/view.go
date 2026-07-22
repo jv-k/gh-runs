@@ -73,10 +73,14 @@ var conclusionColour = map[domain.Conclusion]string{
 
 // View renders the pane to a frame from held state alone, with no live terminal and no
 // network (R19). It is empty until a Run is selected; the Feed paints it only while it is
-// open, so an empty frame is never shown.
+// open, so an empty frame is never shown. When a Job's log view is open it takes the frame,
+// because the operator has descended into it (log-viewer R1, ADR-0011's recursive focus).
 func (m Model) View() string {
 	if !m.haveRun {
 		return ""
+	}
+	if m.log.IsOpen() {
+		return m.log.View()
 	}
 	var lines []string
 	lines = append(lines, m.identityLine())
@@ -164,19 +168,47 @@ func (m Model) body() []string {
 }
 
 // jobLines renders the Jobs table: a header, then each Job with its Steps indented beneath
-// it (R1). Steps arrive inline on the Job, at no extra request (resolved open question 1).
+// it (R1). Steps arrive inline on the Job, at no extra request (resolved open question 1). In
+// job-focus (the operator has descended to pick a Job's log) each row carries a cursor gutter
+// and the selected Job is marked, and a hint names the open key. When not in job-focus the
+// gutter is empty, so this renders byte-identically to the stage-8 view its goldens fixed.
 func (m Model) jobLines() []string {
 	nameW := m.nameWidth()
-	out := make([]string, 0, 1+len(m.jobs)*4)
+	out := make([]string, 0, 2+len(m.jobs)*4)
 	out = append(out, m.jobsHeader(nameW))
 	for i := range m.jobs {
 		j := m.jobs[i]
-		out = append(out, m.jobRow(j, nameW))
+		out = append(out, m.jobRow(j, nameW, m.active && i == m.jobCursor))
 		for k := range j.Steps {
 			out = append(out, m.stepRow(j.Steps[k], nameW))
 		}
 	}
+	if m.active {
+		out = append(out, "")
+		out = append(out, styleDim.Render("Select a Job and press enter to view its log."))
+	}
 	return out
+}
+
+// gutterWidth is the width the Job cursor gutter takes, two columns in job-focus and none
+// otherwise, so the stage-8 view is unchanged when the operator has not descended.
+func (m Model) gutterWidth() int {
+	if m.active {
+		return 2
+	}
+	return 0
+}
+
+// jobGutter is the cursor gutter for a row: an arrow on the selected Job, blank on the rest,
+// and nothing at all when not in job-focus so the goldens hold (R1).
+func jobGutter(active, selected bool) string {
+	if !active {
+		return ""
+	}
+	if selected {
+		return "> "
+	}
+	return "  "
 }
 
 // jobsHeader labels the four columns in the fixed order the rows follow.
@@ -187,19 +219,20 @@ func (m Model) jobsHeader(nameW int) string {
 		truncPad("CONCLUSION", conclusionW),
 		truncPad("ELAPSED", elapsedW),
 	}
-	return styleHeader.Render(strings.Join(cells, colSep))
+	return jobGutter(m.active, false) + styleHeader.Render(strings.Join(cells, colSep))
 }
 
 // jobRow paints one Job with its Status and Conclusion in their own separately styled cells
-// and an empty Conclusion until it is completed (R2, AC5). The Job name is sanitised.
-func (m Model) jobRow(j domain.Job, nameW int) string {
+// and an empty Conclusion until it is completed (R2, AC5). The Job name is sanitised. The
+// selected flag marks the Job the log-open key acts on in job-focus.
+func (m Model) jobRow(j domain.Job, nameW int, selected bool) string {
 	cells := []string{
 		truncPad(textsan.Sanitize(j.Name), nameW),
 		statusStyle(j.Status).Render(truncPad(textsan.Sanitize(string(j.Status)), statusW)),
 		conclusionStyle(j.Conclusion).Render(truncPad(textsan.Sanitize(concludedText(j.Status, j.Conclusion)), conclusionW)),
 		styleDim.Render(truncPad(m.elapsed(j.Status, j.StartedAt, j.CompletedAt), elapsedW)),
 	}
-	return strings.Join(cells, colSep)
+	return jobGutter(m.active, selected) + strings.Join(cells, colSep)
 }
 
 // stepRow paints one Step indented under its Job, numbered, with the same Status and
@@ -213,7 +246,7 @@ func (m Model) stepRow(s domain.Step, nameW int) string {
 		conclusionStyle(s.Conclusion).Render(truncPad(textsan.Sanitize(concludedText(s.Status, s.Conclusion)), conclusionW)),
 		styleDim.Render(truncPad(m.elapsed(s.Status, s.StartedAt, s.CompletedAt), elapsedW)),
 	}
-	return strings.Join(cells, colSep)
+	return jobGutter(m.active, false) + strings.Join(cells, colSep)
 }
 
 // elapsed is the timing column, read from the injected clock so a golden is deterministic.
@@ -300,10 +333,11 @@ func (m Model) contentWidth() int {
 	return m.width
 }
 
-// nameWidth is the flex JOB / STEP column: the content width less the three fixed columns
-// and their separators, floored so a very narrow terminal still paints a name cell.
+// nameWidth is the flex JOB / STEP column: the content width less the three fixed columns,
+// their separators and the job-focus cursor gutter, floored so a very narrow terminal still
+// paints a name cell. The gutter is zero outside job-focus, so the stage-8 width is unchanged.
 func (m Model) nameWidth() int {
-	w := m.contentWidth() - statusW - conclusionW - elapsedW - 3*len(colSep)
+	w := m.contentWidth() - statusW - conclusionW - elapsedW - 3*len(colSep) - m.gutterWidth()
 	if w < nameFloor {
 		return nameFloor
 	}
