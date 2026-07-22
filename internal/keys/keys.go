@@ -60,6 +60,18 @@
 // (r); the tab mints no other binding, because enable and disable are the only actions it
 // offers.
 //
+// Dispatch is the workflow-dispatch stage (BUILD-ORDER stage 11) added the same way: the Workflows
+// tab's key that opens the workflow_dispatch form over the Workflow under the cursor, and the same
+// key submits that form once its required inputs are filled (workflow-dispatch R2, R9, R16). The
+// canon names no literal for it, so the unclaimed literal x is chosen and documented here, a
+// mnemonic for triggering a run and distinct from every key already bound in the list. It is a
+// motion-independent action, identical in both profiles, and it is shared across two contexts the
+// way enter is (open from the tab, submit inside the pane): the two never fire at once, because the
+// pane captures input while open and the tab holds the key while it is closed. Inside the form the
+// pane reuses ToggleSelect (space) to flip a boolean and cycle a choice, environment or ref,
+// OpenDetail (enter) to edit a text field with FilterAccept and FilterCancel committing or
+// cancelling it, and CloseDetail (esc) to close the form, so it mints only this one binding.
+//
 // LogTimestamps, LogDelete, LogExport, LogNextMatch and LogPrevMatch are the log-viewer
 // stage (BUILD-ORDER stage 12) added the same way: the log-view pane's own actions
 // (log-viewer R4, R11, R17, R21). The canon names no literal for any of them, so unclaimed
@@ -114,6 +126,7 @@ type Profile struct {
 	RerunFailed    key.Binding // F: re-run only the failed Jobs of the selected Run(s) (run-lifecycle R13)
 	ArtifactsOnly  key.Binding // a: filter the Storage tab's list to Artifacts alone (storage-reclamation R8)
 	ToggleWorkflow key.Binding // s: enable a disabled Workflow, disable an active one (workflow-management R5)
+	Dispatch       key.Binding // x: open the workflow_dispatch form over a Workflow, and submit it (workflow-dispatch R2, R16)
 	LogTimestamps  key.Binding // t: toggle the log view's ISO timestamp prefix (log-viewer R4)
 	LogDelete      key.Binding // D: delete the Run's logs, distinct from Run deletion's d (log-viewer R17, AC6)
 	LogExport      key.Binding // e: export the whole-Run log archive to disk (log-viewer R11)
@@ -159,6 +172,7 @@ func shared(name string) Profile {
 		RerunFailed:    key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "re-run failed")),
 		ArtifactsOnly:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "artifacts only")),
 		ToggleWorkflow: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "enable/disable")),
+		Dispatch:       key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "dispatch")),
 		LogTimestamps:  key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "timestamps")),
 		LogDelete:      key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete logs")),
 		LogExport:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export archive")),
@@ -267,6 +281,7 @@ func (p Profile) Bindings() []key.Binding {
 		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
 		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect, p.Delete,
 		p.Cancel, p.ForceCancel, p.Rerun, p.RerunFailed, p.ArtifactsOnly, p.ToggleWorkflow,
+		p.Dispatch,
 		p.LogTimestamps, p.LogDelete, p.LogExport, p.LogNextMatch, p.LogPrevMatch,
 		p.Refresh, p.OpenDetail, p.CloseDetail, p.Filter, p.Help, p.Quit,
 		p.FilterAccept, p.FilterCancel,

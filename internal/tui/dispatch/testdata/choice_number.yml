@@ -1,0 +1,29 @@
+name: Bench
+
+# Covers the two of R6's types deployment.yml does not: choice, whose control is a select over
+# the declared options (R10), and number, whose control is a numeric entry (R6). AC7 carries this
+# second fixture for exactly that reason.
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Log verbosity"
+        type: choice
+        default: info
+        options:
+          - debug
+          - info
+          - warn
+          - error
+      iterations:
+        description: "How many iterations to run"
+        type: number
+        required: true
+        default: 100
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo bench
