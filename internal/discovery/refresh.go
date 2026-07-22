@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
@@ -60,10 +59,11 @@ func (d *Discovery) intervalLocked(key string) time.Duration {
 // the ETags the store persisted from the previous probe, so an unchanged
 // repository answers 304, costs no primary allowance, and keeps its poll-set
 // membership; a repository that acquired its first Run breaks its own ETag,
-// answers 200, and enters the poll set (R12, AC10). It reuses the pass's bounded
-// fan-out, so a re-probe of the whole set stays within the concurrency bound
-// (R16, AC13). A caller drives the cadence by passing DueForReprobe's result; an
-// on-demand refresh passes the whole set, or runs a full Pass to re-enumerate.
+// answers 200, and enters the poll set (R12, AC10). It reuses the pass's fan-out,
+// so a re-probe rides the same transport limiter that bounds the wire at 10
+// (R16, AC13, ADR-0018). A caller drives the cadence by passing DueForReprobe's
+// result; an on-demand refresh passes the whole set, or runs a full Pass to
+// re-enumerate.
 func (d *Discovery) Reprobe(ctx context.Context, ids []domain.RepoID, emit func(Record)) {
 	if len(ids) == 0 {
 		return
@@ -81,47 +81,14 @@ func (d *Discovery) Reprobe(ctx context.Context, ids []domain.RepoID, emit func(
 	}
 	d.mu.Unlock()
 
-	jobs := make(chan domain.RepoID)
-	var wg sync.WaitGroup
-	var emitMu sync.Mutex
-
-	worker := func() {
-		defer wg.Done()
-		for id := range jobs {
-			res := d.probe(ctx, id)
-			if res.err != nil {
-				continue
-			}
-			prev, ok := caps[id.String()]
-			if !ok {
-				prev = Record{Host: id.Host, Owner: id.Owner, Name: id.Name}
-			}
-			prev.HasRuns = res.hasRuns
-			d.putProbed(prev, d.opts.Clock.Now(), res.hasETag)
-			if emit != nil {
-				emitMu.Lock()
-				emit(prev)
-				emitMu.Unlock()
-			}
+	d.fanOut(ctx, ids, func(res probeResult) Record {
+		prev, ok := caps[res.id.String()]
+		if !ok {
+			prev = Record{Host: res.id.Host, Owner: res.id.Owner, Name: res.id.Name}
 		}
-	}
-
-	n := probeConcurrency
-	if len(ids) < n {
-		n = len(ids)
-	}
-	wg.Add(n)
-	for range n {
-		go worker()
-	}
-	for _, id := range ids {
-		if ctx.Err() != nil || d.exhausted() {
-			break
-		}
-		jobs <- id
-	}
-	close(jobs)
-	wg.Wait()
+		prev.HasRuns = res.hasRuns
+		return prev
+	}, emit)
 
 	d.persist()
 }

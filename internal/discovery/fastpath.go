@@ -65,7 +65,14 @@ func (d *Discovery) FastPath(ctx context.Context, emit func(Record)) (id domain.
 // outside any repository still discovers the account. emit fires once per repository
 // as it is classified, the fast-path repository before any pass probe (AC11, AC12).
 func (d *Discovery) Discover(ctx context.Context, emit func(Record)) error {
-	fastID, resolved, _ := d.FastPath(ctx, emit)
+	fastID, resolved, fastErr := d.FastPath(ctx, emit)
+	// R14: the fast path is non-fatal, but its error carries the actionable GH_TOKEN
+	// instruction, so record it for the caller rather than discarding it. The pass
+	// proceeds regardless, because a session launched outside any repository still
+	// discovers the account. The CLI surface (stage 6) reads it through FastPathErr.
+	d.mu.Lock()
+	d.fastPathErr = fastErr
+	d.mu.Unlock()
 
 	if err := d.Pass(ctx, emit); err != nil {
 		return err
@@ -84,6 +91,18 @@ func (d *Discovery) Discover(ctx context.Context, emit func(Record)) error {
 		}
 	}
 	return nil
+}
+
+// FastPathErr returns the non-fatal error the most recent Discover's fast path
+// produced, or nil. R14's resolver failure (the KnownHosts trap main.go turns into
+// the GH_TOKEN instruction, or an unsupported host) does not stop a discovery pass,
+// but it carries an actionable message, so Discover records it here rather than
+// discarding it. A CLI surface reads it after Discover to show the user the
+// instruction while still painting the account it discovered.
+func (d *Discovery) FastPathErr() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.fastPathErr
 }
 
 // isKnownMember reports whether id is in the set with a capability recorded by

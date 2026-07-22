@@ -44,6 +44,30 @@ func TestReloadRejectsNonGitHubHost(t *testing.T) {
 	}
 }
 
+// TestReloadRejectsInvalidRepoName is the charset hardening at the persistence
+// seam. A persisted record whose owner or name is outside GitHub's identifier
+// charset (a traversal-shaped name here) is rejected on reload and contributes no
+// entry, so a name that could reach a request URL path or a filesystem key never
+// re-enters the tool across sessions. It is the analogue of the foreign-host
+// rejection, at the same seam newRepoID guards.
+func TestReloadRejectsInvalidRepoName(t *testing.T) {
+	dir := t.TempDir()
+
+	writer := newDocStore(t, dir)
+	writer.SaveDoc("discovery", []discovery.Record{
+		{Host: "github.com", Owner: "jv-k", Name: "keep", HasRuns: true, Known: true, Permissions: domain.Permissions{Push: true}},
+		{Host: "github.com", Owner: "jv-k", Name: "../../evil", HasRuns: true, Known: true, Permissions: domain.Permissions{Push: true}},
+	})
+
+	d := discovery.New(discovery.Options{Store: newDocStore(t, dir), Clock: clockwork.NewFakeClock()})
+	if n := d.Reload(); n != 1 {
+		t.Errorf("Reload admitted %d records, want 1 (the path-unsafe name is rejected)", n)
+	}
+	if got := pollSetKeys(d); strings.Join(got, ",") != "github.com/jv-k/keep" {
+		t.Errorf("poll set = %v, want only github.com/jv-k/keep", got)
+	}
+}
+
 // TestFastPathRejectsNonGitHubHost is R18 at the fast path. A resolver that yields
 // a host other than github.com is rejected explicitly, with the neutral message
 // ADR-0009 settled on, rather than probed as though it were github.com.

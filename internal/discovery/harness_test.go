@@ -15,6 +15,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
+	"github.com/jv-k/gh-runs/v2/internal/limiter"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 )
 
@@ -102,11 +103,11 @@ func (c *countingRT) countExact(url string) int {
 }
 
 // harness is the whole floor a discovery test runs on: the cassette as the
-// injected base, wrapped by the counter, nested under the governor and the store
-// exactly as main.go nests them (ADR-0012), with a ghclient over the top and a
-// Discovery over that. Every request a test's discovery issues travels the real
-// transport chain, so the governor's accounting and the store's revalidation are
-// exercised rather than stubbed (R17, R12, R20).
+// injected base, wrapped by the counter, nested under the limiter, the governor and
+// the store exactly as main.go nests them (ADR-0012, ADR-0018), with a ghclient over
+// the top and a Discovery over that. Every request a test's discovery issues travels
+// the real transport chain, so the governor's accounting, the store's revalidation
+// and the limiter's wire bound are exercised rather than stubbed (R17, R12, R20).
 type harness struct {
 	disc     *discovery.Discovery
 	client   *ghclient.Client
@@ -159,7 +160,10 @@ func newHarness(t *testing.T, cassetteName string, dir string, opts ...harnessOp
 
 	clk := clockwork.NewFakeClockAt(time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC))
 	counting := &countingRT{base: rec}
-	gov := governor.New(counting, clk)
+	// The limiter is innermost, directly above the counted wire, exactly as main.go
+	// nests it (ADR-0018): store over governor over limiter over the base. Every
+	// discovery test therefore exercises the real chain with the wire bound in place.
+	gov := governor.New(limiter.New(counting, limiter.Bound), clk)
 	if dir == "" {
 		dir = t.TempDir()
 	}

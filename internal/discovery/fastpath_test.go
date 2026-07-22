@@ -100,6 +100,31 @@ func TestAdoptsFastPathRepoNotEnumerated(t *testing.T) {
 	}
 }
 
+// TestDiscoverSurfacesFastPathError pins the orchestration path's contract: Discover
+// records the fast-path resolver's error (R14's actionable GH_TOKEN instruction)
+// through FastPathErr rather than discarding it, and still completes the enumerate
+// and classify pass. A session launched where the fast path fails discovers the
+// account and can surface the instruction alongside the results.
+func TestDiscoverSurfacesFastPathError(t *testing.T) {
+	wantErr := errors.New("set GH_TOKEN to discover the current repository")
+	h := newHarness(t, "fastpath", "", withCurrent(func() (domain.RepoID, error) {
+		return domain.RepoID{}, wantErr
+	}))
+
+	if err := h.disc.Discover(context.Background(), nil); err != nil {
+		t.Fatalf("Discover returned a fatal error for a non-fatal fast-path failure: %v", err)
+	}
+	if err := h.disc.FastPathErr(); !errors.Is(err, wantErr) {
+		t.Errorf("FastPathErr = %v, want the resolver's error surfaced rather than discarded", err)
+	}
+
+	// The pass still ran: the account's one enumerated member with Runs is in the
+	// poll set, and the unresolved fast-path repository is not.
+	if got := pollSetKeys(h.disc); strings.Join(got, ",") != "github.com/acme/owned-a" {
+		t.Errorf("poll set = %v, want github.com/acme/owned-a (discovery proceeded past the fast-path failure)", got)
+	}
+}
+
 // TestFastPathResolverErrorIsSurfacedNotFatal pins R14's failure contract at the
 // engine. A resolver that cannot determine the current repository (the KnownHosts
 // trap main.go translates into the GH_TOKEN instruction, or an unsupported host)

@@ -94,58 +94,67 @@ func (d *Discovery) Pass(ctx context.Context, emit func(Record)) error {
 	return nil
 }
 
-// classifyAll probes every enumerated repository, bounded at probeConcurrency
-// requests in flight (R16, AC13), and folds each result into the set as it
-// returns (R15). A worker pool of fixed size is the bound: at no instant are more
-// than probeConcurrency probes outstanding, and no user-facing setting changes
-// that (AC13). The pool stops launching new probes once the governor reports
-// exhaustion, so a burst that meets a rate limit does not keep firing into it
-// (R17, ADR-0018); probes already in flight complete and emit.
+// classifyAll probes every enumerated repository and folds each result into the
+// set as it returns (R15), classifying it from the response body and pairing it
+// with the capability that rode along with enumeration at no extra request (R7).
+// The fan-out and its concurrency shape live in fanOut; classifyAll's only job is
+// to map a probe result to a freshly classified Record.
 func (d *Discovery) classifyAll(ctx context.Context, repos []enumerated, emit func(Record)) {
 	byID := make(map[string]apiRepo, len(repos))
+	ids := make([]domain.RepoID, 0, len(repos))
 	for _, r := range repos {
 		byID[r.id.String()] = r.repo
+		ids = append(ids, r.id)
 	}
+	d.fanOut(ctx, ids, func(res probeResult) Record {
+		return recordFrom(res.id, byID[res.id.String()], res.hasRuns)
+	}, emit)
+}
 
-	jobs := make(chan domain.RepoID)
+// fanOut probes every id concurrently, folds each successful result into the set as
+// it returns, and emits it. It spawns one goroutine per id and relies on the
+// transport-chain limiter (ADR-0018) to bound requests on the wire at the
+// process-wide constant, so the fan-out holds no bound of its own: the goroutine
+// count is bounded naturally by the probe-set size (~163 at a full pass, ~26 at a
+// re-probe) and the wire by the limiter innermost in the chain. This is the shape
+// classifyAll and Reprobe share, so it lives once: build is the only thing that
+// differs between them, mapping a successful probe to the Record to store (a fresh
+// classification for a pass, the recorded capability carried forward for a
+// re-probe).
+//
+// It stops launching probes once the context is cancelled or the governor reports
+// exhaustion (R17, ADR-0018): a burst that meets a rate limit does not keep firing
+// into a limit that names the whole token, and probes already in flight complete
+// and emit. emit is serialised within one fan-out, so a caller must not run a Pass
+// and a Reprobe concurrently unless its own emit is safe for concurrent calls.
+func (d *Discovery) fanOut(ctx context.Context, ids []domain.RepoID, build func(probeResult) Record, emit func(Record)) {
 	var wg sync.WaitGroup
 	var emitMu sync.Mutex
-
-	worker := func() {
-		defer wg.Done()
-		for id := range jobs {
+	for _, id := range ids {
+		if ctx.Err() != nil || d.exhausted() {
+			break
+		}
+		wg.Add(1)
+		go func(id domain.RepoID) {
+			defer wg.Done()
+			if ctx.Err() != nil || d.exhausted() {
+				return
+			}
 			res := d.probe(ctx, id)
 			if res.err != nil {
 				// A probe failure classifies nothing: the repository keeps whatever a
 				// prior pass or a reload recorded, and the next re-probe retries it.
-				continue
+				return
 			}
-			rec := recordFrom(res.id, byID[res.id.String()], res.hasRuns)
+			rec := build(res)
 			d.putProbed(rec, d.opts.Clock.Now(), res.hasETag)
 			if emit != nil {
 				emitMu.Lock()
 				emit(rec)
 				emitMu.Unlock()
 			}
-		}
+		}(id)
 	}
-
-	n := probeConcurrency
-	if len(repos) < n {
-		n = len(repos)
-	}
-	wg.Add(n)
-	for range n {
-		go worker()
-	}
-
-	for _, r := range repos {
-		if ctx.Err() != nil || d.exhausted() {
-			break
-		}
-		jobs <- r.id
-	}
-	close(jobs)
 	wg.Wait()
 }
 

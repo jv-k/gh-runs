@@ -56,14 +56,6 @@ const enumeratePath = "user/repos?per_page=100&affiliation=owner,collaborator,or
 // is set to.
 const hourlyTier = time.Hour
 
-// probeConcurrency bounds discovery's probe fan-out (R16, AC13). The number is
-// the tool's, never the user's, and no setting alters it. It matches ADR-0018's
-// process-wide wire bound of 10; the canonical long-term home for that bound is
-// the transport-chain limiter ADR-0018 places innermost, and when that limiter
-// lands this local bound becomes redundant. Until then discovery bounds its own
-// burst so AC13 holds at this stage.
-const probeConcurrency = 10
-
 // Requester issues a request through the transport chain and returns the response
 // for the caller to read and close. It is exactly ghclient.Client's surface
 // (ADR-0012: Request, never Get or Do, so the response headers survive), narrowed
@@ -119,6 +111,11 @@ type Discovery struct {
 	records map[string]Record    // keyed by RepoID.String(); the classified set
 	probed  map[string]time.Time // per repo: the injected-clock instant of its last probe
 	etagged map[string]bool      // per repo: whether its last probe carried an ETag (the fast tier, R12)
+
+	// fastPathErr holds the non-fatal error the most recent Discover's fast path
+	// produced, so R14's actionable GH_TOKEN instruction is retrievable rather than
+	// discarded (FastPathErr). Guarded by mu.
+	fastPathErr error
 }
 
 // New returns a Discovery over opts. It reads nothing and issues no request: a
@@ -261,10 +258,11 @@ func (d *Discovery) Capability(id domain.RepoID) domain.Capability {
 	return r.Capability()
 }
 
-// put stores or replaces a record and, when a probe produced it, records the
-// probe's clock instant and whether it carried an ETag, which the two-tier
-// refresh cadence reads (R11, R12). A record admitted without a probe (a reload,
-// or the fast-path repository before its own probe) leaves the timing untouched.
+// put stores or replaces a record without touching the re-probe cadence
+// bookkeeping. It is the timing-free store: a reload admits a persisted record with
+// it, and adoption admits an enumerated one, neither of which is a fresh probe. A
+// probe records its clock instant and ETag state through putProbed instead, which
+// the two-tier refresh cadence reads (R11, R12).
 func (d *Discovery) put(r Record) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -282,10 +280,12 @@ func (d *Discovery) putProbed(r Record, now time.Time, hasETag bool) {
 	d.etagged[key] = hasETag
 }
 
-// newRepoID host-qualifies a repository and rejects any host but github.com
-// (R18, AC14). No RepoID can be built without a host, and a repository resolving
-// elsewhere contributes no entry and returns an error naming the host, rather
-// than being silently attributed to github.com.
+// newRepoID host-qualifies a repository, rejects any host but github.com (R18,
+// AC14), and rejects an owner or name outside GitHub's identifier charset. No
+// RepoID can be built without a host, and a repository resolving elsewhere or
+// carrying a path-unsafe owner or name contributes no entry and returns an error,
+// rather than being silently attributed to github.com or interpolated raw into a
+// request URL path (classify.go, fastpath.go) or a future filesystem key.
 func newRepoID(host, owner, name string) (domain.RepoID, error) {
 	host = strings.TrimSpace(host)
 	if host == "" {
@@ -294,7 +294,51 @@ func newRepoID(host, owner, name string) (domain.RepoID, error) {
 	if !strings.EqualFold(host, githubHost) {
 		return domain.RepoID{}, &UnsupportedHostError{Host: host}
 	}
+	if !validOwner(owner) || !validRepoName(name) {
+		return domain.RepoID{}, &InvalidRepoError{Owner: owner, Name: name}
+	}
 	return domain.RepoID{Host: githubHost, Owner: owner, Name: name}, nil
+}
+
+// validOwner reports whether owner is a syntactically valid GitHub account name:
+// non-empty and composed of ASCII letters, digits and hyphens. GitHub's own rule is
+// stricter (no leading or trailing hyphen, at most 39 characters), but the charset is
+// what closes the finding: an owner reaches request URL paths (classify.go,
+// fastpath.go) and any future filesystem key, and a value outside this set is neither
+// a real GitHub account nor safe to interpolate. newRepoID is the one place every
+// identity is built, so validating here has no hole (R18).
+func validOwner(owner string) bool {
+	if owner == "" {
+		return false
+	}
+	for _, r := range owner {
+		if !isAlnum(r) && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// validRepoName reports whether name is a syntactically valid GitHub repository
+// name: non-empty, neither "." nor "..", and composed of ASCII letters, digits,
+// hyphen, underscore and dot. Rejecting the dot-dot component and any separator keeps
+// the name safe as a URL path segment and as a future filesystem key, the same reason
+// the store hashes its own keys (store.go).
+func validRepoName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	for _, r := range name {
+		if !isAlnum(r) && r != '-' && r != '_' && r != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// isAlnum reports whether r is an ASCII letter or digit.
+func isAlnum(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
 }
 
 // UnsupportedHostError reports a repository resolving to a host 2.0.0 does not
@@ -307,4 +351,18 @@ type UnsupportedHostError struct {
 
 func (e *UnsupportedHostError) Error() string {
 	return "repository host " + e.Host + " is not supported; gh-runs 2.0.0 serves github.com only"
+}
+
+// InvalidRepoError reports a repository whose owner or name is outside GitHub's
+// identifier charset, so it never reaches a request URL path or a filesystem key
+// (security hardening). Like UnsupportedHostError it names what it rejected and
+// claims nothing more.
+type InvalidRepoError struct {
+	Owner string
+	Name  string
+}
+
+func (e *InvalidRepoError) Error() string {
+	return "repository " + e.Owner + "/" + e.Name +
+		" has an unsupported owner or name; gh-runs accepts GitHub owner and repository names only"
 }
