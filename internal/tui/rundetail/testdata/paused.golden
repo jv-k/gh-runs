@@ -1,0 +1,8 @@
+[1macme/api · Deploy[m   [38;2;138;138;138mRun #57[m
+[1;38;2;255;95;95mUpdates paused: rate limit reached. Resumes 17:09.[m
+[38;2;0;175;255min_progress[m
+
+[1mJOB / STEP                                                     STATUS      CONCLUSION      ELAPSED  [m
+deploy                                                         [38;2;0;175;255min_progress[m                 [38;2;138;138;138m12s      [m
+[38;2;138;138;138m    1 Set up job                                              [m [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;138;138;138m3s       [m
+[38;2;138;138;138m    2 Push image                                              [m [38;2;0;175;255min_progress[m                 [38;2;138;138;138m9s       [m
