@@ -204,6 +204,34 @@ func TestReclamationBindings(t *testing.T) {
 	assertReclamation(t, "Standard", keys.Standard)
 }
 
+// assertLogView pins the five log-viewer action keys (BUILD-ORDER stage 12), identical
+// in both profiles like Delete. The canon names no literal for any of them, so these are
+// the chosen unclaimed keys the package documents: t toggles timestamps (R4), D deletes
+// the Run's logs (R17, the shift of Run deletion's d so AC6's "no single keystroke does
+// both" holds), e exports the archive (R11), and n/N move between search matches (R21).
+// Transcribed from the package doc, not read back off the binding, so a drift from the
+// documented choice fails here.
+func assertLogView(t *testing.T, name string, p keys.Profile) {
+	t.Helper()
+	assertKeys(t, name+".LogTimestamps", p.LogTimestamps, "t") // log-viewer R4
+	assertKeys(t, name+".LogDelete", p.LogDelete, "D")         // log-viewer R17, AC6
+	assertKeys(t, name+".LogExport", p.LogExport, "e")         // log-viewer R11
+	assertKeys(t, name+".LogNextMatch", p.LogNextMatch, "n")   // log-viewer R21
+	assertKeys(t, name+".LogPrevMatch", p.LogPrevMatch, "N")   // log-viewer R21
+}
+
+// TestLogViewBindings pins the stage-12 log-view keys over both profiles, and their
+// sameness: a forked binding fails one of the two runs. LogDelete is deliberately D, the
+// shift of Run deletion's d, so R17's "a different keystroke" and AC6's "no single
+// keystroke performs both" hold as a property of the registry.
+func TestLogViewBindings(t *testing.T) {
+	assertLogView(t, "Vim", keys.Vim)
+	assertLogView(t, "Standard", keys.Standard)
+	if containsKey(keys.Vim.LogDelete, "d") {
+		t.Errorf("LogDelete binds d, which is Run deletion; R17 requires a distinct keystroke and AC6 forbids one key doing both")
+	}
+}
+
 // assertConfirm pins R7a's "Confirm modal" table, also identical in both
 // profiles. y accepts below the threshold, n/esc abort, and enter aborts on the
 // default (the default is no), so enter opens Run detail in the Feed and cancels

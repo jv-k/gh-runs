@@ -48,6 +48,22 @@
 // new binding: deletion reuses Delete (d), which opens the same graduated confirmation
 // over the Storage tab's frozen Cache and Artifact selection, selection reuses
 // ToggleSelect (space), and refresh reuses Refresh (r) (storage-reclamation R15, R17).
+//
+// LogTimestamps, LogDelete, LogExport, LogNextMatch and LogPrevMatch are the log-viewer
+// stage (BUILD-ORDER stage 12) added the same way: the log-view pane's own actions
+// (log-viewer R4, R11, R17, R21). The canon names no literal for any of them, so unclaimed
+// literals are chosen and documented here, each a motion-independent action identical in
+// both profiles and distinct from every key already bound in the list. t toggles the ISO
+// timestamp prefix (R4). D deletes the Run's logs, deliberately the shift of Run deletion's
+// d, because R17 requires a keystroke distinct from deleting the Run and AC6 forbids one key
+// from doing both. e exports the whole-Run archive to disk (R11). n and N move to the next
+// and previous search match (R21), the editor-conventional pair. The pane's other actions
+// mint no new binding: the fold toggle reuses ToggleSelect (space), search entry reuses
+// Filter (/) with FilterAccept and FilterCancel for its input, a refetch reuses Refresh (r),
+// opening a Job's log and closing the pane reuse OpenDetail (enter) and CloseDetail (esc),
+// and scrolling reuses the motion bindings (R4, R5, R15, R21, R22). n also names the confirm
+// modal's abort, but the two never fire in the same context: the modal captures input while
+// a search is not open, exactly as enter and esc are shared across the detail and the modal.
 package keys
 
 import (
@@ -86,6 +102,11 @@ type Profile struct {
 	Rerun         key.Binding // R: re-run the selected Run(s), adding an Attempt (run-lifecycle R1, R8)
 	RerunFailed   key.Binding // F: re-run only the failed Jobs of the selected Run(s) (run-lifecycle R13)
 	ArtifactsOnly key.Binding // a: filter the Storage tab's list to Artifacts alone (storage-reclamation R8)
+	LogTimestamps key.Binding // t: toggle the log view's ISO timestamp prefix (log-viewer R4)
+	LogDelete     key.Binding // D: delete the Run's logs, distinct from Run deletion's d (log-viewer R17, AC6)
+	LogExport     key.Binding // e: export the whole-Run log archive to disk (log-viewer R11)
+	LogNextMatch  key.Binding // n: move to the next in-log search match (log-viewer R21)
+	LogPrevMatch  key.Binding // N: move to the previous in-log search match (log-viewer R21)
 	Refresh       key.Binding // r: apply deferred changes, refresh (R10, R11)
 	OpenDetail    key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
 	CloseDetail   key.Binding // esc: close the Run detail pane (BUILD-ORDER stage 8, run-detail)
@@ -125,6 +146,11 @@ func shared(name string) Profile {
 		Rerun:         key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "re-run")),
 		RerunFailed:   key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "re-run failed")),
 		ArtifactsOnly: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "artifacts only")),
+		LogTimestamps: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "timestamps")),
+		LogDelete:     key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete logs")),
+		LogExport:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export archive")),
+		LogNextMatch:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
+		LogPrevMatch:  key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous match")),
 		Refresh:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		OpenDetail:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
 		CloseDetail:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close detail")),
@@ -228,6 +254,7 @@ func (p Profile) Bindings() []key.Binding {
 		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
 		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect, p.Delete,
 		p.Cancel, p.ForceCancel, p.Rerun, p.RerunFailed, p.ArtifactsOnly,
+		p.LogTimestamps, p.LogDelete, p.LogExport, p.LogNextMatch, p.LogPrevMatch,
 		p.Refresh, p.OpenDetail, p.CloseDetail, p.Filter, p.Help, p.Quit,
 		p.FilterAccept, p.FilterCancel,
 		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,
