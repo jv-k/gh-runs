@@ -75,11 +75,11 @@ func (s *Summary) addFailure(item Item, reason string) {
 type verdict int
 
 const (
-	verdictDeleted    verdict = iota // a 204 or other 2xx: the Run is gone because we deleted it
-	verdictGone                      // a 404: the Run is gone already, which is success (R18)
-	verdictRateLimited               // the governor classified a rate limit (R19)
-	verdictInProgress                // a 409: the API rejected an in-progress Run (R12, AC16a)
-	verdictFailed                    // an authorization 403, a 5xx, anything else (R20)
+	verdictDeleted     verdict = iota // a 204 or other 2xx: the Run is gone because we deleted it
+	verdictGone                       // a 404: the Run is gone already, which is success (R18)
+	verdictRateLimited                // the governor classified a rate limit (R19)
+	verdictInProgress                 // a 409: the API rejected an in-progress Run (R12, AC16a)
+	verdictFailed                     // an authorization 403, a 5xx, anything else (R20)
 )
 
 // disposition is one Item's terminal outcome after the retry loop.

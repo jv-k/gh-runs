@@ -20,7 +20,7 @@ import (
 // and roughly twenty Purges of history.
 const (
 	logRotateSize  = 8 << 20 // 8 MB
-	logGenerations = 4        // rotated generations kept beside the active log
+	logGenerations = 4       // rotated generations kept beside the active log
 )
 
 // logOutcome is R29's closed outcome vocabulary, a column of its own so a count is a

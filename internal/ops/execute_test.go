@@ -70,7 +70,7 @@ func TestExecuteMixedOutcomes(t *testing.T) {
 // Runs delete; the read-only Run is skipped with no wire request.
 func TestExecuteSkipsIneligibleWithoutAttempting(t *testing.T) {
 	h := newHarness(t, "delete_ok", 50, 50)
-	sel := items("o", "r", 1, 2)                                    // eligible
+	sel := items("o", "r", 1, 2)                                     // eligible
 	sel = append(sel, ops.RunItem(completedRun(3, "o", "readonly"))) // ineligible: read-only repo
 	repos := snapshot(
 		writableRepo("o", "r"),

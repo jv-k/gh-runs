@@ -102,8 +102,8 @@ func TestClampIsThreadedThroughConfig(t *testing.T) {
 func TestEligibilityStampAndSplit(t *testing.T) {
 	var items []ops.Item
 	items = append(items, runItems("o", "ok", 44, 1)...)
-	items = append(items, ops.RunItem(completedRun(900, "o", "ro")))       // read-only repo
-	items = append(items, ops.RunItem(completedRun(901, "o", "arch")))     // archived repo
+	items = append(items, ops.RunItem(completedRun(900, "o", "ro")))   // read-only repo
+	items = append(items, ops.RunItem(completedRun(901, "o", "arch"))) // archived repo
 	inProg := domain.Run{ID: 902, Repo: repoID("o", "ok"), Status: domain.StatusInProgress}
 	items = append(items, ops.RunItem(inProg)) // in-progress in a writable repo
 
