@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
 
 // The Feed's column geometry (R4a). Four columns are fixed and never shrink; two
@@ -227,10 +228,17 @@ func (m Model) renderRow(r domain.Run, isCursor, isSelected bool) string {
 		return s
 	}
 
-	repoCell := decorate(m.actionStyle(r.Repo)).Render(truncPad(repoLabel(r), repoW))
-	workflowCell := decorate(lipgloss.NewStyle()).Render(truncPad(workflowLabel(r), workflowW))
-	statusCell := decorate(statusStyle(r.Status)).Render(truncPad(string(r.Status), statusW))
-	conclusionCell := decorate(conclusionStyle(r.Conclusion)).Render(truncPad(conclusionText(r), conclusionW))
+	// Sanitise every run-derived string before it is measured and painted: a workflow or
+	// run name is free-form text an author on any polled repository controls, and a C0 or
+	// CSI sequence in it would rewrite or spoof the operator's terminal (security review).
+	// The colour lookups above read the raw Status and Conclusion, so an unknown value still
+	// renders in the default foreground; only the painted text is cleaned. The Run ID and
+	// the timestamp are machine-generated and need no cleaning. Sanitising before truncPad
+	// keeps the width arithmetic measuring exactly what is drawn.
+	repoCell := decorate(m.actionStyle(r.Repo)).Render(truncPad(textsan.Sanitize(repoLabel(r)), repoW))
+	workflowCell := decorate(lipgloss.NewStyle()).Render(truncPad(textsan.Sanitize(workflowLabel(r)), workflowW))
+	statusCell := decorate(statusStyle(r.Status)).Render(truncPad(textsan.Sanitize(string(r.Status)), statusW))
+	conclusionCell := decorate(conclusionStyle(r.Conclusion)).Render(truncPad(textsan.Sanitize(conclusionText(r)), conclusionW))
 	runIDCell := decorate(lipgloss.NewStyle()).Render(truncPad(strconv.FormatInt(r.ID, 10), runIDW))
 	startedCell := decorate(lipgloss.NewStyle()).Render(truncPad(formatStarted(r), startedW))
 
