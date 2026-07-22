@@ -1,0 +1,7 @@
+[1mStorage[m [38;2;138;138;138mcli/cli[m[38;2;138;138;138m   [mCaches [38;2;95;175;255m302.46 MB[m[38;2;138;138;138m (1)[m[38;2;138;138;138m   [mArtifacts [38;2;135;215;135m145.21 KB[m[38;2;138;138;138m reclaimable, 1 live[m
+
+[1m      KIND             SIZE  REPOSITORY            NAME                  DETAIL[m
+[38;2;255;175;0m> [m[ ] [38;2;95;175;255mCACHE   [m    302.46 MB  cli/cli               setup-go-macOS-arm6…  accessed 2026-07-10
+  [ ] [38;2;135;215;135mARTIFACT[m    145.21 KB  cli/cli               build-logs            expires 2026-07-31
+
+[38;2;138;138;138m  space select (0)   d reclaim   a artifacts-only   r refresh[m

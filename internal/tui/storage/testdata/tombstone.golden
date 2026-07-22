@@ -1,0 +1,7 @@
+[1mStorage[m [38;2;138;138;138mcli/cli[m[38;2;138;138;138m   [mCaches [38;2;95;175;255m0 B[m[38;2;138;138;138m (0)[m[38;2;138;138;138m   [mArtifacts [38;2;135;215;135m258.00 KB[m[38;2;138;138;138m reclaimable, 1 live[m[38;2;138;138;138m   [m[38;2;138;138;138m1 tombstone[m
+
+[1m      KIND             SIZE  REPOSITORY            NAME                  DETAIL[m
+[38;2;255;175;0m> [m[ ] [38;2;135;215;135mARTIFACT[m    258.00 KB  cli/cli               release-binaries      expires 2026-07-31
+  [ ] [38;2;138;138;138mARTIFACT[m    234.13 KB  cli/cli               old-test-logs         [38;2;138;138;138mtombstone, reclaims nothing[m
+
+[38;2;138;138;138m  space select (0)   d reclaim   a artifacts-only   r refresh[m

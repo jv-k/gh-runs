@@ -1,0 +1,13 @@
+[1mStorage[m [38;2;138;138;138m2 repositories[m[38;2;138;138;138m   [mCaches [38;2;95;175;255m10.89 GB[m[38;2;138;138;138m (85)[m[38;2;138;138;138m   [mArtifacts [38;2;135;215;135m47.68 MB[m[38;2;138;138;138m reclaimable, 1 live[m
+[38;2;255;135;95mCache list incomplete in 2 repos; the total above is the endpoint's own figure (R2)[m
+
+[1m  REPOSITORY            CACHES            ARTIFACTS[m
+  cli/cli               10.59 GB (83)     47.68 MB
+  octo/hello            302.46 MB (2)     0 B
+
+[1m      KIND             SIZE  REPOSITORY            NAME                  DETAIL[m
+[38;2;255;175;0m> [m[ ] [38;2;95;175;255mCACHE   [m    302.46 MB  cli/cli               setup-go              accessed 2026-07-10
+  [ ] [38;2;95;175;255mCACHE   [m    302.46 MB  octo/hello            npm                   accessed 2026-07-09
+  [ ] [38;2;135;215;135mARTIFACT[m     47.68 MB  cli/cli               logs                  expires 2026-07-31
+
+[38;2;138;138;138m  space select (0)   d reclaim   a artifacts-only   r refresh[m
