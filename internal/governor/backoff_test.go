@@ -10,6 +10,49 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 )
 
+// getPath issues one GET to a cassette path and closes the body, returning the
+// response for inspection first.
+func getPath(t *testing.T, g *governor.Governor, path string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/"+path, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := g.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("%s: round trip: %v", path, err)
+	}
+	return resp
+}
+
+// TestForbiddenRateLimitBacksOff pins AC5 against a recorded 403 that carries
+// rate-limit signals rather than the authorization shape: the issue rate falls,
+// the request is not a transport error, and it is classified so the consumer
+// re-attempts rather than failing (R12, R13, R14).
+func TestForbiddenRateLimitBacksOff(t *testing.T) {
+	g := governor.New(openCassette(t, "testdata/classification"), baseClock())
+
+	for i := 0; i < 40; i++ {
+		resp := getPath(t, g, "clean")
+		if err := resp.Body.Close(); err != nil {
+			t.Fatalf("close body: %v", err)
+		}
+	}
+	before := g.WriteRate()
+
+	resp := getPath(t, g, "forbidden_ratelimit")
+	if !governor.RateLimited(resp) {
+		t.Errorf("the rate-limit 403 was not classified as a rate-limit response (R14, AC5)")
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close body: %v", err)
+	}
+
+	if after := g.WriteRate(); after >= before {
+		t.Errorf("issue rate did not fall after a rate-limit 403: before=%v after=%v (R12, AC5)", before, after)
+	}
+}
+
 // TestBackoffWaitsRetryAfter pins AC4 against a recorded 429. A write trips the
 // secondary limit; the governor honours the Retry-After (R12) by issuing no
 // further write until virtual time has advanced the full 60 seconds, publishes
