@@ -23,6 +23,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/discovery"
 	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
+	"github.com/jv-k/gh-runs/v2/internal/limiter"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 )
 
@@ -45,17 +46,21 @@ func run() error {
 		fmt.Fprintln(os.Stderr, "gh-runs: config:", d.Message)
 	}
 
-	// The transport chain, nested per ADR-0012 and BUILD-ORDER's floor:
+	// The transport chain, nested per ADR-0012, ADR-0018 and BUILD-ORDER's floor:
 	//
-	//     store.NewTransport(governor.New(base, clk), dir, clk)
+	//     store.NewTransport(governor.New(limiter.New(base, Bound), clk), dir, clk)
 	//
 	// The store is outermost of ours and dials through the governor, which sits
 	// under it and above the network so it observes real network exchanges and
 	// only those. A 304 reaches the governor as a 304, before the store rewrites
-	// it to a 200. http.DefaultTransport is the base in production; a cassette is
-	// the base in a test, injected through this same parameter (local-store R19a).
+	// it to a 200. The limiter is innermost, directly above the base, bounding the
+	// whole process at Bound requests on the wire (ADR-0018): a slot measures what
+	// GitHub's concurrency cap measures, so it sits below the governor's pacing.
+	// http.DefaultTransport is the base in production; a cassette is the base in a
+	// test, injected through this same parameter one layer below the limiter
+	// (local-store R19a, ADR-0018 Consequences).
 	base := http.DefaultTransport
-	gov := governor.New(base, clk)
+	gov := governor.New(limiter.New(base, limiter.Bound), clk)
 	transport := store.NewTransport(gov, storeDir(), clk)
 
 	// go-gh installs our transport as opts.Transport with its own cache off
