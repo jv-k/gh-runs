@@ -179,7 +179,11 @@ func (m Model) detailBlock() []string {
 	if view == "" {
 		return nil
 	}
-	block := []string{styleDim.Render(strings.Repeat("─", m.width))}
+	rule := m.width
+	if rule < 0 {
+		rule = 0 // strings.Repeat panics on a negative count; Bubble Tea never emits one (defence in depth)
+	}
+	block := []string{styleDim.Render(strings.Repeat("─", rule))}
 	return append(block, strings.Split(view, "\n")...)
 }
 
