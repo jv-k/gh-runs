@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -165,6 +166,15 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		return 1
 	}
 
+	// Reject a non-github.com remote explicitly rather than silently attributing its Runs to
+	// github.com (R35, AC17). Being outside a git repository, or an unresolvable remote, is
+	// not a rejection: the Feed falls back to progressive reveal across the discovered
+	// account (R34).
+	if err := currentHostSupported(ghclient.CurrentRepo); err != nil {
+		fmt.Fprintln(os.Stderr, "gh-runs:", err)
+		return 1
+	}
+
 	// The keybinding profile is the resolved setting (live-run-feed R7, settings R5).
 	profile := keys.Standard
 	if p, ok := keys.ForName(string(cfg.KeybindingProfile)); ok {
@@ -219,6 +229,23 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		return 1
 	}
 	return 0
+}
+
+// currentHostSupported reports an error only when the repository the tool was launched
+// inside resolves to a host gh-runs does not serve, so runTUI rejects it explicitly rather
+// than attributing its Runs to the wrong host (live-run-feed R35, AC17). Resolution routes
+// through the same host-qualifying resolver the rest of the tool uses, and only its typed
+// UnsupportedHostError is a rejection: being outside a git repository, or an unresolvable
+// remote, returns nil so the Feed falls back to progressive reveal across the account (R34).
+// errors.As unwraps, so a wrapped rejection is caught too, and the check reuses the one host
+// validation domain.NewRepoID and discovery already raise.
+func currentHostSupported(current func() (domain.RepoID, error)) error {
+	_, err := current()
+	var unsupported *domain.UnsupportedHostError
+	if errors.As(err, &unsupported) {
+		return unsupported
+	}
+	return nil
 }
 
 // baseTransport is the base RoundTripper the chain dials through, a clone of
