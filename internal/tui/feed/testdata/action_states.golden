@@ -1,0 +1,6 @@
+[1mREPOSITORY           WORKFLOW           STATUS      CONCLUSION      RUN ID      STARTED             [m
+[7macme/offered        [m [7mCI                [m [7;38;2;138;138;138mcompleted  [m [7;38;2;95;175;95msuccess        [m [7m1          [m [7m2026-07-15T16:39:00Z[m
+[2macme/readonly       [m CI                 [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m 2           2026-07-15T15:39:00Z
+[3macme/unknown        [m CI                 [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m 3           2026-07-15T14:39:00Z
+[9ma[m[9mc[m[9mm[m[9me[m[9m/[m[9ma[m[9mr[m[9mc[m[9mh[m[9mi[m[9mv[m[9me[m[9md[m[9m [m[9m [m[9m [m[9m [m[9m [m[9m [m[9m [m CI                 [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m 4           2026-07-15T13:39:00Z
+[38;2;138;138;138m↓/↑ move  space select  / filter  r refresh  ? help  q quit[m  [38;2;138;138;138mStandard[m
