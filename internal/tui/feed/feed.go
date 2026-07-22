@@ -37,9 +37,20 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
+	"github.com/jv-k/gh-runs/v2/internal/tui/confirm"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 )
+
+// Planner freezes a selection into an ops.Plan: the shared entry to the confirmation
+// chain (ADR-0019). *ops.Ops satisfies it. It is a narrow interface so the Feed
+// depends on the one call it makes and a golden test with no planner leaves it nil,
+// where the delete key is inert (the destructive action stays disabled until the
+// planner and the discovered capability data are wired, repo-discovery R8).
+type Planner interface {
+	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error)
+}
 
 // ReposDiscovered carries the account's discovered repositories, so the Feed's
 // capability gate distinguishes offered, read-only, not-yet-known and permanently
@@ -68,6 +79,10 @@ type Options struct {
 	SetViewport func([]domain.RepoID)
 	DetailFetch rundetail.Fetch
 	Clock       clock.Clock
+	// Ops freezes the selection into a Plan when the delete key opens the confirmation
+	// (purge R4 to R9). main.go wires it to the shared ops engine; a golden test leaves
+	// it nil, and the delete key is then inert.
+	Ops Planner
 }
 
 // Model is the Feed tab's state. The live map is the truth per repository; the
@@ -130,6 +145,14 @@ type Model struct {
 	detail     rundetail.Model
 	detailOpen bool
 
+	// confirm is the graduated-confirmation pane, opened over the frozen selection on
+	// the delete key (purge R4 to R9, ADR-0011: a tab may import a pane). While it is
+	// open it is a modal: the Feed routes every key to it and paints it in place of the
+	// list. planner freezes the selection into the Plan it renders.
+	confirm     confirm.Model
+	confirmOpen bool
+	planner     Planner
+
 	showHelp bool
 
 	// totals carries each filtered repository's reachable and claimed counts for R24's
@@ -173,6 +196,8 @@ func New(opts Options) Model {
 		totals:      make(map[string]capTotal),
 		filterInput: ti,
 		detail:      rundetail.New(rundetail.Options{Fetch: opts.DetailFetch, Clock: opts.Clock}),
+		confirm:     confirm.New(opts.Profile),
+		planner:     opts.Ops,
 	}
 }
 
@@ -194,12 +219,14 @@ func (m Model) SetActive(active bool) Model {
 	return m
 }
 
-// CapturesInput reports whether this tab holds text-input focus, which is true exactly
-// while the filter input is open (R22, R23). The root reads it to route every key but the
-// terminal interrupt straight here while it captures, so a digit, q or comma typed into a
-// filter value is not stolen as a global navigation key (ADR-0011, R7).
+// CapturesInput reports whether this tab holds text-input focus, which is true while
+// the filter input is open (R22, R23) and while the confirmation modal is up (purge
+// R7). The root reads it to route every key but the terminal interrupt straight here
+// while it captures, so a digit typed into a filter value or a typed-count confirmation,
+// or a y that must confirm rather than switch context, is not stolen as a global
+// navigation key (ADR-0011, R7).
 func (m Model) CapturesInput() bool {
-	return m.filterActive
+	return m.filterActive || m.confirmOpen
 }
 
 // Update handles one message the root routed here. Size and data broadcasts reach it
@@ -210,10 +237,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.filterInput.SetWidth(max(msg.Width-2, 0))
-		// Keep the pane laid out even while it is closed, so its first painted frame is
-		// already sized when it opens (ADR-0011: width is a correctness property).
+		// Keep the panes laid out even while closed, so their first painted frame is
+		// already sized when they open (ADR-0011: width is a correctness property).
 		var cmd tea.Cmd
 		m.detail, cmd = m.detail.Update(msg)
+		m.confirm, _ = m.confirm.Update(msg)
 		return m, cmd
 
 	case scheduler.Update:
@@ -262,10 +290,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // key literal of its own (R7a, AC18). While the filter input is focused, printable
 // keys reach it instead.
 func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.confirmOpen {
+		return m.handleConfirmKey(k)
+	}
 	if m.filterActive {
 		return m.handleFilterKey(k)
 	}
 	switch {
+	case key.Matches(k, m.profile.Delete):
+		return m.openConfirm(), nil
 	case key.Matches(k, m.profile.RowUp):
 		m.moveCursor(-1)
 	case key.Matches(k, m.profile.RowDown):
@@ -331,6 +364,101 @@ func (m Model) openDetail() (Model, tea.Cmd) {
 	m.detailOpen = true
 	var cmd tea.Cmd
 	m.detail, cmd = m.detail.Open(r)
+	return m, cmd
+}
+
+// openConfirm freezes the selection into a Plan and opens the confirmation modal over
+// it (purge R4 to R9). The frozen set is R4's ID-keyed selection, or the Run under the
+// cursor when nothing is selected, and it freezes here at modal open: RunItem copies
+// each Run by value, so a poll arriving afterwards cannot change the set (R5). With no
+// planner wired, an empty set, or a repository whose capability is not yet known, it
+// stays closed, keeping the destructive action disabled (repo-discovery R8, ADR-0019's
+// fail-closed Plan). Executing the resulting confirmation is the running-Purge surface,
+// deferred from this stage; the delete key's job here is to raise the confirmation.
+func (m Model) openConfirm() Model {
+	if m.planner == nil {
+		return m
+	}
+	items := m.frozenSelection()
+	if len(items) == 0 {
+		return m
+	}
+	plan, err := m.planner.Plan(ops.OpDelete, items, m.repoSnapshot())
+	if err != nil {
+		return m // fail closed: an unknown repository keeps the delete disabled (repo-discovery R8)
+	}
+	m.confirm = m.confirm.Open(plan)
+	m.confirmOpen = true
+	return m
+}
+
+// frozenSelection builds R4's frozen set: a RunItem per selected Run ID in displayed
+// order, then any off-filter selected Run from the live truth (R13a's cross-filter
+// accumulation), or the Run under the cursor when the selection is empty. Each
+// constructor copies the Run, so the set is frozen at this instant (R5).
+func (m Model) frozenSelection() []ops.Item {
+	if len(m.selected) == 0 {
+		if r, ok := m.cursorRun(); ok {
+			return []ops.Item{ops.RunItem(r)}
+		}
+		return nil
+	}
+	byID := m.liveByID()
+	seen := make(map[int64]bool, len(m.selected))
+	var items []ops.Item
+	for _, id := range m.displayedIDs {
+		if m.selected[id] {
+			if r, ok := byID[id]; ok {
+				items = append(items, ops.RunItem(r))
+				seen[id] = true
+			}
+		}
+	}
+	for id := range m.selected {
+		if seen[id] {
+			continue
+		}
+		if r, ok := byID[id]; ok {
+			items = append(items, ops.RunItem(r))
+		}
+	}
+	return items
+}
+
+// liveByID indexes every live Run by its ID across every repository, so a selected Run
+// that is off the current filter still resolves to its full object for the frozen set.
+func (m Model) liveByID() map[int64]domain.Run {
+	out := make(map[int64]domain.Run)
+	for _, runs := range m.live {
+		for i := range runs {
+			out[runs[i].ID] = runs[i]
+		}
+	}
+	return out
+}
+
+// repoSnapshot is the eligibility map Plan takes, the discovered capability data keyed
+// by RepoID (R10, ADR-0019). A repository absent from it makes Plan fail closed.
+func (m Model) repoSnapshot() map[domain.RepoID]domain.Repo {
+	out := make(map[domain.RepoID]domain.Repo, len(m.repos))
+	for _, r := range m.repos {
+		out[r.ID] = r
+	}
+	return out
+}
+
+// handleConfirmKey drives the confirmation modal while it is open, routing every key to
+// the pane (R7) and acting on its Outcome. An abort dismisses it having issued nothing
+// (AC6); a confirmation closes it holding the confirmed Plan and Input, and launching
+// the Purge from them is the running-Purge surface this stage defers.
+func (m Model) handleConfirmKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.confirm, cmd = m.confirm.Update(k)
+	switch m.confirm.Outcome() {
+	case confirm.Aborted, confirm.Confirmed:
+		m.confirm = m.confirm.Close()
+		m.confirmOpen = false
+	}
 	return m, cmd
 }
 

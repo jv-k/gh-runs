@@ -81,6 +81,12 @@ var conclusionColour = map[domain.Conclusion]string{
 // View renders the Feed to a frame from held state alone, with no live terminal and no
 // network (R36). Below minWidth it refuses rather than abridging (R4a, AC20).
 func (m Model) View() string {
+	// The confirmation is a modal: while it is up it replaces the list, so the operator
+	// reads the frozen set and the friction rather than the Feed behind it (purge R7).
+	// R14's non-modal rule is about the Purge running, not the confirmation gating it.
+	if m.confirmOpen {
+		return m.confirm.View()
+	}
 	if m.width < minWidth {
 		return m.narrowMessage()
 	}

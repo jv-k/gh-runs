@@ -83,6 +83,9 @@ type Options struct {
 	// fetch over ghclient, and Clock is the wall clock its timing column reads.
 	DetailFetch rundetail.Fetch
 	Clock       clock.Clock
+	// Ops freezes the Feed's selection into a Plan when the delete key opens the
+	// confirmation (purge R4 to R9). main.go wires it to the shared ops engine.
+	Ops feed.Planner
 }
 
 // Model is the root. It holds the three tabs, the focused index, and the seams it pulls
@@ -112,6 +115,7 @@ func New(opts Options) Model {
 		SetViewport: opts.SetViewport,
 		DetailFetch: opts.DetailFetch,
 		Clock:       opts.Clock,
+		Ops:         opts.Ops,
 	})
 	return Model{
 		tabs: []tab{
