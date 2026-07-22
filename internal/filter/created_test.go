@@ -224,6 +224,127 @@ func TestParseCreatedRejectsOperatorTokens(t *testing.T) {
 	}
 }
 
+// TestParseCreatedBroadenedGrammar pins the three date widths gh accepts that a
+// full date and RFC3339 do not cover: a bare year, a year-month, and a zone-less
+// datetime (measured read-only against cli/cli, cli-surface R2). Each is one
+// half-open UTC atom, and every check names a boundary instant so the atom's exact
+// edges are pinned, not just that the form parses.
+func TestParseCreatedBroadenedGrammar(t *testing.T) {
+	type check struct {
+		created string
+		want    bool
+	}
+	cases := []struct {
+		input  string
+		checks []check
+	}{
+		{
+			input: "2024", // the whole UTC year [2024-01-01, 2025-01-01)
+			checks: []check{
+				{"2024-01-01T00:00:00Z", true},
+				{"2024-12-31T23:59:59Z", true},
+				{"2025-01-01T00:00:00Z", false},
+				{"2023-12-31T23:59:59Z", false},
+			},
+		},
+		{
+			input: "2024-02", // the whole UTC month, 2024 is a leap year
+			checks: []check{
+				{"2024-02-01T00:00:00Z", true},
+				{"2024-02-29T23:59:59Z", true},
+				{"2024-03-01T00:00:00Z", false},
+				{"2024-01-31T23:59:59Z", false},
+			},
+		},
+		{
+			input: "2024-01-15T12:00:00", // zone-less datetime, one UTC second
+			checks: []check{
+				{"2024-01-15T12:00:00Z", true},
+				{"2024-01-15T12:00:01Z", false},
+				{"2024-01-15T11:59:59Z", false},
+			},
+		},
+		{
+			input: ">=2024", // inclusive lower edge is the year's start
+			checks: []check{
+				{"2024-01-01T00:00:00Z", true},
+				{"2023-12-31T23:59:59Z", false},
+			},
+		},
+		{
+			input: ">2024", // strictly after the whole year: lower edge is the next year
+			checks: []check{
+				{"2025-01-01T00:00:00Z", true},
+				{"2024-12-31T23:59:59Z", false},
+			},
+		},
+		{
+			input: "<2024", // strictly before the year begins
+			checks: []check{
+				{"2023-12-31T23:59:59Z", true},
+				{"2024-01-01T00:00:00Z", false},
+			},
+		},
+		{
+			input: "<=2024-02", // on or before the whole month
+			checks: []check{
+				{"2024-02-29T23:59:59Z", true},
+				{"2024-03-01T00:00:00Z", false},
+			},
+		},
+		{
+			input: "2024-01..2024-02", // month range: lo is Jan's start, hi is Feb's end
+			checks: []check{
+				{"2024-01-01T00:00:00Z", true},
+				{"2024-02-29T23:59:59Z", true},
+				{"2024-03-01T00:00:00Z", false},
+				{"2023-12-31T23:59:59Z", false},
+			},
+		},
+		{
+			input: "2023..2024", // year range spans both whole years
+			checks: []check{
+				{"2023-01-01T00:00:00Z", true},
+				{"2024-12-31T23:59:59Z", true},
+				{"2025-01-01T00:00:00Z", false},
+				{"2022-12-31T23:59:59Z", false},
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.input, func(t *testing.T) {
+			dr, err := filter.ParseCreated(c.input)
+			if err != nil {
+				t.Fatalf("ParseCreated(%q) returned error %v, want nil", c.input, err)
+			}
+			f := filter.Filter{Created: dr}
+			for _, chk := range c.checks {
+				if got := f.Match(domain.Run{CreatedAt: at(chk.created)}); got != chk.want {
+					t.Errorf("%q: Run created %s matched %v, want %v", c.input, chk.created, got, chk.want)
+				}
+			}
+		})
+	}
+}
+
+// TestParseCreatedBroadenedGrammarPreservesRejections pins that broadening to the
+// three new widths did not loosen the rejections: a non-padded month, an
+// out-of-range month, and trailing garbage are still caught by name, so the new
+// forms add width without opening a hole (cli-surface R6).
+func TestParseCreatedBroadenedGrammarPreservesRejections(t *testing.T) {
+	for _, bad := range []string{
+		"2024-1",               // year-month, not zero-padded
+		"2024-13",              // month out of range
+		"20241",                // not a four-digit year
+		"2024x",                // trailing garbage
+		"2024-01-01T00:00:00X", // datetime with a bad zone
+	} {
+		if _, err := filter.ParseCreated(bad); err == nil {
+			t.Errorf("ParseCreated(%q) returned nil, want an error", bad)
+		}
+	}
+}
+
 // TestCreatedZeroValueIsNoConstraint pins ADR-0016's "the zero value is no
 // clause": a Filter with no Created matches a Run of any creation time, so an
 // unset date axis never narrows the result.

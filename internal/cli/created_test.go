@@ -27,18 +27,27 @@ func TestCreatedFilterPushesAndMatches(t *testing.T) {
 	}
 }
 
-// TestCreatedGrammarBoundary documents the --created parity carry-forward, NOT a
-// settled behaviour. filter.ParseCreated accepts YYYY-MM-DD and full RFC3339 and
-// rejects a bare year, a year-month, and a zoneless datetime. gh's own --created
-// grammar may forward some of those to the API, so this test pins what the engine
-// does today rather than asserting it is what gh does. The verify step drives a
-// read-only live pass that can measure gh's actual grammar; do not broaden
-// ParseCreated on a guess (cli-surface R2, filter DateRange doc).
+// TestCreatedGrammarBoundary pins --created parity with gh's grammar, now measured
+// read-only against cli/cli (cli-surface R2). gh accepts five date widths and
+// gh-runs accepts the same five: a bare year, a year-month, a full date, an RFC3339
+// datetime with a zone, and a zone-less datetime. The bare year and year-month were
+// the headline parity questions and are now accepted, so a --created value that
+// works in gh no longer errors in gh-runs. Only a genuinely malformed value is
+// rejected, and it is rejected before the wire (cli-surface R6).
 func TestCreatedGrammarBoundary(t *testing.T) {
 	// Accepted forms parse into a filter. Routed through an empty fan-out (no -R,
 	// no discovered repositories) they issue no request, so the offline harness is
 	// never reached and the assertion is only that no --created rejection fired.
-	for _, form := range []string{"2026-07-20", "2026-07-20T10:00:00Z", ">=2026-01-01", "2026-01-01..2026-02-01"} {
+	for _, form := range []string{
+		"2026",                   // bare year, now accepted for gh parity
+		"2026-07",                // year-month, now accepted for gh parity
+		"2026-07-20",             // full date
+		"2026-07-20T10:00:00Z",   // RFC3339 with a zone
+		"2026-07-20T10:00:00",    // zone-less datetime, read as UTC
+		">=2026-01-01",           // an operator on a date
+		"2026-01-01..2026-02-01", // a range
+		">=2026",                 // an operator on the new bare-year atom
+	} {
 		h := newHarnessOffline(t).withDiscovered()
 		if code := h.run("list", "--created", form); code != 0 {
 			t.Errorf("--created %q exited %d over an empty fan-out, want 0; stderr=%q", form, code, h.stderr.String())
@@ -51,9 +60,9 @@ func TestCreatedGrammarBoundary(t *testing.T) {
 		}
 	}
 
-	// Rejected forms are caught before the wire. A bare year is the headline parity
-	// question: gh may accept 2026, ParseCreated does not.
-	for _, form := range []string{"2026", "2026-07", "not-a-date"} {
+	// A genuinely malformed value is still caught before the wire: a non-padded
+	// month, an out-of-range month, and a non-date all reject by name (R6).
+	for _, form := range []string{"2026-1", "2026-13", "not-a-date"} {
 		h := newHarnessOffline(t)
 		code := h.run("list", "-R", "octo/hello", "--created", form)
 		if code == 0 {

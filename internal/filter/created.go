@@ -16,13 +16,14 @@ import (
 // form, because "after the whole day" and "on or before the whole day" are just
 // which day-edge each operator picks.
 //
-// The boundary atom is provisional and unmeasured. The canon pins the field
-// (created_at), the zone (UTC), and gh's syntax, not the atom itself: the
-// half-open shape, a bare date spanning the whole UTC day, and a datetime
-// spanning one second are our reading of gh, not a measurement of it. A
-// flag-then-verify against gh settles it when --created becomes a flag at stage
-// 6 (cli-list), and the gap is recorded here so it is a known unknown rather
-// than a surprise.
+// The half-open atom is the whole of gh's --created grammar, measured read-only
+// against cli/cli at stage 6 (cli-list). gh accepts five widths and gh-runs accepts
+// the same five: a bare year spans the whole UTC year, a year-month the whole UTC
+// month, a full date the whole UTC day, an RFC3339 datetime with a zone one second
+// at its instant, and a zone-less datetime one second read as UTC. Each is one atom
+// [start, end); the operators and the A..B range pick an edge of it, which is what
+// makes an exclusive bound fall out without a flag. The canon pins the field
+// (created_at) and the zone (UTC); the atom widths are now measured, not assumed.
 type DateRange struct {
 	raw string    // verbatim, exactly as accepted, for the created query parameter
 	lo  time.Time // inclusive lower bound; the zero time is unbounded below
@@ -48,10 +49,11 @@ func (d DateRange) contains(t time.Time) bool {
 func (d DateRange) empty() bool { return d.raw == "" }
 
 // ParseCreated validates gh's date syntax and returns the range (ADR-0016). It
-// accepts a bare date, the comparison operators >=, <=, > and < on a date, the
-// A..B range with * for an open side, and an optional RFC3339 time component. It
-// rejects anything else by name, at construction, before any request (cli-surface
-// R6). gh's --created is absolute-only, so no clock is consulted.
+// accepts gh's five date widths (a bare year, a year-month, a full date, an RFC3339
+// datetime with a zone, and a zone-less datetime read as UTC), the comparison
+// operators >=, <=, > and < on any of them, and the A..B range with * for an open
+// side. It rejects anything else by name, at construction, before any request
+// (cli-surface R6). gh's --created is absolute-only, so no clock is consulted.
 func ParseCreated(s string) (DateRange, error) {
 	if before, after, ok := strings.Cut(s, ".."); ok {
 		return parseRange(s, before, after)
@@ -114,19 +116,36 @@ func parseRange(raw, before, after string) (DateRange, error) {
 	return d, nil
 }
 
-// tokenEdges parses one date or datetime token into its half-open atom
-// [start, end), in UTC. A bare date is the whole UTC day, so its atom is a day
-// wide; a datetime is the one second at its stated precision, matching the API's
-// second-granularity timestamps. The operators and ranges pick an edge of that
-// atom, which is what makes an exclusive bound fall out without a flag.
+// tokenEdges parses one gh date token into its half-open atom [start, end), in
+// UTC. gh accepts five widths (measured read-only against cli/cli), and each maps
+// to an atom: a bare year is the whole UTC year, a year-month the whole UTC month,
+// a full date the whole UTC day, and either datetime the one second at its stated
+// instant, matching the API's second-granularity timestamps. A zone-less datetime
+// is read as UTC. The operators and ranges pick an edge of that atom, which is what
+// makes an exclusive bound fall out without a flag. The forms are mutually
+// exclusive, because time.Parse consumes the whole token, so the order below is for
+// reading rather than for correctness, and each layout's own range checks reject a
+// non-padded or out-of-range field (2024-1, 2024-13) by name.
 func tokenEdges(tok string) (start, end time.Time, err error) {
-	if t, e := time.Parse("2006-01-02", tok); e == nil {
+	if t, e := time.Parse("2006-01-02", tok); e == nil { // full date: the whole UTC day
 		start = t.UTC()
 		return start, start.AddDate(0, 0, 1), nil
 	}
-	if t, e := time.Parse(time.RFC3339, tok); e == nil {
+	if t, e := time.Parse(time.RFC3339, tok); e == nil { // datetime with a zone: one second
 		start = t.UTC()
 		return start, start.Add(time.Second), nil
+	}
+	if t, e := time.Parse("2006-01-02T15:04:05", tok); e == nil { // zone-less datetime read as UTC: one second
+		start = t.UTC()
+		return start, start.Add(time.Second), nil
+	}
+	if t, e := time.Parse("2006-01", tok); e == nil { // year-month: the whole UTC month
+		start = t.UTC()
+		return start, start.AddDate(0, 1, 0), nil
+	}
+	if t, e := time.Parse("2006", tok); e == nil { // bare year: the whole UTC year
+		start = t.UTC()
+		return start, start.AddDate(1, 0, 0), nil
 	}
 	return time.Time{}, time.Time{}, fmt.Errorf("not a gh date token: %q", tok)
 }
