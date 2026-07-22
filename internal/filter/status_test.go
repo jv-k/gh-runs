@@ -62,6 +62,27 @@ func TestParseStatusAccumulates(t *testing.T) {
 	}
 }
 
+// TestParseStatusDeduplicates pins that a repeated -s value does not grow its
+// set. ParseStatus builds two sets, so passing the same value twice leaves one
+// entry, which keeps Match linear over a bounded pair rather than over a set an
+// operator can inflate by repeating a flag. Distinct values still accumulate.
+func TestParseStatusDeduplicates(t *testing.T) {
+	var f filter.Filter
+	for _, v := range []string{"failure", "failure", "queued", "queued", "failure"} {
+		if err := f.ParseStatus(v); err != nil {
+			t.Fatalf("ParseStatus(%q) returned error %v", v, err)
+		}
+	}
+	wantS := []domain.Status{domain.StatusQueued}
+	wantC := []domain.Conclusion{domain.ConclusionFailure}
+	if !equalStatuses(f.Statuses, wantS) {
+		t.Fatalf("Statuses = %v, want %v: repeated values must not duplicate", f.Statuses, wantS)
+	}
+	if !equalConclusions(f.Conclusions, wantC) {
+		t.Fatalf("Conclusions = %v, want %v: repeated values must not duplicate", f.Conclusions, wantC)
+	}
+}
+
 // TestParseStatusRejectsTypoByName pins cli-surface R6 on its measured failure
 // mode: -s faliure must be rejected by name, client-side, before any request. An
 // unchecked typo reaches the wire and comes back with every Run in the

@@ -18,13 +18,23 @@ import (
 // this code with this message whether it arrived from a flag, the Feed's filter
 // input, or a Purge command, and it validates against domain's own value lists
 // so the accepted set and the vocabulary cannot drift.
+//
+// A repeated value does not grow its set. The pair is a set, not a list, so a
+// duplicate flag is a no-op rather than a second entry that would cost Match a
+// redundant comparison. Distinct values still accumulate value by value.
 func (f *Filter) ParseStatus(value string) error {
 	if slices.Contains(domain.StatusValues(), domain.Status(value)) {
-		f.Statuses = append(f.Statuses, domain.Status(value))
+		s := domain.Status(value)
+		if !slices.Contains(f.Statuses, s) {
+			f.Statuses = append(f.Statuses, s)
+		}
 		return nil
 	}
 	if slices.Contains(domain.ConclusionValues(), domain.Conclusion(value)) {
-		f.Conclusions = append(f.Conclusions, domain.Conclusion(value))
+		c := domain.Conclusion(value)
+		if !slices.Contains(f.Conclusions, c) {
+			f.Conclusions = append(f.Conclusions, c)
+		}
 		return nil
 	}
 	return fmt.Errorf("unknown status or conclusion %q", value)
