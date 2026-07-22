@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 )
@@ -31,6 +32,7 @@ type Summary struct {
 	Total   int // the frozen set size
 	Deleted int // 204s, R29 'deleted'
 	Gone    int // 404s counted as success (R18), R29 'gone'
+	Acted   int // a lifecycle mutation the API accepted: cancel's 202, a re-run's 201 (run-lifecycle R4, R8). Never a deletion, so it writes no R29 log line (R24)
 	Skipped int // eligibility, in-progress and the R19a reclassification (R11, R12, R19a)
 
 	Failures     []FailureGroup // R22, grouped by reason
@@ -88,9 +90,11 @@ type disposition int
 const (
 	dispDeleted disposition = iota
 	dispGone
+	dispActed // a lifecycle mutation the API accepted (run-lifecycle R4, R8)
 	dispSkipped
 	dispFailed
 	dispCancelled
+	dispRetry // a rate limit: re-attempt under R19, never a terminal disposition executeSet sees
 )
 
 // itemResult is one Item's terminal disposition, plus the failure reason when it
@@ -114,41 +118,80 @@ func (o *Ops) Execute(ctx context.Context, c Confirmed) (Summary, error) {
 		return Summary{}, ErrSpent // single use; a nil cell is the zero Confirmed (ADR-0019)
 	}
 	plan := c.plan
-	if plan.op != OpDelete {
-		return Summary{}, fmt.Errorf("ops: Execute supports %s at this stage; %s is run-lifecycle's (stage 10)", OpDelete, plan.op)
+	switch plan.op {
+	case OpDelete:
+		return o.executeDelete(ctx, plan)
+	case OpCancel, OpForceCancel, OpRerun, OpRerunFailed:
+		return o.executeLifecycle(ctx, plan)
+	default:
+		return Summary{}, fmt.Errorf("ops: Execute does not support operation %q", plan.op)
 	}
-	sum := Summary{Total: plan.Total()}
+}
 
+// executeDelete runs a Purge: it proves the deletion log writable before the first
+// DELETE and walks the frozen set writing one line per attempt (purge R29). Only a
+// deletion is recorded, so the log is Execute's alone and this is the one path that
+// opens it (ADR-0011, ADR-0019).
+func (o *Ops) executeDelete(ctx context.Context, plan Plan) (Summary, error) {
 	// R29: the log is opened and proved writable before the first DELETE. An
 	// operation that cannot open it refuses to start, issues zero DELETEs, and names
 	// the log as the reason (AC20). This is the precondition that makes "no record,
 	// no deletion" a property of Execute rather than a promise four call sites make.
 	log, err := o.openLog(o.logPath, o.clk)
 	if err != nil {
-		sum.LogFailed = true
-		sum.Reason = err.Error()
-		return sum, nil
+		return Summary{Total: plan.Total(), LogFailed: true, Reason: err.Error()}, nil
 	}
 	defer func() { _ = log.close() }()
+	return o.executeSet(ctx, plan, log, func(ctx context.Context, log logSink, item Item) (itemResult, error) {
+		return o.deleteItem(ctx, log, item)
+	})
+}
 
+// executeLifecycle runs a bulk cancel, force-cancel, re-run or re-run-failed. It opens
+// no deletion log and requires none, because none of the four is a deletion: each
+// leaves an object standing on GitHub that carries its own record, so purge R29's log
+// MUST NOT record them (run-lifecycle R24, purge R29 scope). It reuses the Purge's
+// failure contract unchanged (R21): a rate limit backs off and is not a failure, a
+// permission or unexpected error advances the breaker, and the same consecutive count
+// circuit-breaks. Only the per-response classification differs, and mutateItem owns it.
+func (o *Ops) executeLifecycle(ctx context.Context, plan Plan) (Summary, error) {
+	return o.executeSet(ctx, plan, nil, func(ctx context.Context, _ logSink, item Item) (itemResult, error) {
+		return o.mutateItem(ctx, plan.op, plan.debug, item)
+	})
+}
+
+// executeSet is the frozen-set walk both a Purge and a bulk lifecycle operation share:
+// the failure contract R21 reuses unchanged. An ineligible Item is recorded and skipped
+// with no request (AC15, AC16); an eligible one is attempted; a success resets the
+// breaker and a failure advances it, circuit-breaking at the threshold (R21). log is
+// the Purge's deletion record and nil for a lifecycle operation, which writes none
+// (R24); attempt issues the one request and classifies it under the operation's own
+// contract. A stop condition returns a Summary rather than a Go error, because each is
+// a reported outcome the surface renders, not a programming fault (ADR-0019).
+func (o *Ops) executeSet(ctx context.Context, plan Plan, log logSink,
+	attempt func(context.Context, logSink, Item) (itemResult, error)) (Summary, error) {
+	sum := Summary{Total: plan.Total()}
 	failureStreak := 0
 	for i := range plan.items {
 		item := plan.items[i]
 		if ctx.Err() != nil {
-			sum.Cancelled = true // R16: no further DELETE is issued
+			sum.Cancelled = true // R16: no further request is issued
 			return sum, nil
 		}
 		// An Item stamped ineligible at Plan time is recorded as skipped, with no
-		// DELETE (R10, R11, R12, AC15, AC16). The skip line is written from the Item's
-		// fields verbatim (ADR-0019), and a log write that fails stops the Purge.
+		// request (R10, R11, R12, R19, AC15, AC16). A Purge writes the skip line from
+		// the Item's fields verbatim (ADR-0019); a lifecycle operation writes no log
+		// (R24). A log write that fails stops the Purge.
 		if item.Skip != SkipNone {
-			if lerr := log.write(skipLine(item, string(item.Skip))); lerr != nil {
-				return stopOnLogFailure(sum, lerr)
+			if log != nil {
+				if lerr := log.write(skipLine(item, string(item.Skip))); lerr != nil {
+					return stopOnLogFailure(sum, lerr)
+				}
 			}
 			sum.Skipped++
 			continue
 		}
-		res, lerr := o.deleteItem(ctx, log, item)
+		res, lerr := attempt(ctx, log, item)
 		if lerr != nil {
 			return stopOnLogFailure(sum, lerr) // R29: a mid-op log failure stops the Purge
 		}
@@ -159,6 +202,9 @@ func (o *Ops) Execute(ctx context.Context, c Confirmed) (Summary, error) {
 		case dispGone:
 			sum.Gone++
 			failureStreak = 0
+		case dispActed:
+			sum.Acted++ // a 202/201 the API accepted (run-lifecycle R4, R8)
+			failureStreak = 0
 		case dispSkipped:
 			sum.Skipped++ // transparent to the breaker: a skip is neither success nor failure
 		case dispFailed:
@@ -167,7 +213,7 @@ func (o *Ops) Execute(ctx context.Context, c Confirmed) (Summary, error) {
 			if failureStreak >= o.breakerFailures {
 				sum.CircuitBroke = true
 				sum.Reason = fmt.Sprintf("circuit breaker tripped after %d consecutive failures", failureStreak)
-				return sum, nil // R21: stop, no further DELETE
+				return sum, nil // R21: stop, no further request
 			}
 		case dispCancelled:
 			sum.Cancelled = true
@@ -281,6 +327,119 @@ func failureReason(resp *http.Response) string {
 		}
 	}
 	return fmt.Sprintf("HTTP %d", resp.StatusCode)
+}
+
+// notCancelableReason is the recorded reason for a 409 from cancel. It names force-cancel
+// as the escalation so the surface offering it reads the reason, never the raw status
+// (run-lifecycle R5, R6, AC6). In a bulk cancel a 409 is a raced completion and a skip
+// (R20, AC12); the single-Run surface reads the same reason to offer force-cancel (R5).
+const notCancelableReason = "run is not cancelable; escalate with force-cancel"
+
+// mutateItem issues one lifecycle request (cancel, force-cancel, re-run or re-run-failed)
+// under R19's bounded rate-limit retry, classifies it under the operation's contract, and
+// returns the disposition. It writes no deletion log: none of the four is a deletion, so
+// purge R29's log MUST NOT record them (run-lifecycle R24), and its (itemResult, error)
+// shape carries a nil error to match deleteItem so executeSet drives both. A rate limit is
+// re-attempted (R19), bounded at three then reclassified to a skip (R19a); the rest is
+// classifyLifecycle's, which is the one place the four operations' 404 and 409 readings
+// differ (R22). The governor paces this write and, on a rate limit, has already backed
+// off, so the next attempt waits on the injected clock without ops arranging it (R23, R26).
+func (o *Ops) mutateItem(ctx context.Context, op Operation, debug bool, item Item) (itemResult, error) {
+	rateLimitStreak := 0
+	for {
+		if ctx.Err() != nil {
+			return itemResult{disp: dispCancelled}, nil
+		}
+		method, path, body := lifecycleRequest(op, item, debug)
+		resp, err := o.client.RequestWithContext(ctx, method, path, body)
+		if err != nil {
+			if ctx.Err() != nil {
+				return itemResult{disp: dispCancelled}, nil // a cancelled request is not a failure
+			}
+			return itemResult{disp: dispFailed, reason: string(op) + " request failed: " + err.Error()}, nil
+		}
+		disp, reason := classifyLifecycle(op, resp)
+		_ = resp.Body.Close()
+		if disp == dispRetry {
+			// R19: a rate limit is never a failure, so the breaker never advances here. The
+			// governor's RoundTrip already halved the rate and set the resume hold; the next
+			// iteration's write waits it out. R19a bounds the re-attempt at three, then the
+			// Run is reclassified as an authorization skip and the operation proceeds (AC14a).
+			rateLimitStreak++
+			if rateLimitStreak >= maxRateLimitRetries {
+				return itemResult{disp: dispSkipped, reason: "rate limit persisted after retries; skipped as an authorization failure"}, nil
+			}
+			continue
+		}
+		return itemResult{disp: disp, reason: reason}, nil
+	}
+}
+
+// classifyLifecycle maps one response to a disposition under the operation's own failure
+// contract, the one place the four operations diverge (R22). A rate limit is dispRetry for
+// mutateItem's bounded loop (R19). For cancel and force-cancel: a 2xx is the accepted
+// request, not the cancelled outcome (R4, AC5), so it is dispActed and no Conclusion is
+// inferred; a 404 means the Run no longer exists and so is not running, which is the
+// requested end state, recorded as a skip (R22, AC13); a 409 means the Run is not
+// cancelable, a raced completion recorded as a skip that does not advance the breaker (R5,
+// R20, AC12); anything else is a failure (R20, R3's expected 403 despite push). For re-run
+// and re-run-failed: a 2xx added the Attempt (R8); a 404 means the Run cannot gain one and
+// is a failure, the opposite reading of the same status (R22, AC13); the API's own reason
+// is surfaced rather than pre-judged (R15, AC15).
+func classifyLifecycle(op Operation, resp *http.Response) (disposition, string) {
+	if governor.RateLimited(resp) {
+		return dispRetry, ""
+	}
+	code := resp.StatusCode
+	switch op {
+	case OpCancel, OpForceCancel:
+		switch {
+		case code >= 200 && code < 300:
+			return dispActed, "" // 202 accepted: a request, not an outcome (R4, AC5)
+		case code == http.StatusNotFound:
+			return dispSkipped, "run no longer exists, so it is not running" // R22, AC13
+		case code == http.StatusConflict:
+			return dispSkipped, notCancelableReason // R5, R20, AC12
+		default:
+			return dispFailed, failureReason(resp) // R20, R3
+		}
+	default: // OpRerun, OpRerunFailed
+		if code >= 200 && code < 300 {
+			return dispActed, "" // 201 created: an Attempt added (R8)
+		}
+		return dispFailed, failureReason(resp) // R22/AC13: a 404 is a failure here; R15: surface the API's reason
+	}
+}
+
+// lifecycleRequest builds the POST endpoint, and the re-run body, for one lifecycle
+// operation over a Run (run-lifecycle R6's distinct force-cancel endpoint, R13's distinct
+// re-run-failed endpoint). All four act on Runs alone (R16), so the path is always the
+// Run's. Only re-run and re-run-failed carry a body, and only when debug logging is on.
+func lifecycleRequest(op Operation, item Item, debug bool) (method, path string, body io.Reader) {
+	base := fmt.Sprintf("repos/%s/%s/actions/runs/%d", item.Repo.Owner, item.Repo.Name, item.ID)
+	switch op {
+	case OpCancel:
+		return http.MethodPost, base + "/cancel", nil
+	case OpForceCancel:
+		return http.MethodPost, base + "/force-cancel", nil
+	case OpRerun:
+		return http.MethodPost, base + "/rerun", rerunBody(debug)
+	case OpRerunFailed:
+		return http.MethodPost, base + "/rerun-failed-jobs", rerunBody(debug)
+	default:
+		return http.MethodPost, base, nil // unreachable: Execute validated the operation
+	}
+}
+
+// rerunBody is R14's enable_debug_logging opt-in. On the default path it sends no body,
+// so the request carries no enable_debug_logging at all, which is exactly what AC14
+// asserts of the default. With the opt-in it sends the one flag both re-run endpoints
+// accept, matching gh run rerun --debug (R14, AC14).
+func rerunBody(debug bool) io.Reader {
+	if !debug {
+		return nil
+	}
+	return strings.NewReader(`{"enable_debug_logging":true}`)
 }
 
 // deletePath builds the DELETE endpoint per Item Kind (ADR-0019: Delete resolves its

@@ -1,0 +1,30 @@
+---
+version: 2
+# Two clean re-runs, each 201 Created. A re-run adds an Attempt to the existing Run rather
+# than creating one (run-lifecycle R8); the 201 is the API accepting the request. The
+# matcher ignores the body, so the same tape serves the default path (no body) and the
+# debug path (enable_debug_logging), and the test reads the captured request body to prove
+# AC14 rather than matching on it.
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/1/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 1
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/2/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4899"]
+            X-Ratelimit-Reset: ["1789000000"]

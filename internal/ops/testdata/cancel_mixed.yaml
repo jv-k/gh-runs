@@ -1,0 +1,57 @@
+---
+version: 2
+# A bulk cancel over four Runs, one per branch of cancel's failure contract (run-lifecycle
+# R4, R20, R22, AC5, AC12, AC13). Cancel is a POST and asynchronous: a 202 means the request
+# was accepted, not that the Run cancelled, so it is 'acted', never a cancelled Conclusion.
+interactions:
+    # Run 1: 202 Accepted. The request was accepted, not the outcome (R4, AC5).
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/1/cancel
+      response:
+        status: 202 Accepted
+        code: 202
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]
+    # Run 2: 409 Conflict. The Run is not cancelable (a raced completion). A bulk cancel
+    # records it as a skip, not a failure, and the breaker does not advance (R5, R20, AC12).
+    - id: 1
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/2/cancel
+      response:
+        status: 409 Conflict
+        code: 409
+        body: '{"message":"Cannot cancel a workflow run that is completed.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#cancel-a-workflow-run"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4899"]
+    # Run 3: 404 Not Found. The Run no longer exists, so it is not running, which is the
+    # requested end state: recorded as a skip, never a failure (R22, AC13).
+    - id: 2
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/3/cancel
+      response:
+        status: 404 Not Found
+        code: 404
+        body: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4898"]
+    # Run 4: 202 Accepted, a second clean cancel after the two skips, proving the operation
+    # proceeds past a 409 and a 404 rather than stopping (R20, R21).
+    - id: 3
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/4/cancel
+      response:
+        status: 202 Accepted
+        code: 202
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4897"]
+            X-Ratelimit-Reset: ["1789000000"]

@@ -1,0 +1,55 @@
+---
+version: 2
+# Run 1's cancel answers a 403 whose documentation_url points at the fine-grained-PAT
+# permissions page, NOT at this endpoint's reference, so it fails the authorization-shape
+# correspondence and the governor classifies it as rate limiting, the safe default (R3, R19,
+# rate-governor open question 1). It is taped three times, which drives R19a's bound and
+# proves it: a fourth cancel of Run 1 has no tape, so a fourth request would fail the replay.
+# After three the Run is reclassified and skipped (R19a, AC14a), and the operation proceeds
+# to Run 2, which cancels cleanly. The rate limit is never counted as a failure (R21), so the
+# operation does not circuit-break: run-lifecycle inherits the Purge's contract unchanged.
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/1/cancel
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4321"]
+    - id: 1
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/1/cancel
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4320"]
+    - id: 2
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/1/cancel
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4319"]
+    - id: 3
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/2/cancel
+      response:
+        status: 202 Accepted
+        code: 202
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4318"]
+            X-Ratelimit-Reset: ["1789000000"]

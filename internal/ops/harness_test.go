@@ -1,7 +1,9 @@
 package ops_test
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -55,11 +57,22 @@ type countingRT struct {
 type call struct {
 	method string
 	url    string
+	body   string
 }
 
 func (c *countingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Capture the request body and restore it, so a test can assert what a re-run sent
+	// (AC14's enable_debug_logging) without the cassette matching on it. GET and DELETE
+	// carry no body, so this only reads the POST bodies the lifecycle operations send.
+	body := ""
+	if req.Body != nil {
+		raw, _ := io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		body = string(raw)
+		req.Body = io.NopCloser(bytes.NewReader(raw))
+	}
 	c.mu.Lock()
-	c.calls = append(c.calls, call{req.Method, req.URL.String()})
+	c.calls = append(c.calls, call{req.Method, req.URL.String(), body})
 	c.mu.Unlock()
 	resp, err := c.base.RoundTrip(req)
 	if req.Method == http.MethodDelete {
@@ -80,6 +93,19 @@ func (c *countingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func (c *countingRT) deletes() int { return c.countMethod(http.MethodDelete) }
+
+// postBody returns the request body of the first POST to a URL ending in suffix, and
+// whether one was found, so a test can read what a re-run sent (AC14).
+func (c *countingRT) postBody(suffix string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, cl := range c.calls {
+		if cl.method == http.MethodPost && strings.HasSuffix(cl.url, suffix) {
+			return cl.body, true
+		}
+	}
+	return "", false
+}
 
 func (c *countingRT) countMethod(method string) int {
 	c.mu.Lock()

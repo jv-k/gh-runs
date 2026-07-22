@@ -1,0 +1,17 @@
+---
+version: 2
+# Force-cancel is a distinct operation against a distinct endpoint, the escalation for when
+# a plain cancel does not take effect (run-lifecycle R6). It is a POST like cancel and its
+# 202 is likewise a request, not an outcome (R4).
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/1/force-cancel
+      response:
+        status: 202 Accepted
+        code: 202
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]
