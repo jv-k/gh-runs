@@ -1,0 +1,30 @@
+---
+version: 2
+# One clean Cache DELETE and one clean Artifact DELETE, each 204 No Content. The Cache
+# DELETE targets the Cache's id (987654321), never its key, so a key naming more than one
+# Cache cannot widen the blast radius (storage-reclamation R16, AC10). Both travel the same
+# single mutation entry a Run deletion does, ops.Execute over the store-governor-limiter
+# chain, and each is logged one line per attempt with its own kind (purge R29, R17).
+interactions:
+    - id: 0
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/caches/987654321
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 1
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/artifacts/112233445
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4899"]
+            X-Ratelimit-Reset: ["1789000000"]

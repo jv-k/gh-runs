@@ -94,6 +94,21 @@ func (c *countingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func (c *countingRT) deletes() int { return c.countMethod(http.MethodDelete) }
 
+// urls returns the request URLs of every wire call made with the given method, in
+// order, so a reclamation test can assert a DELETE carried the Cache's id and not its
+// key (storage-reclamation R16, AC10).
+func (c *countingRT) urls(method string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, cl := range c.calls {
+		if cl.method == method {
+			out = append(out, cl.url)
+		}
+	}
+	return out
+}
+
 // postBody returns the request body of the first POST to a URL ending in suffix, and
 // whether one was found, so a test can read what a re-run sent (AC14).
 func (c *countingRT) postBody(suffix string) (string, bool) {

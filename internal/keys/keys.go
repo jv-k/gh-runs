@@ -38,6 +38,16 @@
 // (R6), R (shift+r) re-runs, and F (shift+f) re-runs failed Jobs. Each is a
 // motion-independent action, identical in both profiles, and distinct from every key
 // already bound in the list.
+//
+// ArtifactsOnly is the storage-reclamation stage (BUILD-ORDER stage 11) added the same
+// way: the Storage tab's key that filters the merged Cache-and-Artifact list to
+// Artifacts alone (storage-reclamation R8), because the bytes-descending sort files the
+// Caches above nearly every Artifact. The canon names no literal for it, so the
+// unclaimed literal a is chosen and documented here, a mnemonic for Artifacts and
+// distinct from every key already bound in the list. Reclamation's other actions mint no
+// new binding: deletion reuses Delete (d), which opens the same graduated confirmation
+// over the Storage tab's frozen Cache and Artifact selection, selection reuses
+// ToggleSelect (space), and refresh reuses Refresh (r) (storage-reclamation R15, R17).
 package keys
 
 import (
@@ -65,22 +75,23 @@ type Profile struct {
 
 	// Navigation and actions. Identical in both profiles (R7a's "Everything
 	// else" table).
-	NextTab      key.Binding // tab: next tab (R2)
-	PrevTab      key.Binding // shift+tab: previous tab (R2)
-	SelectTab    key.Binding // 1/2/3: jump to a tab by position (R2)
-	Settings     key.Binding // ,: settings, reachable from any tab (R2)
-	ToggleSelect key.Binding // space: toggle row selection (purge R4)
-	Delete       key.Binding // d: open the graduated confirmation over the selection (purge R4 to R9)
-	Cancel       key.Binding // c: cancel the selected Run(s) (run-lifecycle R1, R16)
-	ForceCancel  key.Binding // C: force-cancel, the escalation of cancel (run-lifecycle R6)
-	Rerun        key.Binding // R: re-run the selected Run(s), adding an Attempt (run-lifecycle R1, R8)
-	RerunFailed  key.Binding // F: re-run only the failed Jobs of the selected Run(s) (run-lifecycle R13)
-	Refresh      key.Binding // r: apply deferred changes, refresh (R10, R11)
-	OpenDetail   key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
-	CloseDetail  key.Binding // esc: close the Run detail pane (BUILD-ORDER stage 8, run-detail)
-	Filter       key.Binding // /: filter (R22, R23)
-	Help         key.Binding // ?: help (bubbles/help renders the registry)
-	Quit         key.Binding // q, ctrl+c: quit, and ctrl+c binds nothing else (R7)
+	NextTab       key.Binding // tab: next tab (R2)
+	PrevTab       key.Binding // shift+tab: previous tab (R2)
+	SelectTab     key.Binding // 1/2/3: jump to a tab by position (R2)
+	Settings      key.Binding // ,: settings, reachable from any tab (R2)
+	ToggleSelect  key.Binding // space: toggle row selection (purge R4)
+	Delete        key.Binding // d: open the graduated confirmation over the selection (purge R4 to R9)
+	Cancel        key.Binding // c: cancel the selected Run(s) (run-lifecycle R1, R16)
+	ForceCancel   key.Binding // C: force-cancel, the escalation of cancel (run-lifecycle R6)
+	Rerun         key.Binding // R: re-run the selected Run(s), adding an Attempt (run-lifecycle R1, R8)
+	RerunFailed   key.Binding // F: re-run only the failed Jobs of the selected Run(s) (run-lifecycle R13)
+	ArtifactsOnly key.Binding // a: filter the Storage tab's list to Artifacts alone (storage-reclamation R8)
+	Refresh       key.Binding // r: apply deferred changes, refresh (R10, R11)
+	OpenDetail    key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
+	CloseDetail   key.Binding // esc: close the Run detail pane (BUILD-ORDER stage 8, run-detail)
+	Filter        key.Binding // /: filter (R22, R23)
+	Help          key.Binding // ?: help (bubbles/help renders the registry)
+	Quit          key.Binding // q, ctrl+c: quit, and ctrl+c binds nothing else (R7)
 
 	// Filter input. The Feed's filter is a text input (R22, R23), and its accept and
 	// cancel keys are declared here so the Feed matches them with key.Matches rather than
@@ -102,23 +113,24 @@ type Profile struct {
 // motion bindings, so "differ on motion, and nowhere else" holds by construction.
 func shared(name string) Profile {
 	return Profile{
-		Name:         name,
-		NextTab:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next tab")),
-		PrevTab:      key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous tab")),
-		SelectTab:    key.NewBinding(key.WithKeys("1", "2", "3"), key.WithHelp("1/2/3", "jump to tab")),
-		Settings:     key.NewBinding(key.WithKeys(","), key.WithHelp(",", "settings")),
-		ToggleSelect: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select")),
-		Delete:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
-		Cancel:       key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "cancel")),
-		ForceCancel:  key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "force-cancel")),
-		Rerun:        key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "re-run")),
-		RerunFailed:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "re-run failed")),
-		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
-		OpenDetail:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
-		CloseDetail:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close detail")),
-		Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-		Quit:         key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+		Name:          name,
+		NextTab:       key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next tab")),
+		PrevTab:       key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous tab")),
+		SelectTab:     key.NewBinding(key.WithKeys("1", "2", "3"), key.WithHelp("1/2/3", "jump to tab")),
+		Settings:      key.NewBinding(key.WithKeys(","), key.WithHelp(",", "settings")),
+		ToggleSelect:  key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select")),
+		Delete:        key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
+		Cancel:        key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "cancel")),
+		ForceCancel:   key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "force-cancel")),
+		Rerun:         key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "re-run")),
+		RerunFailed:   key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "re-run failed")),
+		ArtifactsOnly: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "artifacts only")),
+		Refresh:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		OpenDetail:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
+		CloseDetail:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close detail")),
+		Filter:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Help:          key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Quit:          key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 
 		FilterAccept: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "accept filter")),
 		FilterCancel: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel filter")),
@@ -215,7 +227,7 @@ func (p Profile) Bindings() []key.Binding {
 	bindings := []key.Binding{
 		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
 		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect, p.Delete,
-		p.Cancel, p.ForceCancel, p.Rerun, p.RerunFailed,
+		p.Cancel, p.ForceCancel, p.Rerun, p.RerunFailed, p.ArtifactsOnly,
 		p.Refresh, p.OpenDetail, p.CloseDetail, p.Filter, p.Help, p.Quit,
 		p.FilterAccept, p.FilterCancel,
 		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,

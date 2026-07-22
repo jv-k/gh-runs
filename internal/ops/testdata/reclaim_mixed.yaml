@@ -1,0 +1,31 @@
+---
+version: 2
+# A Cache DELETE that answers 404 and an Artifact DELETE that answers an authorization 403.
+# The 404 is success: the Cache is gone, which is what was asked, logged 'gone' and counted
+# a success (storage-reclamation R22, purge R18). The 403's documentation_url points at this
+# endpoint's own reference page, the measured authorization shape, so the governor classifies
+# it as NOT a rate limit and it is a failure recorded with its reason (R21, purge R20). Both
+# reuse the Purge's failure contract wholesale (storage-reclamation R23a).
+interactions:
+    - id: 0
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/caches/987654321
+      response:
+        status: 404 Not Found
+        code: 404
+        body: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4980"]
+    - id: 1
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/artifacts/112233445
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Must have admin rights to Repository.","documentation_url":"https://docs.github.com/rest/actions/artifacts#delete-an-artifact"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4979"]
