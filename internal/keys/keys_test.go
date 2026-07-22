@@ -2,12 +2,23 @@ package keys_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"charm.land/bubbles/v2/key"
 
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 )
+
+// containsKey reports whether a binding carries the given keystroke.
+func containsKey(b key.Binding, want string) bool {
+	for _, k := range b.Keys() {
+		if k == want {
+			return true
+		}
+	}
+	return false
+}
 
 // assertKeys pins a binding's keystrokes against the exact set the canon names.
 // The want values are transcribed from live-run-feed R7a's tables, never read
@@ -90,4 +101,87 @@ func assertConfirm(t *testing.T, name string, p keys.Profile) {
 func TestConfirmBindings(t *testing.T) {
 	assertConfirm(t, "Vim", keys.Vim)
 	assertConfirm(t, "Standard", keys.Standard)
+}
+
+// TestExactlyTwoSelectableProfiles pins AC18's "exactly two profiles are
+// selectable" and R7's "offer no others". Profiles enumerates them, ForName is
+// how settings turns a stored value into one, and a third name resolves to
+// nothing.
+func TestExactlyTwoSelectableProfiles(t *testing.T) {
+	got := keys.Profiles()
+	if len(got) != 2 {
+		t.Fatalf("Profiles() returned %d profiles, want exactly 2 (R7)", len(got))
+	}
+	names := map[string]bool{got[0].Name: true, got[1].Name: true}
+	if len(names) != 2 || !names["Vim"] || !names["Standard"] {
+		t.Fatalf("Profiles() names = %v, want exactly {Vim, Standard} (R7)", names)
+	}
+	for _, name := range []string{"Vim", "vim", "Standard", "standard"} {
+		if _, ok := keys.ForName(name); !ok {
+			t.Errorf("ForName(%q) not found; both profiles must be selectable (AC18)", name)
+		}
+	}
+	if _, ok := keys.ForName("emacs"); ok {
+		t.Errorf("ForName(\"emacs\") resolved a profile; R7 permits no third")
+	}
+}
+
+// TestBindingsCoversEveryField pins AC18's premise that the check runs over the
+// whole registry. The no-Cmd and ctrl+c invariants below iterate Bindings(), so
+// a field Bindings() forgot would escape them, which is the scattered-binding
+// gap R7a's registry exists to close. The want count is read from the struct by
+// reflection, not hardcoded, so adding a field without enumerating it fails here.
+func TestBindingsCoversEveryField(t *testing.T) {
+	bindingType := reflect.TypeOf(key.Binding{})
+	rt := reflect.TypeOf(keys.Profile{})
+	want := 0
+	for i := 0; i < rt.NumField(); i++ {
+		if rt.Field(i).Type == bindingType {
+			want++
+		}
+	}
+	for _, p := range keys.Profiles() {
+		if got := len(p.Bindings()); got != want {
+			t.Errorf("%s.Bindings() enumerates %d bindings, but the struct has %d; the enumeration is incomplete", p.Name, got, want)
+		}
+	}
+}
+
+// TestNoBindingUsesCmd pins AC18: no binding in either profile may carry a key
+// naming Cmd, which terminals do not send (R7). The forbidden tokens are AC18's
+// own list, and the check runs over the whole enumerated registry.
+func TestNoBindingUsesCmd(t *testing.T) {
+	forbidden := []string{"cmd+", "super+", "meta+"} // AC18's list, verbatim
+	for _, p := range keys.Profiles() {
+		for _, b := range p.Bindings() {
+			for _, k := range b.Keys() {
+				for _, bad := range forbidden {
+					if strings.Contains(k, bad) {
+						t.Errorf("profile %s binds %q, which names Cmd; AC18 forbids %q", p.Name, k, bad)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestCtrlCBoundToQuitOnly pins R7 and AC18: ctrl+c appears in both profiles
+// bound to quitting and to nothing else, because the terminal sends it as
+// SIGINT. Counting its appearances across the whole registry is how "nothing
+// else" is asserted: exactly one binding carries it, and that binding is Quit.
+func TestCtrlCBoundToQuitOnly(t *testing.T) {
+	for _, p := range keys.Profiles() {
+		count := 0
+		for _, b := range p.Bindings() {
+			if containsKey(b, "ctrl+c") {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("profile %s: ctrl+c appears in %d bindings, want exactly 1 (R7: bound to nothing but quitting)", p.Name, count)
+		}
+		if !containsKey(p.Quit, "ctrl+c") {
+			t.Errorf("profile %s: Quit does not bind ctrl+c (R7, AC18)", p.Name)
+		}
+	}
 }

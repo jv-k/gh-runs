@@ -21,7 +21,11 @@
 // here.
 package keys
 
-import "charm.land/bubbles/v2/key"
+import (
+	"strings"
+
+	"charm.land/bubbles/v2/key"
+)
 
 // Profile is one complete set of bindings the user can select (R7: exactly two,
 // Vim and Standard, and no others). The motion fields differ between the two
@@ -113,4 +117,41 @@ func standardProfile() Profile {
 	p.FirstRow = key.NewBinding(key.WithKeys("home"), key.WithHelp("home", "first row"))
 	p.LastRow = key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "last row"))
 	return p
+}
+
+// Profiles returns the two selectable profiles, Vim then Standard. R7 permits
+// exactly these two and no others, so AC18's "exactly two profiles are
+// selectable" is asserted over this. It returns a fresh slice so a caller cannot
+// alter the registry.
+func Profiles() []Profile {
+	return []Profile{Vim, Standard}
+}
+
+// ForName returns the profile a stored settings value selects, matching Name
+// without regard to case, and reports whether one was found. A name that is
+// neither Vim nor Standard resolves to nothing, because R7 permits no third
+// profile.
+func ForName(name string) (Profile, bool) {
+	for _, p := range Profiles() {
+		if strings.EqualFold(p.Name, name) {
+			return p, true
+		}
+	}
+	return Profile{}, false
+}
+
+// Bindings returns every binding in the profile in a stable order: the six
+// motion bindings, then the shared navigation and action bindings, then the
+// confirm-modal bindings. It is the enumeration AC18 checks its invariants over.
+// "No binding in either profile carries a key naming Cmd" is a claim about the
+// whole registry, and a binding this method omitted would escape that check,
+// which is the scattered-binding gap R7a's single registry exists to close. It
+// returns a fresh slice.
+func (p Profile) Bindings() []key.Binding {
+	return []key.Binding{
+		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
+		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect,
+		p.Refresh, p.OpenDetail, p.Filter, p.Help, p.Quit,
+		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,
+	}
 }
