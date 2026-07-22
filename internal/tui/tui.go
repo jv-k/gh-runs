@@ -60,6 +60,10 @@ type tab interface {
 	View() string
 	SetActive(bool) tab
 	Title() string
+	// CapturesInput reports whether the tab holds text-input focus (the Feed's filter). While
+	// it does, the root routes every key but the terminal interrupt to it, so the global
+	// navigation keys stand down and typed text is not stolen (R7, R23).
+	CapturesInput() bool
 }
 
 // Options carries the root's seams. main.go fills them: the channel is the scheduler's
@@ -155,7 +159,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case scheduler.Update:
 		next, cmd := m.broadcast(msg)
-		return next, tea.Batch(cmd, m.listen())
+		// Pull the Readout on the engine event too, not only the coarse tick (ADR-0015: the
+		// root pulls whenever an engine event arrives and on the tick), so a pressure or
+		// exhaustion transition during active traffic surfaces at once rather than up to a
+		// tick late.
+		next, rcmd := next.pullReadout()
+		return next, tea.Batch(cmd, rcmd, next.listen())
 
 	case schedulerClosedMsg:
 		return m, tea.Quit
@@ -170,8 +179,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey takes the global navigation keys from the registry, then routes everything
 // else to the focused tab alone (ADR-0011). Two tabs acting on one keystroke is the bug
-// the second clause prevents.
+// the final clause prevents.
+//
+// While the focused tab is capturing text input (the Feed's filter), the root takes no
+// global key but the terminal interrupt: a created: date is all digits, and a digit, q or
+// comma typed into the filter must be its text, not a tab switch, a quit or a settings open
+// (R7, R23). ctrl+c stays unconditional because the terminal sends it as SIGINT, and it is
+// the one Quit key that is never filter text.
 func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if isInterrupt(k) {
+		return m, tea.Quit
+	}
+	if m.tabs[m.active].CapturesInput() {
+		return m.routeKeyToActive(k)
+	}
 	switch {
 	case key.Matches(k, m.profile.Quit):
 		return m, tea.Quit
@@ -190,6 +211,16 @@ func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.routeKeyToActive(k)
+}
+
+// isInterrupt reports whether k is the terminal's SIGINT (ctrl+c). It quits unconditionally,
+// even while a tab holds text-input focus, so it is recognised by its physical form rather
+// than routed through the registry's Quit binding: that binding also carries q, and q is
+// filter text mid-filter while ctrl+c never is (R7). ctrl+c is still in the registry and
+// AC18 still enumerates it there; this only disambiguates the one member of that binding
+// that must survive input capture.
+func isInterrupt(k tea.KeyPressMsg) bool {
+	return k.Mod&tea.ModCtrl != 0 && (k.Code == 'c' || k.Code == 'C')
 }
 
 // switchTab moves focus, wrapping for next and previous. The tab losing focus is told so
@@ -230,24 +261,16 @@ func (m Model) broadcast(msg tea.Msg) (Model, tea.Cmd) {
 
 // onTick pulls the Readout and the other polled status and broadcasts what changed, then
 // re-arms the tick. The Readout is broadcast on change (ADR-0015); the repositories are
-// idempotent in the Feed and cheap to pull, so they ride the tick. The revalidation
-// instant is a disk scan, and it is only read when the Budget is under pressure or
-// exhausted, which is the only time a paused Feed shows it (R30): idle scans nothing
-// (R28's spirit).
+// idempotent in the Feed and cheap to pull, so they ride the tick. The revalidation instant
+// is a disk scan, read only when the Budget is under pressure or exhausted, which is the
+// only time a paused Feed shows it (R30): idle scans nothing (R28's spirit).
 func (m Model) onTick() (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{tickCmd()}
 
-	pressured := false
-	if m.readout != nil {
-		r := m.readout()
-		pressured = r.Pressure || r.Exhausted
-		if !m.haveReadout || r != m.lastReadout {
-			m.lastReadout = r
-			m.haveReadout = true
-			var c tea.Cmd
-			m, c = m.broadcast(r)
-			cmds = append(cmds, c)
-		}
+	var rcmd tea.Cmd
+	m, rcmd = m.pullReadout()
+	if rcmd != nil {
+		cmds = append(cmds, rcmd)
 	}
 	if m.repos != nil {
 		if repos := m.repos(); len(repos) > 0 {
@@ -256,14 +279,47 @@ func (m Model) onTick() (tea.Model, tea.Cmd) {
 			cmds = append(cmds, c)
 		}
 	}
-	if pressured && m.revalidated != nil {
-		if at := m.revalidated(); !at.IsZero() {
-			var c tea.Cmd
-			m, c = m.broadcast(feed.RevalidatedAt(at))
-			cmds = append(cmds, c)
-		}
+	// The revalidation instant is a disk scan the store performs. Defer it into a Cmd so
+	// Model.Update does no filesystem I/O, matching how publishViewport already defers its
+	// work (code review). It is deferred only under pressure or exhaustion, when a paused
+	// Feed states what it is showing and as of when (R30).
+	if m.revalidated != nil && m.haveReadout && (m.lastReadout.Pressure || m.lastReadout.Exhausted) {
+		cmds = append(cmds, m.revalidateCmd())
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// pullReadout reads the Budget Readout and broadcasts it to every tab when it differs from
+// the last one sent (ADR-0015). Four comparable fields make change detection one ==. It
+// threads the model and returns the broadcast Cmd, nil when nothing changed or no readout
+// getter is wired (a headless test).
+func (m Model) pullReadout() (Model, tea.Cmd) {
+	if m.readout == nil {
+		return m, nil
+	}
+	r := m.readout()
+	if m.haveReadout && r == m.lastReadout {
+		return m, nil
+	}
+	m.lastReadout = r
+	m.haveReadout = true
+	return m.broadcast(r)
+}
+
+// revalidateCmd defers the store's last-revalidated scan off the Update loop and into a
+// Cmd, matching publishViewport, because the scan globs and reads the local store and
+// Model.Update must stay pure and non-blocking (code review). The instant it finds is
+// delivered back as a feed.RevalidatedAt and broadcast on the next loop; a zero instant
+// (nothing revalidated yet) yields no message.
+func (m Model) revalidateCmd() tea.Cmd {
+	rev := m.revalidated
+	return func() tea.Msg {
+		at := rev()
+		if at.IsZero() {
+			return nil
+		}
+		return feed.RevalidatedAt(at)
+	}
 }
 
 // View composes the tab bar over the focused tab's content and sets the terminal-wide
@@ -320,6 +376,7 @@ func (t feedTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 func (t feedTab) View() string         { return t.m.View() }
 func (t feedTab) SetActive(a bool) tab { return feedTab{t.m.SetActive(a)} }
 func (t feedTab) Title() string        { return "Runs" }
+func (t feedTab) CapturesInput() bool  { return t.m.CapturesInput() }
 
 // workflowsTab lifts the Workflows placeholder into the tab interface. It defers nothing,
 // so SetActive is a no-op until stage 11 builds the real tab.
@@ -329,9 +386,10 @@ func (t workflowsTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 	nm, cmd := t.m.Update(msg)
 	return workflowsTab{nm}, cmd
 }
-func (t workflowsTab) View() string       { return t.m.View() }
-func (t workflowsTab) SetActive(bool) tab { return t }
-func (t workflowsTab) Title() string      { return "Workflows" }
+func (t workflowsTab) View() string        { return t.m.View() }
+func (t workflowsTab) SetActive(bool) tab  { return t }
+func (t workflowsTab) Title() string       { return "Workflows" }
+func (t workflowsTab) CapturesInput() bool { return false }
 
 // storageTab lifts the Storage placeholder into the tab interface. It defers nothing, so
 // SetActive is a no-op until stage 10 builds the real tab.
@@ -341,6 +399,7 @@ func (t storageTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 	nm, cmd := t.m.Update(msg)
 	return storageTab{nm}, cmd
 }
-func (t storageTab) View() string       { return t.m.View() }
-func (t storageTab) SetActive(bool) tab { return t }
-func (t storageTab) Title() string      { return "Storage" }
+func (t storageTab) View() string        { return t.m.View() }
+func (t storageTab) SetActive(bool) tab  { return t }
+func (t storageTab) Title() string       { return "Storage" }
+func (t storageTab) CapturesInput() bool { return false }

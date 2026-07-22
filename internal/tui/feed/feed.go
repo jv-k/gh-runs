@@ -154,16 +154,30 @@ func New(opts Options) Model {
 	}
 }
 
-// SetActive records whether this tab is focused. Losing focus is idle, so it applies
-// the deferred changes (R10, resolved open question 5: idle means focus leaving the
-// list). Gaining focus freezes the current frame again.
+// SetActive records whether this tab is focused. Losing focus is idle, so it applies the
+// deferred changes (R10, resolved open question 5: idle means focus leaving the list) and
+// leaves the filter input, so focus cannot return mid-filter with the input still holding
+// keys. Gaining focus freezes the current frame again.
 func (m Model) SetActive(active bool) Model {
 	was := m.active
 	m.active = active
 	if was && !active {
+		// Leaving the filter input is part of losing focus (R10's "idle means focus leaving
+		// the list"), so the root's per-tab key routing sees this tab stop capturing and the
+		// input never keeps focus across a tab switch.
+		m.filterActive = false
+		m.filterInput.Blur()
 		m.applyView(m.liveView()) // idle: apply deferred (R10)
 	}
 	return m
+}
+
+// CapturesInput reports whether this tab holds text-input focus, which is true exactly
+// while the filter input is open (R22, R23). The root reads it to route every key but the
+// terminal interrupt straight here while it captures, so a digit, q or comma typed into a
+// filter value is not stolen as a global navigation key (ADR-0011, R7).
+func (m Model) CapturesInput() bool {
+	return m.filterActive
 }
 
 // Update handles one message the root routed here. Size and data broadcasts reach it
@@ -245,23 +259,22 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, m.publishViewport()
 }
 
-// handleFilterKey drives the filter input. Enter accepts the filter and returns to the
-// list; Esc cancels it and restores the unfiltered view. Everything else is text the
-// input consumes, and the filter re-applies live as it is typed, because the cursor is
-// not in the list while the input is focused (R10, R23).
+// handleFilterKey drives the filter input. FilterAccept (enter) accepts the filter and
+// returns to the list; FilterCancel (esc) cancels it and restores the unfiltered view.
+// Everything else is text the input consumes, and the filter re-applies live as it is
+// typed, because the cursor is not in the list while the input is focused (R10, R23).
 //
-// The accept and cancel keys are enter and esc. keys' registry names no filter-input
-// submit or cancel binding (it governs the list's bindings), so these two are matched
-// by name here as the input mode's own control. See the stage notes: a FilterAccept and
-// FilterCancel binding would belong in the registry.
+// Both control keys are matched from the active profile's registry with key.Matches, never
+// a key literal of its own, so the filter input is inside AC18's reach like every other
+// binding (R7a).
 func (m Model) handleFilterKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
-	switch k.String() {
-	case "enter":
+	switch {
+	case key.Matches(k, m.profile.FilterAccept):
 		m.filterActive = false
 		m.filterInput.Blur()
 		m.applyFilterFromInput()
 		return m, nil
-	case "esc":
+	case key.Matches(k, m.profile.FilterCancel):
 		m.filterActive = false
 		m.filterInput.Blur()
 		m.filterInput.SetValue("")

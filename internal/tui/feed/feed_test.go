@@ -411,6 +411,68 @@ func TestActionStyleDistinct(t *testing.T) {
 	}
 }
 
+// TestFilterAcceptAndCancelUseRegistry pins the blocker-2 fix at the consumer: the filter
+// input's accept (enter) and cancel (esc) are matched from the profile's registry with
+// key.Matches, not a key literal of its own, so accepting narrows the view and cancelling
+// restores it (R7a, R23, AC18).
+func TestFilterAcceptAndCancelUseRegistry(t *testing.T) {
+	m := newFeed(120, 20)
+	id := repoID("acme", "api")
+	m = feedRuns(m, id,
+		mkRun(1, "acme", "api", "CI", domain.StatusCompleted, domain.ConclusionFailure, t0),
+		mkRun(2, "acme", "api", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0.Add(-time.Hour)),
+	)
+
+	m = m.Update2(press("/"))
+	if !m.filterActive {
+		t.Fatal("pressing / did not open the filter input")
+	}
+	for _, r := range "failure" {
+		m = m.Update2(press(string(r)))
+	}
+	m = m.Update2(press("enter")) // FilterAccept
+	if m.filterActive {
+		t.Fatal("FilterAccept (enter) did not close the filter input")
+	}
+	if got := m.displayedOrder(); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("accepted filter did not narrow to the failing Run: %v (R23)", got)
+	}
+
+	m = m.Update2(press("/"))
+	m = m.Update2(press("esc")) // FilterCancel
+	if m.filterActive {
+		t.Fatal("FilterCancel (esc) did not close the filter input")
+	}
+	if got := m.displayedOrder(); len(got) != 2 {
+		t.Fatalf("cancel did not restore the unfiltered view: %v (R23)", got)
+	}
+}
+
+// TestViewSanitisesRunDerivedText pins the security fix: a hostile workflow or run name
+// carrying an ESC CSI clear-screen and a carriage return is stripped before it is painted,
+// so those bytes cannot survive into View() to move the cursor, erase the screen or forge
+// the pause and selection chrome the operator reads (security review). lipgloss wraps cells
+// in its own SGR colour escapes, so the assertion targets the hostile control sequences by
+// shape rather than the mere presence of any ESC byte.
+func TestViewSanitisesRunDerivedText(t *testing.T) {
+	m := newFeed(120, 20)
+	id := repoID("acme", "api")
+	hostile := "CI\x1b[2J\x1b[Hpwned\rowned"
+	m = feedRuns(m, id, mkRun(1, "acme", "api", hostile, domain.StatusInProgress, "", t0))
+	view := m.View()
+
+	if strings.Contains(view, "\x1b[2J") || strings.Contains(view, "\x1b[H") {
+		t.Fatalf("a hostile CSI sequence survived into the Feed's View:\n%q", view)
+	}
+	if strings.ContainsRune(view, '\r') {
+		t.Fatalf("a carriage return survived into the Feed's View:\n%q", view)
+	}
+	// The visible text keeps its characters, contiguous, once the controls are dropped.
+	if !strings.Contains(view, "CIpwnedowned") {
+		t.Fatalf("the sanitiser dropped or split visible workflow text:\n%q", view)
+	}
+}
+
 // Update2 is a test convenience that drops the Cmd, since these assertions read state
 // rather than run commands.
 func (m Model) Update2(msg tea.Msg) Model {

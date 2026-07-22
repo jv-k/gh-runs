@@ -11,16 +11,19 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
+	"github.com/jv-k/gh-runs/v2/internal/tui/feed"
 )
 
 // recordingTab is a fake tab that records what the root routed to it, so the routing
 // rules are asserted in isolation from any real tab (ADR-0011).
 type recordingTab struct {
-	title  string
-	keys   []string
-	data   int // count of non-key, non-size messages
-	sizes  int
-	active bool
+	title    string
+	keys     []string
+	data     int // count of non-key, non-size messages
+	sizes    int
+	readouts int // count of governor.Readout broadcasts, a subset of data
+	active   bool
+	captures bool
 }
 
 func (t *recordingTab) Update(msg tea.Msg) (tab, tea.Cmd) {
@@ -29,6 +32,9 @@ func (t *recordingTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 		t.keys = append(t.keys, v.String())
 	case tea.WindowSizeMsg:
 		t.sizes++
+	case governor.Readout:
+		t.readouts++
+		t.data++
 	default:
 		t.data++
 	}
@@ -37,6 +43,7 @@ func (t *recordingTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 func (t *recordingTab) View() string         { return t.title }
 func (t *recordingTab) SetActive(a bool) tab { t.active = a; return t }
 func (t *recordingTab) Title() string        { return t.title }
+func (t *recordingTab) CapturesInput() bool  { return t.captures }
 
 func press(s string) tea.KeyPressMsg {
 	switch s {
@@ -133,9 +140,10 @@ func (p *sizeProbe) Update(msg tea.Msg) (tab, tea.Cmd) {
 	}
 	return p, nil
 }
-func (p *sizeProbe) View() string       { return "" }
-func (p *sizeProbe) SetActive(bool) tab { return p }
-func (p *sizeProbe) Title() string      { return "probe" }
+func (p *sizeProbe) View() string        { return "" }
+func (p *sizeProbe) SetActive(bool) tab  { return p }
+func (p *sizeProbe) Title() string       { return "probe" }
+func (p *sizeProbe) CapturesInput() bool { return false }
 
 // TestQuitOnClosedChannel pins ADR-0015: the root treats a closed engine channel as
 // quit.
@@ -224,6 +232,107 @@ func TestTickBroadcastsReadoutOnChange(t *testing.T) {
 		if rt.data != 1 {
 			t.Errorf("tab %d re-received an unchanged Readout, want broadcast on change only (ADR-0015)", i)
 		}
+	}
+}
+
+// TestFilterInputCapturesGlobalKeys pins the blocker fix at the root, which the Feed's own
+// tests bypass: once the Feed's filter input holds focus, the root routes every key but the
+// interrupt to it, so a digit (every created: date is digits), q, or comma reaches the
+// filter rather than switching tabs, quitting, or opening settings (R7, R23). It drives the
+// real root, because the interception lives in the root's handleKey, not in the Feed.
+func TestFilterInputCapturesGlobalKeys(t *testing.T) {
+	m := New(Options{Profile: keys.Standard})
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// '/' is the Feed's Filter binding; it opens the filter input.
+	m = step(t, m, press("/"))
+	if !m.tabs[m.active].CapturesInput() {
+		t.Fatal("pressing / did not put the Feed's filter input into capture")
+	}
+
+	// A digit that also names a tab position (SelectTab 1/2/3) must reach the filter.
+	m = step(t, m, press("2"))
+	if m.active != 0 {
+		t.Fatalf("a digit typed into the filter switched tabs: active=%d, want 0 (blocker)", m.active)
+	}
+	// q (the other Quit key) and comma (Settings) are filter text while capturing.
+	m = step(t, m, press("q"))
+	m = step(t, m, press(","))
+	if m.active != 0 {
+		t.Fatalf("q or comma escaped the capturing filter: active=%d, want 0 (blocker)", m.active)
+	}
+	// The three keys reached the input in order: "2q," is the filter text, contiguous
+	// (lipgloss styles the "/" prompt separately, so it is not adjacent to the text).
+	if got := m.tabs[0].View(); !strings.Contains(got, "2q,") {
+		t.Fatalf("typed filter text did not reach the input; feed view:\n%s", got)
+	}
+}
+
+// TestInterruptQuitsWhileCapturing pins R7: ctrl+c is the terminal interrupt and quits even
+// while the filter input is capturing, when q (the other Quit key) is filter text.
+func TestInterruptQuitsWhileCapturing(t *testing.T) {
+	m := New(Options{Profile: keys.Standard})
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = step(t, m, press("/"))
+	if !m.tabs[m.active].CapturesInput() {
+		t.Fatal("pressing / did not open the filter input")
+	}
+	_, cmd := m.Update(press("ctrl+c"))
+	if cmd == nil {
+		t.Fatal("ctrl+c while capturing produced no command; want tea.Quit (R7)")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+c while capturing did not quit; got %T", cmd())
+	}
+}
+
+// TestSchedulerUpdatePullsReadout pins the fold-in: a scheduler.Update re-pulls the Budget
+// Readout and broadcasts a changed one, so a pressure transition during active traffic
+// surfaces at once rather than up to a tick late (ADR-0015: pull on an engine event and on
+// the tick).
+func TestSchedulerUpdatePullsReadout(t *testing.T) {
+	m := Model{
+		tabs:    []tab{&recordingTab{}, &recordingTab{}, &recordingTab{}},
+		profile: keys.Standard,
+		readout: func() governor.Readout { return governor.Readout{Exhausted: true, Reset: time.Unix(1000, 0)} },
+	}
+	id := domain.RepoID{Host: domain.HostGitHub, Owner: "acme", Name: "api"}
+	m = step(t, m, scheduler.Update{Repo: id})
+	for i, tb := range m.tabs {
+		rt := tb.(*recordingTab)
+		if rt.readouts != 1 {
+			t.Errorf("tab %d received %d Readout broadcasts on a scheduler.Update, want 1 (ADR-0015)", i, rt.readouts)
+		}
+	}
+}
+
+// TestOnTickDefersRevalidationScan pins the fold-in: under pressure the root does not read
+// the store inside Update, it returns a Cmd that does, matching publishViewport, so
+// Model.Update stays free of filesystem I/O (code review). The Cmd, run off-loop, yields a
+// RevalidatedAt.
+func TestOnTickDefersRevalidationScan(t *testing.T) {
+	scanned := 0
+	at := time.Unix(1_700_000_000, 0)
+	m := Model{
+		tabs:        []tab{&recordingTab{}, &recordingTab{}, &recordingTab{}},
+		profile:     keys.Standard,
+		readout:     func() governor.Readout { return governor.Readout{Pressure: true, Remaining: 1} },
+		revalidated: func() time.Time { scanned++; return at },
+	}
+	if _, _ = m.Update(tickMsg{}); scanned != 0 {
+		t.Fatalf("Update scanned the store synchronously %d times; it must defer to a Cmd (code review)", scanned)
+	}
+	// The helper the tick appends defers the scan and, run, yields the instant.
+	cmd := m.revalidateCmd()
+	if scanned != 0 {
+		t.Fatalf("revalidateCmd scanned eagerly; the scan must run only when the Cmd does")
+	}
+	msg := cmd()
+	if scanned != 1 {
+		t.Fatalf("running the Cmd scanned %d times, want 1", scanned)
+	}
+	if got, ok := msg.(feed.RevalidatedAt); !ok || time.Time(got) != at {
+		t.Fatalf("deferred Cmd yielded %#v, want feed.RevalidatedAt(%v)", msg, at)
 	}
 }
 

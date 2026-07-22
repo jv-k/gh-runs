@@ -115,6 +115,8 @@ func assertShared(t *testing.T, name string, p keys.Profile) {
 	assertKeys(t, name+".Filter", p.Filter, "/")                 // R22, R23
 	assertKeys(t, name+".Help", p.Help, "?")                     // bubbles/help renders the registry
 	assertKeys(t, name+".Quit", p.Quit, "q", "ctrl+c")           // R7: ctrl+c quits and binds nothing else
+	assertKeys(t, name+".FilterAccept", p.FilterAccept, "enter") // R23: the filter input's accept, in the registry (R7a)
+	assertKeys(t, name+".FilterCancel", p.FilterCancel, "esc")   // R23: the filter input's cancel, in the registry (R7a)
 }
 
 // TestSharedBindings pins R7a's "Everything else" table, the bindings that are
