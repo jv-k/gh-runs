@@ -35,6 +35,12 @@ const (
 	writePoints   = 5.0
 	readPoints    = 1.0
 	readWindow    = time.Minute
+
+	// R8a's burn window. Burn is the primary allowance consumed over the last five
+	// minutes, divided by the full five minutes and never by the elapsed part, so
+	// a cold-start burst amortises and stays silent where a one-minute window
+	// would fire on it. The width is a constant, chosen not tuned.
+	burnWindow = 5 * time.Minute
 )
 
 // Readout is the Budget Readout (CONTEXT.md): what the governor observed
@@ -72,6 +78,11 @@ type Governor struct {
 	// (R11). Reads share the secondary pool with writes, so the more the tool is
 	// polling, the lower the write ceiling. It is pruned to readWindow on use.
 	readEvents []time.Time
+
+	// burnEvents holds the instant of each primary point consumed in the trailing
+	// five minutes (R8a): one per non-304 response, zero per 304 (R7). Pressure is
+	// projected from its count. Pruned to burnWindow on use.
+	burnEvents []time.Time
 
 	// Exhaustion (R9). exhausted is authoritative for the scheduler and the Feed;
 	// exhaustReset is the resume instant, zero when none is derivable.
@@ -134,6 +145,11 @@ func (g *Governor) observe(req *http.Request, resp *http.Response) {
 	if isRead(req.Method) {
 		g.readEvents = append(g.readEvents, now)
 	}
+	// R7/R8a: every non-304 response consumed one primary point and feeds the burn
+	// projection. A 304 is free and feeds nothing.
+	if resp.StatusCode != http.StatusNotModified {
+		g.burnEvents = append(g.burnEvents, now)
+	}
 
 	switch {
 	case limited:
@@ -145,11 +161,11 @@ func (g *Governor) observe(req *http.Request, resp *http.Response) {
 	case resp.StatusCode == http.StatusNotModified:
 		// R7: a conditional request returning 304 costs zero primary allowance.
 		g.notModified++
-		g.recordClean(req, now, false)
+		g.recordClean()
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		// R7: a 200 costs one primary point.
 		g.primaryUsed++
-		g.recordClean(req, now, true)
+		g.recordClean()
 	default:
 		// An authorization 403, a 404 or a 5xx is neither clean nor a rate limit.
 		// It breaks the clean streak's consecutiveness without backing off, so a
@@ -159,10 +175,9 @@ func (g *Governor) observe(req *http.Request, resp *http.Response) {
 	}
 }
 
-// recordClean advances the ramp on a clean response and clears exhaustion when
-// the headers say the allowance is not zero. primary reports whether the response
-// consumed one primary point (R7): a 200 did, a 304 did not.
-func (g *Governor) recordClean(req *http.Request, now time.Time, primary bool) {
+// recordClean advances the ramp on a clean response (R10) and clears exhaustion
+// when the headers say the allowance is not zero.
+func (g *Governor) recordClean() {
 	g.cleanStreak++
 	if g.cleanStreak >= cleanBeforeRamp {
 		g.ramp()
@@ -328,12 +343,43 @@ func (g *Governor) effectiveRateLocked() float64 {
 }
 
 // pressureLocked is R8a's projection: consumption is under pressure when the
-// current burn would exhaust the remaining allowance before it resets. The burn
-// window it reads is built in a later slice, so this reports no pressure until
-// then.
+// current burn would exhaust the remaining allowance before it resets, and by no
+// other test. remaining / burn is the seconds until exhaustion at the current
+// rate; pressure is that being shorter than the time to the reset. Where burn is
+// zero the governor reports no pressure and evaluates no quotient, because nothing
+// is projected to run out at a rate of nothing. A compiled percentage of the
+// limit appears nowhere: the same burst is fine on a healthy remaining and doomed
+// on a low one, which is exactly what a percentage cannot see (ADR-0007).
 func (g *Governor) pressureLocked(now time.Time) bool {
-	_ = now
-	return false
+	burn := g.burnPerSecondLocked(now)
+	if burn == 0 {
+		return false
+	}
+	if g.lastReset == 0 {
+		return false
+	}
+	timeToReset := time.Unix(g.lastReset, 0).Sub(now).Seconds()
+	if timeToReset <= 0 {
+		return false
+	}
+	return float64(g.lastRemaining)/burn < timeToReset
+}
+
+// burnPerSecondLocked is the primary allowance consumed over the trailing five
+// minutes divided by the full five minutes (R8a), never by the elapsed part: the
+// under-report in the first five minutes of a session is the safe direction, when
+// the failure R29 names is a readout nobody believes.
+func (g *Governor) burnPerSecondLocked(now time.Time) float64 {
+	cutoff := now.Add(-burnWindow)
+	drop := 0
+	for drop < len(g.burnEvents) && !g.burnEvents[drop].After(cutoff) {
+		drop++
+	}
+	if drop > 0 {
+		n := copy(g.burnEvents, g.burnEvents[drop:])
+		g.burnEvents = g.burnEvents[:n]
+	}
+	return float64(len(g.burnEvents)) / burnWindow.Seconds()
 }
 
 // PrimaryUsed reports the primary allowance the governor has accounted: one per
