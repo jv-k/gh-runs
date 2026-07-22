@@ -84,7 +84,7 @@ func (m Model) View() string {
 	// The deleted marker sits against the Run's identity, so a Run with no possible
 	// successor is distinguishable from one whose Workflow still exists (R8, AC11).
 	if m.wfState == domain.StateDeleted {
-		lines = append(lines, styleDeleted.Render("Workflow deleted — this Run has no possible successor."))
+		lines = append(lines, styleDeleted.Render("Workflow deleted. This Run has no possible successor."))
 	}
 	// The pause banner states that refreshing has stopped and when it resumes, so held Jobs
 	// are not read as live (R16, AC12).
