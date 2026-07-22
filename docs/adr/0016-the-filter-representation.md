@@ -32,7 +32,9 @@ type Filter struct {
 func (f Filter) Match(r domain.Run) bool
 
 // Query emits the server-side half: the query parameters that can be
-// pushed without changing the result. It never reads Conclusions or Repos.
+// pushed without changing the result. It reads Conclusions only to count
+// the permissive pair and push a lone Status-or-Conclusion value as
+// status=. It never emits a conclusion= parameter, and it never reads Repos.
 func (f Filter) Query() url.Values
 
 // ParseStatus classifies one permissive -s value into the set that owns
