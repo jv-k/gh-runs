@@ -1,0 +1,18 @@
+---
+version: 2
+# A fine-grained PAT with no Actions scope returns 403 on the Workflow list. It is recorded
+# as an outcome on the RepoWorkflows, not a fault, so the cross-repo fan-out continues past
+# it (workflow-management R7). The body carries the measured authorization shape: a message
+# naming the missing permission and a documentation_url, with a healthy x-ratelimit-remaining.
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/workflows?per_page=100
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflows"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4998"]
