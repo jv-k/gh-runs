@@ -13,6 +13,15 @@ import (
 // than the measurement can respond is chasing noise (ADR-0021).
 const dwell = 5 * time.Minute
 
+// maxDemoteSteps caps the demotion shift so base << steps stays positive and bounded
+// (R15, ADR-0021). The stage itself is uncapped by design, but the slow tier's 30s
+// base overflows int64 near stage 29, wrapping the interval negative: an always-due
+// value that would invert demotion into hammering (PRD R4's direction). The cap is
+// two hours of five-minute dwells, comfortably past ADR-0021's 60-minute reset
+// ceiling, so a real episode never reaches it. Only a reset far longer than canon
+// allows would, and a parked interval is still the right posture there.
+const maxDemoteSteps = 24
+
 // secondaryCeiling is the ~900 points/min secondary-limit budget the scheduler
 // keeps its projected read consumption under (R11, the Constraints table). It is
 // the binding constraint on cadence: conditional requests are free against the
@@ -167,16 +176,21 @@ func (s *Scheduler) intervalForLocked(t Tier, now time.Time, slowBase time.Durat
 // from stage two, the fast tier from stage three. At stage three the slow tier has
 // stretched eightfold while the fast tier has conceded 3s to 6s.
 func demoteSteps(t Tier, stage int) int {
+	var steps int
 	switch t {
 	case tierSlow:
-		return stage
+		steps = stage
 	case tierMedium:
-		return max(0, stage-1)
+		steps = max(0, stage-1)
 	case tierFast:
-		return max(0, stage-2)
+		steps = max(0, stage-2)
 	default:
 		return 0
 	}
+	// Clamp the shift: base << steps must stay positive and bounded (maxDemoteSteps).
+	// The stage is deliberately uncapped, so without this a long-enough episode would
+	// overflow the interval and invert demotion into hammering.
+	return min(steps, maxDemoteSteps)
 }
 
 // slowBaseLocked is the slow tier's base interval: the ambient interval for the

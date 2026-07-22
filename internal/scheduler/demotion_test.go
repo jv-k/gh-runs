@@ -122,6 +122,32 @@ func TestDemotionHoldsUntilReset(t *testing.T) {
 	}
 }
 
+// TestDemotionShiftIsClamped is the overflow guard on the demotion shift. The stage
+// is uncapped by design (ADR-0021), but the shift that applies it is clamped so a
+// very large stage never overflows a tier's interval into a negative (always-due)
+// value, which would invert demotion into hammering (PRD R4's direction). A stage
+// reachable only with a reset far longer than ADR-0021's 60-minute ceiling still
+// yields a strictly positive, bounded interval for every tier.
+func TestDemotionShiftIsClamped(t *testing.T) {
+	s := New(Options{})
+	// Onset at t0 with a reset far enough out that the episode never ends, so a query
+	// 100 days later drives stageAtLocked to roughly 28,800, a stage no real
+	// rate-limit window can reach.
+	s.observePressure(pressure(t0.Add(10000*24*time.Hour)), t0)
+	now := t0.Add(100 * 24 * time.Hour)
+
+	ceiling := slowTarget << maxDemoteSteps
+	for _, tier := range []Tier{tierSlow, tierMedium, tierFast} {
+		got := s.intervalFor(tier, now)
+		if got <= 0 {
+			t.Errorf("%s interval at a huge stage = %s, want strictly positive (the shift overflowed)", tier, got)
+		}
+		if got > ceiling {
+			t.Errorf("%s interval at a huge stage = %s, want at most the clamped ceiling %s", tier, got, ceiling)
+		}
+	}
+}
+
 // TestNoPressureNoDemotion is the baseline: with no pressure ever reported, every
 // tier polls at its undemoted target.
 func TestNoPressureNoDemotion(t *testing.T) {
