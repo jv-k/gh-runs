@@ -28,6 +28,16 @@
 // has one. The literal d is chosen here, unclaimed and conventional (vim's own
 // delete operator), and distinct from the log-deletion key stage 12 will name. It
 // is a motion-independent action, so it is identical in both profiles.
+//
+// Cancel, ForceCancel, Rerun and RerunFailed are the run-lifecycle stage (BUILD-ORDER
+// stage 10) added the same way: the Feed and Run-detail keys that open the graduated
+// confirmation over the selection for each lifecycle operation (run-lifecycle R1, R16,
+// R17). The canon names no literal for them (its R16 defers "which key" to the
+// binding registry the way purge did for d), so unclaimed literals are chosen and
+// documented here: c cancels, C (shift+c) force-cancels as the escalation of cancel
+// (R6), R (shift+r) re-runs, and F (shift+f) re-runs failed Jobs. Each is a
+// motion-independent action, identical in both profiles, and distinct from every key
+// already bound in the list.
 package keys
 
 import (
@@ -61,6 +71,10 @@ type Profile struct {
 	Settings     key.Binding // ,: settings, reachable from any tab (R2)
 	ToggleSelect key.Binding // space: toggle row selection (purge R4)
 	Delete       key.Binding // d: open the graduated confirmation over the selection (purge R4 to R9)
+	Cancel       key.Binding // c: cancel the selected Run(s) (run-lifecycle R1, R16)
+	ForceCancel  key.Binding // C: force-cancel, the escalation of cancel (run-lifecycle R6)
+	Rerun        key.Binding // R: re-run the selected Run(s), adding an Attempt (run-lifecycle R1, R8)
+	RerunFailed  key.Binding // F: re-run only the failed Jobs of the selected Run(s) (run-lifecycle R13)
 	Refresh      key.Binding // r: apply deferred changes, refresh (R10, R11)
 	OpenDetail   key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
 	CloseDetail  key.Binding // esc: close the Run detail pane (BUILD-ORDER stage 8, run-detail)
@@ -95,6 +109,10 @@ func shared(name string) Profile {
 		Settings:     key.NewBinding(key.WithKeys(","), key.WithHelp(",", "settings")),
 		ToggleSelect: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select")),
 		Delete:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
+		Cancel:       key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "cancel")),
+		ForceCancel:  key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "force-cancel")),
+		Rerun:        key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "re-run")),
+		RerunFailed:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "re-run failed")),
 		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		OpenDetail:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
 		CloseDetail:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close detail")),
@@ -197,6 +215,7 @@ func (p Profile) Bindings() []key.Binding {
 	bindings := []key.Binding{
 		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
 		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect, p.Delete,
+		p.Cancel, p.ForceCancel, p.Rerun, p.RerunFailed,
 		p.Refresh, p.OpenDetail, p.CloseDetail, p.Filter, p.Help, p.Quit,
 		p.FilterAccept, p.FilterCancel,
 		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,

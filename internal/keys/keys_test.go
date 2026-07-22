@@ -128,6 +128,60 @@ func TestSharedBindings(t *testing.T) {
 	assertShared(t, "Standard", keys.Standard)
 }
 
+// assertLifecycle pins the four run-lifecycle action keys (BUILD-ORDER stage 10),
+// identical in both profiles like Delete. The canon names no literal for them, so
+// these are the chosen unclaimed keys the package documents: c cancels, C
+// force-cancels (the escalation, R6), R re-runs (R1, R8), F re-runs failed Jobs
+// (R13). Transcribed from the package doc, not read back off the binding, so a
+// drift from the documented choice fails here.
+func assertLifecycle(t *testing.T, name string, p keys.Profile) {
+	t.Helper()
+	assertKeys(t, name+".Cancel", p.Cancel, "c")           // run-lifecycle R1, R16
+	assertKeys(t, name+".ForceCancel", p.ForceCancel, "C") // run-lifecycle R6
+	assertKeys(t, name+".Rerun", p.Rerun, "R")             // run-lifecycle R1, R8
+	assertKeys(t, name+".RerunFailed", p.RerunFailed, "F") // run-lifecycle R13
+}
+
+// TestLifecycleBindings pins the stage-10 action keys over both profiles, and their
+// sameness: a forked binding fails one of the two runs. They are distinct from every
+// other list binding, which TestNoDuplicateListKey guards.
+func TestLifecycleBindings(t *testing.T) {
+	assertLifecycle(t, "Vim", keys.Vim)
+	assertLifecycle(t, "Standard", keys.Standard)
+}
+
+// TestNoDuplicateListKey pins that no two distinct actions in a profile bind the same
+// keystroke, the property that keeps c/C/R/F from colliding with d, r or a motion. It
+// excludes the confirm-modal and filter-input bindings, which are matched in their own
+// input mode where the list actions do not fire (the modal captures input), and enter
+// and esc are deliberately shared across those modes (OpenDetail/CloseDetail versus the
+// modal's accept/abort). It runs over the list-action and motion bindings, where a
+// collision would make one key do two things at once.
+func TestNoDuplicateListKey(t *testing.T) {
+	for _, p := range keys.Profiles() {
+		list := []struct {
+			name string
+			b    key.Binding
+		}{
+			{"RowUp", p.RowUp}, {"RowDown", p.RowDown}, {"PageUp", p.PageUp}, {"PageDown", p.PageDown},
+			{"FirstRow", p.FirstRow}, {"LastRow", p.LastRow},
+			{"NextTab", p.NextTab}, {"PrevTab", p.PrevTab}, {"SelectTab", p.SelectTab}, {"Settings", p.Settings},
+			{"ToggleSelect", p.ToggleSelect}, {"Delete", p.Delete},
+			{"Cancel", p.Cancel}, {"ForceCancel", p.ForceCancel}, {"Rerun", p.Rerun}, {"RerunFailed", p.RerunFailed},
+			{"Refresh", p.Refresh}, {"OpenDetail", p.OpenDetail}, {"Filter", p.Filter}, {"Help", p.Help}, {"Quit", p.Quit},
+		}
+		seen := map[string]string{}
+		for _, e := range list {
+			for _, k := range e.b.Keys() {
+				if prior, dup := seen[k]; dup {
+					t.Errorf("profile %s: key %q is bound to both %s and %s; a list key must do one thing", p.Name, k, prior, e.name)
+				}
+				seen[k] = e.name
+			}
+		}
+	}
+}
+
 // assertConfirm pins R7a's "Confirm modal" table, also identical in both
 // profiles. y accepts below the threshold, n/esc abort, and enter aborts on the
 // default (the default is no), so enter opens Run detail in the Feed and cancels
