@@ -55,8 +55,9 @@ const (
 )
 
 // visLine is one visible logical line: the full display text with its gutter, the searchable
-// content without the gutter, and the style to paint it in. The text and the search string
-// are both sanitised, because both are content a Workflow author controls (R19).
+// content without the gutter, and the style to paint it in. Both the text and the search
+// string are drawn from the log body sanitizeParsed already cleaned and tab-expanded (R19), so
+// composing a visLine adds no per-frame sanitising.
 type visLine struct {
 	kind      visKind
 	foldIndex int // index into m.log.blocks when kind is visFoldHeader, else -1
@@ -125,8 +126,9 @@ func (m Model) headerLine() string {
 const idSep = " · "
 
 // body renders the visible logical lines into the viewport, wrapping each to the pane width
-// (R22) and sanitising every one before it is painted (R19). The cursor line and any search
-// match are marked, and the viewport shows a window of physical rows from the scroll top.
+// (R22). The lines carry the log body sanitizeParsed already cleaned (R19). The cursor line
+// and any search match are marked, and the viewport shows a window of physical rows from the
+// scroll top.
 func (m Model) body() string {
 	lines := m.visibleLines()
 	if len(lines) == 0 {
@@ -201,8 +203,9 @@ func (m Model) deleteView() string {
 
 // visibleLines derives the visible logical lines from the parsed blocks, the fold state and
 // the timestamp toggle (R4, R5). A collapsed fold contributes only its labelled header; an
-// expanded one contributes its header and its body. Every content string is sanitised here,
-// so nothing downstream can paint an unsanitised byte (R19).
+// expanded one contributes its header and its body. Every content string it composes was
+// already sanitised and tab-expanded by sanitizeParsed when the fetch landed (R19), so this
+// runs on every frame without re-sanitising the log.
 func (m Model) visibleLines() []visLine {
 	var out []visLine
 	for bi := range m.log.blocks {
@@ -212,7 +215,7 @@ func (m Model) visibleLines() []visLine {
 			if b.fold.expanded {
 				arrow = foldExpanded
 			}
-			search := m.linePrefix(b.fold.prefix) + textsan.Sanitize(b.fold.label)
+			search := m.linePrefix(b.fold.prefix) + b.fold.label
 			out = append(out, visLine{
 				kind:      visFoldHeader,
 				foldIndex: bi,
@@ -233,12 +236,12 @@ func (m Model) visibleLines() []visLine {
 }
 
 // contentLine builds a visible content line: its gutter, the timestamp prefix when timestamps
-// are on (R4), R9's text label for a marker, and the sanitised content (R19). The label is in
-// both the display text and the search string, so a search for "warning" finds a warning line
-// and the label survives without colour (R9, R10, AC4).
+// are on (R4), R9's text label for a marker, and the content sanitizeParsed already cleaned
+// (R19). The label is in both the display text and the search string, so a search for
+// "warning" finds a warning line and the label survives without colour (R9, R10, AC4).
 func (m Model) contentLine(l logLine, gutter string) visLine {
 	label, style := markerLabelAndStyle(l.marker)
-	search := m.linePrefix(l.prefix) + label + textsan.Sanitize(l.text)
+	search := m.linePrefix(l.prefix) + label + l.text
 	return visLine{
 		kind:      visContent,
 		foldIndex: -1,
@@ -248,14 +251,15 @@ func (m Model) contentLine(l logLine, gutter string) visLine {
 	}
 }
 
-// linePrefix is the timestamp prefix a line shows, empty by default and the sanitised
-// byte-identical prefix when timestamps are toggled on (R4). Sanitising it is defence in
-// depth: the API generates the timestamp, but every byte painted goes through textsan (R19).
+// linePrefix is the timestamp prefix a line shows, empty by default and the byte-identical
+// prefix when timestamps are toggled on (R4). sanitizeParsed already sanitised the prefix when
+// the fetch landed, defence in depth over an API-generated value, so nothing is re-sanitised
+// here (R19).
 func (m Model) linePrefix(prefix string) string {
 	if !m.showTimestamps {
 		return ""
 	}
-	return textsan.Sanitize(prefix)
+	return prefix
 }
 
 // matchSet is the set of visible-line indices that are search matches, for the body's

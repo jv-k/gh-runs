@@ -34,9 +34,9 @@ var tsPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+
 
 // logLine is one rendered line of log content: its byte-identical timestamp prefix (R4),
 // the display text with any recognised marker syntax stripped (R8), and the styling class
-// R7 paints it in. No control bytes are stripped here: sanitising is the view's job, done at
-// paint time over author-controlled content (R19), so the parse stays a pure transformation
-// a golden can pin.
+// R7 paints it in. No control bytes are stripped here and no tab is expanded: that is
+// sanitizeParsed's job, run once over author-controlled content after the parse (R19), so the
+// parse stays a pure transformation a golden can pin.
 type logLine struct {
 	prefix string     // the 29-char timestamp prefix incl trailing space, "" when absent (R4)
 	text   string     // display content, marker syntax stripped (R8)
@@ -75,7 +75,8 @@ type parsed struct {
 // folds each ##[group]/##[endgroup] span (R5, R6), classifies the styled markers and strips
 // their syntax (R7, R8), and renders an unrecognised ##[...] marker verbatim because
 // swallowing it would destroy content the tool does not understand (R8). It interprets no
-// control sequence and strips none: R19's stripping is the view's, at paint time.
+// control sequence and strips none: R19's stripping and the tab expansion run once in
+// sanitizeParsed after the parse.
 func parseLog(raw []byte) parsed {
 	s := strings.TrimPrefix(string(raw), bom) // R3: the BOM is the file's first bytes
 	lines := splitLines(s)

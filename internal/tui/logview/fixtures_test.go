@@ -62,7 +62,9 @@ func trivialLog() []byte {
 // line so a golden can pin R7's "styled apart from ordinary lines and from each other", plus
 // a ##[notice], a ##[command], a ##[debug], and an unrecognised ##[set-output] token that
 // R8 renders verbatim because the tool does not understand it. No BOM and no fold, so the
-// golden is only about marker styling.
+// golden is only about marker styling. The go test line carries the tabs that lay go test's
+// output out in columns, so the golden also pins that a TAB expands to spaces and the columns
+// line up (R19), rather than being stripped and the fields fused.
 func styledLog() []byte {
 	lines := []string{
 		tsA + "##[command]/usr/bin/go test ./...",
@@ -78,10 +80,11 @@ func styledLog() []byte {
 
 // hostileLog builds a log line carrying the shape a workflow author can print into their own
 // logs (log-viewer R19, security review): a CSI colour sequence, a clear-screen, a
-// cursor-home, a carriage return, a tab, and a bare ESC. Every one of these must be stripped
-// before the line is painted, or the line rewrites or spoofs the operator's terminal, which
-// in a delete tool is a decision-integrity failure. The visible text between the escapes is
-// what must survive.
+// cursor-home, a carriage return, a tab, and a bare ESC. Every one of the terminal-driving
+// controls must be stripped before the line is painted, or the line rewrites or spoofs the
+// operator's terminal, which in a delete tool is a decision-integrity failure. The tab is the
+// one exception: it expands to spaces rather than being deleted, the single control kept as
+// layout (R19). The visible text between the escapes is what must survive.
 func hostileLog() []byte {
 	line := tsA + "Building \x1b[31mproject\x1b[0m\x1b[2J\x1b[Hcleared\rretreat\ttail\x1b"
 	return []byte(line + "\n")

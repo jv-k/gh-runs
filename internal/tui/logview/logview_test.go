@@ -164,9 +164,15 @@ func TestRenderCarriesNoControlBytes(t *testing.T) {
 			t.Errorf("a visible line's content was not sanitised before painting: %q (R19)", l.search)
 		}
 	}
-	// The visible text of the hostile line survives, contiguous, once the controls are dropped.
-	if !strings.Contains(plain, "Building projectclearedretreattail") {
+	// The visible text of the hostile line survives once the controls are dropped. The ESC, CSI,
+	// clear-screen, cursor-home, CR and bare ESC are stripped whole, so the words they separated
+	// run together; the one TAB is expanded to spaces, the single control kept as layout (R19),
+	// so "retreat" and "tail" survive spaced, never fused and never deleted.
+	if !strings.Contains(plain, "Building projectclearedretreat tail") {
 		t.Errorf("the sanitiser dropped or split visible log text (R19):\n%q", plain)
+	}
+	if strings.ContainsRune(plain, '\t') {
+		t.Errorf("a raw TAB reached the painted view; it must expand to spaces, not survive (R19):\n%q", plain)
 	}
 }
 

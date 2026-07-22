@@ -13,11 +13,13 @@
 //
 // Logs are the most attacker-controlled text in the tool: a Workflow author prints arbitrary
 // bytes into them, ANSI escapes and control bytes included. Every line painted to the
-// terminal is sanitised through internal/textsan before rendering (R19), because an
-// unsanitised line rewrites or spoofs the operator's terminal, and in a tool whose headline
-// is that deletion is one operation, a spoofable view is a decision-integrity failure, not a
-// cosmetic one. The parse is a pure transformation a golden pins (R20); the sanitising is at
-// paint time, over the content the author controls.
+// terminal is sanitised through internal/textsan (R19), because an unsanitised line rewrites
+// or spoofs the operator's terminal, and in a tool whose headline is that deletion is one
+// operation, a spoofable view is a decision-integrity failure, not a cosmetic one. The parse
+// is a pure transformation a golden pins (R20); the sanitising and tab expansion of the log
+// body happen once when the fetch lands (sanitizeParsed), so the render composes from clean,
+// aligned lines instead of re-sanitising the whole log on every frame. The header and footer
+// draw run-derived metadata the author also controls, and sanitise it at paint time.
 package logview
 
 import (
@@ -212,7 +214,10 @@ func (m Model) onFetched(msg logFetchedMsg) Model {
 		m.state = stateEmpty
 		return m
 	}
-	m.log = parseLog(msg.data)
+	// Sanitise and tab-expand once, here, so the render and the search read pre-processed lines
+	// and never re-sanitise the whole log per keystroke (R19, security review). parseLog stays a
+	// pure transform a golden pins (R20).
+	m.log = sanitizeParsed(parseLog(msg.data))
 	m.state = stateLoaded
 	m.cursor, m.top = 0, 0
 	m.resetSearch()
