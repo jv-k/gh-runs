@@ -35,6 +35,14 @@ import (
 // headers survive), narrowed to what the CLI uses. A cassette-backed ghclient
 // fills it in tests, so the command is exercised against what the API actually
 // said with no live network (cli-surface R19).
+//
+// Carry-forward, decided not to change in this read stage: the seam is context-free.
+// The list command issues read-only one-shots that nothing cancels, so no read path
+// reads a context. It gains a context.Context parameter at stage 7, where the Feed's
+// Stop() cancels an in-flight poll, and at stage 9, where the write half exits 2 on
+// SIGINT with in-flight cancellation (cli-surface R17, AC13). go-gh already exposes
+// RequestWithContext, so the widening is a known extension, and ghclient.Client.Request
+// mirrors this signature and moves with it.
 type Requester interface {
 	Request(method, path string, body io.Reader) (*http.Response, error)
 }

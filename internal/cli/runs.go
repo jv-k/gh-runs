@@ -31,15 +31,24 @@ type apiRunsPage struct {
 // is always a subset of their union, and one sort-and-truncate gives the answer.
 // The sort key is CreatedAt, the field the merge is defined on (R23), not the
 // Feed's run_started_at.
-func listRuns(client Requester, repos []domain.RepoID, flt filter.Filter, limit int) ([]domain.Run, error) {
+//
+// It returns the repositories whose listing was capped (R16): each repository that
+// filled the limit while more matching Runs remained on the wire, so the caller can
+// tell the operator the view is not the whole of it. The list is per repository
+// because under fan-out the merge hides which one was short.
+func listRuns(client Requester, repos []domain.RepoID, flt filter.Filter, limit int) ([]domain.Run, []domain.RepoID, error) {
 	query := flt.Query()
 	var merged []domain.Run
+	var capped []domain.RepoID
 	for _, repo := range repos {
-		runs, err := listRepo(client, repo, query, flt, limit)
+		runs, repoCapped, err := listRepo(client, repo, query, flt, limit)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		merged = append(merged, runs...)
+		if repoCapped {
+			capped = append(capped, repo)
+		}
 	}
 	sort.SliceStable(merged, func(i, j int) bool {
 		return merged[i].CreatedAt.After(merged[j].CreatedAt)
@@ -47,7 +56,7 @@ func listRuns(client Requester, repos []domain.RepoID, flt filter.Filter, limit 
 	if len(merged) > limit {
 		merged = merged[:limit]
 	}
-	return merged, nil
+	return merged, capped, nil
 }
 
 // listRepo lists one repository's newest matching Runs, up to limit. It pushes the
@@ -57,13 +66,13 @@ func listRuns(client Requester, repos []domain.RepoID, flt filter.Filter, limit 
 // it needs to fill limit matches, so a client-side-only axis that drops rows from
 // a page (a workflow selected by name, cli-surface says filter.Match owns it)
 // still returns limit matches rather than one short page of them.
-func listRepo(client Requester, repo domain.RepoID, query url.Values, flt filter.Filter, limit int) ([]domain.Run, error) {
+func listRepo(client Requester, repo domain.RepoID, query url.Values, flt filter.Filter, limit int) ([]domain.Run, bool, error) {
 	path := firstPath(repo, query, limit)
 	var collected []domain.Run
 	for path != "" && len(collected) < limit {
 		page, next, err := getRunsPage(client, path)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if len(page) == 0 {
 			break
@@ -80,7 +89,15 @@ func listRepo(client Requester, repo domain.RepoID, query url.Values, flt filter
 		}
 		path = next
 	}
-	return collected, nil
+	// capped: the listing filled the requested limit while a next page still remained
+	// on the wire, so this repository holds more matching Runs than were returned
+	// (cli-surface R16). It is a fact about the wire, not a count: no total_count is
+	// read, because a filtered listing inflates that past the silent 1,000 cap and it
+	// is not a number to stand behind. The silent 1,000-result cap itself is only
+	// reachable at -L above 1,000, and chasing a filtered listing past it is the
+	// Purge crawl's job (R15, ADR-0005), not this one-shot list's.
+	capped := len(collected) >= limit && path != ""
+	return collected, capped, nil
 }
 
 // firstPath builds the first page's path: the runs endpoint, the filter's
@@ -135,7 +152,10 @@ func getRunsPage(client Requester, path string) ([]domain.Run, string, error) {
 // because a GitHub Actions listing URL can carry commas of its own in a query, so
 // a naive split would tear the URL apart. It mirrors discovery's own Link parse,
 // kept local because a package may not reach into another's unexported helpers
-// (ADR-0011).
+// (ADR-0011). Carry-forward, decided not to change now: the dedup with discovery's
+// copy waits for a third consumer, the Purge crawl at stage 9. A third copy is the
+// trigger to promote this angle-bracket walk to an exported helper on a leaf
+// package, rather than copy it a third time.
 func nextLink(header string) string {
 	for header != "" {
 		lt := strings.IndexByte(header, '<')

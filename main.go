@@ -111,6 +111,15 @@ func run() int {
 					return nil, err
 				}
 			}
+			// R22 says list fans out across "every discovered repository." This wires the
+			// fan-out to discovery's poll set (~26, the repositories with Runs), not every
+			// discovered Record (~163), for Budget parity with the Feed, which polls exactly
+			// this set (ADR-0022's one-request-per-repository cost). An empty repository lists
+			// nothing, so the only visible delta is a repository whose persisted
+			// classification is stale on a warm cache (HasRuns=false but since acquired Runs),
+			// which a cold-cache disc.Pass reclassifies. The Feed refines this "discovered"
+			// scope at stage 7; the narrowing is provisional policy here, kept out of the cli
+			// surface (ADR-0011).
 			return disc.PollSet(), nil
 		},
 	}

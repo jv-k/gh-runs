@@ -57,16 +57,82 @@ func renderTable(deps Deps, sc scope, runs []domain.Run) error {
 		}
 		row = append(row,
 			effectiveState(r),
-			r.DisplayTitle,
-			workflowLabel(r),
-			r.HeadBranch,
-			r.Event,
+			sanitizeCell(r.DisplayTitle),
+			sanitizeCell(workflowLabel(r)),
+			sanitizeCell(r.HeadBranch),
+			sanitizeCell(r.Event),
 			strconv.FormatInt(r.ID, 10),
 			age(now, r.CreatedAt),
 		)
 		_, _ = fmt.Fprintln(w, strings.Join(row, "\t"))
 	}
 	return w.Flush()
+}
+
+// sanitizeCell strips terminal control bytes from untrusted run data before it is
+// written to the human table. The tool fans out over repositories the user does not
+// own, so a hostile run title, branch, workflow name or event could carry ANSI escape
+// sequences that move the cursor or rewrite prior lines in the operator's terminal
+// (security review). It drops each ESC-introduced CSI sequence whole, drops a bare
+// ESC, and drops the remaining C0 control bytes, including the tab and newline that
+// would otherwise tear a row across columns. It never removes a printable rune, so a
+// title keeps its visible text. The -q and --json paths are deliberately left
+// untouched: that output is data a script consumes, not a terminal rendering, and gh
+// treats it the same.
+func sanitizeCell(s string) string {
+	if !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == 0x1b: // ESC: drop a CSI sequence whole, else drop the bare ESC alone
+			i++
+			if i < len(s) && s[i] == '[' {
+				i++
+				for i < len(s) && (s[i] < 0x40 || s[i] > 0x7e) {
+					i++
+				}
+				if i < len(s) {
+					i++ // the final byte of the CSI sequence
+				}
+			}
+		case c < 0x20 || c == 0x7f: // other C0 control: tab, newline, CR, DEL
+			i++
+		default:
+			b.WriteByte(c) // printable ASCII and UTF-8 continuation bytes pass through
+			i++
+		}
+	}
+	return b.String()
+}
+
+// reportCapped notes on stderr when a per-repository listing hit the -L cap while
+// more matching Runs remained on the wire, so the operator is not left to read a
+// capped view as the whole of it (cli-surface R16, ADR-0022). It names the
+// repositories under fan-out, where a merged list hides which one was short, and it
+// prints no count: R16 forbids presenting a filtered total_count as the reachable
+// number, and "more than shown" is the honest claim the wire supports. The note is a
+// diagnostic, so it goes to stderr and leaves stdout (the table or the JSON) clean
+// for a pipeline.
+func reportCapped(deps Deps, sc scope, capped []domain.RepoID) {
+	if len(capped) == 0 {
+		return
+	}
+	if sc.fanout {
+		names := make([]string, len(capped))
+		for i, id := range capped {
+			names[i] = id.Owner + "/" + id.Name
+		}
+		_, _ = fmt.Fprintf(deps.Stderr,
+			"note: results may be capped at --limit for %s. Raise --limit or narrow the filter to see more.\n",
+			strings.Join(names, ", "))
+		return
+	}
+	_, _ = fmt.Fprintln(deps.Stderr,
+		"note: results may be capped at --limit. Raise --limit or narrow the filter to see more.")
 }
 
 // effectiveState is what a reader wants in the status column: a completed Run's
@@ -84,6 +150,16 @@ func effectiveState(r domain.Run) string {
 // A Run created by an organization or enterprise ruleset Workflow carries no
 // Workflow name (cli-surface Constraints), so the fallback keeps the column
 // populated rather than blank.
+//
+// Gap, recorded as plainly as the -t gap in renderTemplate: in the list path
+// WorkflowName is never populated. domain.Run.WorkflowName is json:"-" (the caller
+// stamps it, the listing never decodes it), and listRepo stamps only r.Repo, so this
+// column always falls back to r.Name, the --json workflowName field always emits the
+// empty string, and -w NAME never matches (only a numeric -w ID does, matched
+// client-side by WorkflowID). Resolving a name needs the per-repository
+// /actions/workflows map, which this one-shot list does not fetch. That map, and with
+// it -w-by-name and -a's "include disabled workflows" effect, arrives with
+// workflow-management (stage 13). Until then the numeric -w ID is the working form.
 func workflowLabel(r domain.Run) string {
 	if r.WorkflowName != "" {
 		return r.WorkflowName
@@ -202,19 +278,21 @@ func renderJSON(deps Deps, f *listFlags, fields []string, runs []domain.Run) err
 		}
 		rows = append(rows, row)
 	}
-	data, err := json.Marshal(rows)
-	if err != nil {
-		return fmt.Errorf("encode json: %w", err)
-	}
-
-	// -q is handed straight to go-gh's own jq package, the same engine gh uses, so
-	// its output is byte-identical to gh's (cli-surface R7, AC6). go-gh's jq imports
-	// only gojq, so it is free of the Charm-fork conflict its template package
-	// carries (see renderTemplate).
-	if f.jq != "" {
-		return jq.Evaluate(bytes.NewReader(data), deps.Stdout, f.jq)
-	}
-	if f.template != "" {
+	// -q and -t consume the compact projection; the plain path prints it indented.
+	// The compact marshal is computed only when -q or -t needs it, so the plain path
+	// does the one indented marshal and no marshal result is thrown away (code review).
+	if f.jq != "" || f.template != "" {
+		data, err := json.Marshal(rows)
+		if err != nil {
+			return fmt.Errorf("encode json: %w", err)
+		}
+		// -q is handed straight to go-gh's own jq package, the same engine gh uses, so
+		// its output is byte-identical to gh's (cli-surface R7, AC6). go-gh's jq imports
+		// only gojq, so it is free of the Charm-fork conflict its template package
+		// carries (see renderTemplate).
+		if f.jq != "" {
+			return jq.Evaluate(bytes.NewReader(data), deps.Stdout, f.jq)
+		}
 		return renderTemplate(deps, data, f.template)
 	}
 
@@ -237,6 +315,12 @@ func renderJSON(deps Deps, f *listFlags, fields []string, runs []domain.Run) err
 // a template that calls one errors here rather than rendering. This gap is
 // recorded for the verify step: it is a dependency conflict to resolve, not a
 // design choice, and -q covers the scriptable path AC6 pins in the meantime.
+//
+// Closing it is a maintainer product decision, deferred out of this read stage:
+// accept the documented R7 deviation, reimplement gh's template functions here, or
+// do the dependency surgery to split go-gh's template package off its classic-lipgloss
+// import. This repair does none of the three; it records the deviation and leaves the
+// choice.
 func renderTemplate(deps Deps, data []byte, tmplText string) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()

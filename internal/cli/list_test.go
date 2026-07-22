@@ -41,6 +41,29 @@ func TestLsAlias(t *testing.T) {
 	}
 }
 
+// TestCappedListingLabelled pins R16's affirmative half through the public surface: a
+// per-repository listing that fills -L while a rel="next" page still remains is
+// labelled capped on stderr, stdout carries the runs it did return, and the next page
+// is not fetched (cli-surface R16, ADR-0022). The label names no count, only that more
+// may exist.
+func TestCappedListingLabelled(t *testing.T) {
+	h := newHarness(t, "list_capped")
+
+	code := h.run("list", "-R", "octo/hello", "-L", "2")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%q", code, h.stderr.String())
+	}
+	if !strings.Contains(h.stderr.String(), "capped") {
+		t.Errorf("a listing capped at --limit was not labelled; stderr=%q", h.stderr.String())
+	}
+	if !strings.Contains(h.stdout.String(), "501") {
+		t.Errorf("the returned runs are missing from stdout\n%s", h.stdout.String())
+	}
+	if n := h.counting.count(); n != 1 {
+		t.Errorf("wire requests = %d, want 1 (the next page is not fetched once the limit is met)", n)
+	}
+}
+
 // TestEmptyResultExitsZero pins that a list matching no Runs exits 0 with an empty
 // stdout and a note on stderr, so a pipeline is not fed a spurious row and a
 // zero-match list is not a failure.

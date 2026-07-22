@@ -50,6 +50,12 @@ func newListCmd(deps Deps) *cobra.Command {
 		},
 	}
 	fl := cmd.Flags()
+	// -a and -w-by-name are accepted for gh parity (R2) but inert in this read stage.
+	// -w matches only a numeric Workflow ID here, never a name, because WorkflowName
+	// is never decoded in the list path (see workflowLabel), and -a's "include disabled
+	// workflows" effect bites only through -w-by-name. Both wait on the per-repository
+	// /actions/workflows map that workflow-management builds (stage 13). Until then f.all
+	// is bound but unread, faithfully to the staging.
 	fl.BoolVarP(&f.all, "all", "a", false, "Include disabled workflows")
 	fl.StringVarP(&f.branch, "branch", "b", "", "Filter runs by branch")
 	fl.StringVarP(&f.commit, "commit", "c", "", "Filter runs by the SHA of the commit")
@@ -100,11 +106,17 @@ func runList(deps Deps, f *listFlags) error {
 		return err
 	}
 
-	runs, err := listRuns(deps.Client, sc.repos, flt, f.limit)
+	runs, capped, err := listRuns(deps.Client, sc.repos, flt, f.limit)
 	if err != nil {
 		return err
 	}
-	return render(deps, f, sc, fields, runs)
+	if err := render(deps, f, sc, fields, runs); err != nil {
+		return err
+	}
+	// R16's affirmative half: where a per-repository listing was capped, say so on
+	// stderr rather than let the operator read the view as complete (ADR-0022).
+	reportCapped(deps, sc, capped)
+	return nil
 }
 
 // buildFilter is the thin adapter the whole feature turns on: it maps the flags
