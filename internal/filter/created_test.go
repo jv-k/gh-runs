@@ -195,6 +195,35 @@ func TestParseCreatedRejectsByName(t *testing.T) {
 	}
 }
 
+// TestParseCreatedRejectsOperatorTokens covers the reject-by-name arm of every
+// comparison operator (cli-surface R6). TestParseCreatedRejectsByName exercises
+// > with an empty token; this pins >=, <= and < for both an empty token and an
+// invalid one, so each operator's error branch returns the named invalidCreated
+// error rather than panicking on the slice or letting a bad token through.
+func TestParseCreatedRejectsOperatorTokens(t *testing.T) {
+	for _, bad := range []string{
+		">=",       // operator, empty token
+		">=badday", // operator, invalid token
+		"<=",       // operator, empty token
+		"<=badday", // operator, invalid token
+		"<",        // operator, empty token
+		"<badday",  // operator, invalid token
+	} {
+		t.Run(bad, func(t *testing.T) {
+			_, err := filter.ParseCreated(bad)
+			if err == nil {
+				t.Fatalf("ParseCreated(%q) returned nil, want the invalidCreated error", bad)
+			}
+			if !strings.Contains(err.Error(), "invalid created date") {
+				t.Errorf("ParseCreated(%q) error %q is not the named invalidCreated error", bad, err.Error())
+			}
+			if !strings.Contains(err.Error(), bad) {
+				t.Errorf("ParseCreated(%q) error %q does not name the offending value", bad, err.Error())
+			}
+		})
+	}
+}
+
 // TestCreatedZeroValueIsNoConstraint pins ADR-0016's "the zero value is no
 // clause": a Filter with no Created matches a Run of any creation time, so an
 // unset date axis never narrows the result.
