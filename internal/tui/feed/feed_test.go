@@ -247,6 +247,65 @@ func TestSelectionSurvivesRepaintAndFilter(t *testing.T) {
 	}
 }
 
+// TestFrozenSelectionOrdersCrossFilterByStart pins purge R30 and AC22 for a cross-filter
+// (R13a) selection: the frozen set carries the Feed's order, EffectiveStart descending, so
+// its last row is the oldest Run in the set by run_started_at, even when the selection spans
+// Runs the active filter has hidden. Before the sort those off-filter Runs were appended in
+// Go map-iteration order, which is randomised, so the tail and the last row were
+// non-deterministic. Two off-filter Runs bracket an in-filter one, so a correct order can
+// come only from sorting the whole set, not from appending an off-filter tail.
+func TestFrozenSelectionOrdersCrossFilterByStart(t *testing.T) {
+	m := newFeed(120, 40)
+	id := repoID("acme", "api")
+	// Five Runs, newest to oldest. The Completed ones survive the filter below; the
+	// InProgress ones become off-filter but stay selected (R13a).
+	m = feedRuns(m, id,
+		mkRun(10, "acme", "api", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0),
+		mkRun(11, "acme", "api", "CI", domain.StatusInProgress, "", t0.Add(-1*time.Hour)),
+		mkRun(12, "acme", "api", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0.Add(-2*time.Hour)),
+		mkRun(13, "acme", "api", "CI", domain.StatusInProgress, "", t0.Add(-3*time.Hour)),
+		mkRun(14, "acme", "api", "CI", domain.StatusInProgress, "", t0.Add(-4*time.Hour)),
+	)
+	// Select all five while they are all displayed.
+	for i := 0; i < 5; i++ {
+		m = m.Update2(press("space"))
+		if i < 4 {
+			m = m.Update2(press("down"))
+		}
+	}
+	if m.selectedCount() != 5 {
+		t.Fatalf("selected %d, want 5", m.selectedCount())
+	}
+	// Filter to Completed: Runs 11, 13 and 14 are now off-filter but still selected.
+	m.filter = filter.Filter{Statuses: []domain.Status{domain.StatusCompleted}}
+	m.applyView(m.liveView())
+	if got := len(m.displayedIDs); got != 2 {
+		t.Fatalf("filter left %d displayed, want 2 (10, 12) (R13a)", got)
+	}
+
+	want := []int64{10, 11, 12, 13, 14} // EffectiveStart descending, the Feed's order (R8)
+	// Map iteration is randomised per range, so a missing sort surfaces as a wrong or
+	// unstable order. Repeat so a regression fails loudly rather than flakily.
+	for iter := 0; iter < 32; iter++ {
+		items := m.frozenSelection()
+		got := make([]int64, len(items))
+		for i, it := range items {
+			got[i] = it.ID
+		}
+		if !equalIDs(got, want) {
+			t.Fatalf("frozenSelection order = %v, want %v (R30, AC22: last row is the oldest by run_started_at)", got, want)
+		}
+	}
+	// AC22 stated directly: no Run in the set starts before the last row.
+	items := m.frozenSelection()
+	last := items[len(items)-1].Run.EffectiveStart()
+	for _, it := range items {
+		if it.Run.EffectiveStart().Before(last) {
+			t.Fatalf("Run %d starts before the last row; the last row is not the oldest in the set (AC22)", it.ID)
+		}
+	}
+}
+
 // TestFilterIsClientSide pins R23: the Conclusion filter is a client-side predicate over
 // held Runs, and a permissive Status input matches either field.
 func TestFilterIsClientSide(t *testing.T) {

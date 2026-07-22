@@ -422,6 +422,19 @@ func (m Model) frozenSelection() []ops.Item {
 			items = append(items, ops.RunItem(r))
 		}
 	}
+	// R30/AC22: the frozen view carries the Feed's order (R8), EffectiveStart descending
+	// with Run ID descending on a tie. The first loop already walked displayedIDs in that
+	// order, but R13a's off-filter tail above was appended in Go map-iteration order, which
+	// is randomised. Sorting the whole assembled set restores determinism and keeps the last
+	// row the oldest Run in the set by run_started_at, across a cross-filter selection. Every
+	// Item here is a RunItem, so Run is always set. This mirrors liveView's comparator.
+	sort.SliceStable(items, func(i, j int) bool {
+		ti, tj := items[i].Run.EffectiveStart(), items[j].Run.EffectiveStart()
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return items[i].ID > items[j].ID
+	})
 	return items
 }
 
