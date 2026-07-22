@@ -7,8 +7,8 @@
 // http.RoundTripper, ghclient takes one, and neither imports the other; wiring
 // them here is the single most load-bearing decision in the tree (ADR-0011). It
 // also nests the governor inside the store's transport (ADR-0012). This floor
-// build assembles the chain and exits, which is enough to prove the wiring
-// compiles and composes.
+// build resolves settings, assembles the chain and exits, which is enough to
+// prove the wiring compiles and composes.
 package main
 
 import (
@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
+	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/store"
@@ -32,6 +33,15 @@ func main() {
 
 func run() error {
 	clk := clock.Real()
+
+	// Settings resolve first. The governor takes its Budget share from them at
+	// stage 2, and a bad config surfaces its diagnostics here, before any request
+	// goes out, rather than failing the run (settings R14). No CLI exists yet
+	// (stage 6), so the flag layer is empty and env locates the file (R1, R4).
+	cfg, diags := config.Load(os.LookupEnv, config.Flags{})
+	for _, d := range diags {
+		fmt.Fprintln(os.Stderr, "gh-runs: config:", d.Message)
+	}
 
 	// The transport chain, nested per ADR-0012 and BUILD-ORDER's floor:
 	//
@@ -54,7 +64,7 @@ func run() error {
 	}
 	_ = client // The surfaces that exercise the client arrive in later stages.
 
-	fmt.Println("gh-runs: transport chain wired (store over governor over network)")
+	fmt.Printf("gh-runs: transport chain wired, budget tier %q (stage 0 floor)\n", cfg.Budget)
 	return nil
 }
 
