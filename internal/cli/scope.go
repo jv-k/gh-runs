@@ -11,8 +11,9 @@ import (
 // rejected by name, before any request, with a class-neutral message (cli-surface
 // R9): it names the host and states that 2.0.0 serves github.com only, claiming
 // nothing about whether the host is GHES or Enterprise Cloud, so it cannot be
-// false for a tenant.ghe.com user.
-const hostGitHub = "github.com"
+// false for a tenant.ghe.com user. It reads from domain.HostGitHub so the host
+// string has one home.
+const hostGitHub = domain.HostGitHub
 
 // scope is the resolved set of repositories a list runs over, and whether the
 // invocation fanned out (cli-surface R22). fanout drives the repository column in
@@ -89,11 +90,15 @@ func fanOutScope(deps Deps) (scope, error) {
 	return scope{repos: repos, fanout: true}, nil
 }
 
-// parseRepoArg parses a [HOST/]OWNER/REPO selector into a host-qualified identity,
-// rejecting any host but github.com by name (cli-surface R8, R9). The bare
-// OWNER/REPO form defaults to github.com, and an explicit github.com/OWNER/REPO
-// is accepted and treated identically (AC7). A host segment carrying a dot is how
-// the three-part and two-part forms are told apart, matching gh's own parse.
+// parseRepoArg parses a [HOST/]OWNER/REPO selector into a host-qualified identity
+// (cli-surface R8, R9). The bare OWNER/REPO form defaults to github.com, and an
+// explicit github.com/OWNER/REPO is accepted and treated identically (AC7). A host
+// segment carrying a dot is how the three-part and two-part forms are told apart,
+// matching gh's own parse. The split shape is checked here, then domain.NewRepoID
+// does the host-check and the charset validation, so -R and GH_REPO cannot
+// interpolate an owner or name outside GitHub's charset into the request URL path
+// (security hardening, R18). That is the one validation home discovery also uses,
+// so the invariant has no second construction site.
 func parseRepoArg(arg string) (domain.RepoID, error) {
 	parts := strings.Split(arg, "/")
 	var host, owner, name string
@@ -110,16 +115,14 @@ func parseRepoArg(arg string) (domain.RepoID, error) {
 		return domain.RepoID{}, fmt.Errorf(
 			"invalid repository %q: expected the [HOST/]OWNER/REPO format", arg)
 	}
-	if !strings.EqualFold(host, hostGitHub) {
-		return domain.RepoID{}, unsupportedHost(host)
-	}
-	return domain.RepoID{Host: hostGitHub, Owner: owner, Name: name}, nil
+	return domain.NewRepoID(host, owner, name)
 }
 
-// unsupportedHost is the class-neutral rejection (cli-surface R9, ADR-0009). It
-// names the host and claims nothing about its class, so it cannot be false for an
-// Enterprise Cloud or GHES host, and it matches the phrasing discovery and
-// ghclient already use for the same rejection.
+// unsupportedHost is the class-neutral rejection for the GH_HOST route (cli-surface
+// R9, ADR-0009). It returns domain's UnsupportedHostError, the same value -R and
+// GH_REPO get from domain.NewRepoID and the same one discovery raises, so the
+// phrasing has one home: it names the host and claims nothing about its class, so it
+// cannot be false for an Enterprise Cloud or GHES host.
 func unsupportedHost(host string) error {
-	return fmt.Errorf("repository host %q is not supported; gh-runs 2.0.0 serves github.com only", host)
+	return &domain.UnsupportedHostError{Host: host}
 }

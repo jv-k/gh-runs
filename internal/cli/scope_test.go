@@ -40,6 +40,49 @@ func TestUnsupportedHostRejectedOffline(t *testing.T) {
 	}
 }
 
+// TestRepoArgRejectsCraftedSegments pins the security hardening: a -R value whose
+// owner or name is outside GitHub's identifier charset is rejected by name, offline,
+// before any request, so an attacker-shaped segment can never be interpolated into
+// the request URL path (security review, repo-discovery R18). The offline harness
+// fails the test if any request reaches the wire, so this proves the crafted value
+// never leaves the process. The three forms are a query smuggle, a path traversal,
+// and an encoded slash, exactly the values the review verified against net/http.
+func TestRepoArgRejectsCraftedSegments(t *testing.T) {
+	for _, bad := range []string{
+		"foo/bar?actor=x",  // a query smuggled into the name segment
+		"foo/..",           // a parent-directory traversal
+		"foo/bar%2F..%2Fx", // an encoded slash the "/" split does not catch
+	} {
+		t.Run(bad, func(t *testing.T) {
+			h := newHarnessOffline(t)
+			code := h.run("list", "-R", bad)
+			if code == 0 {
+				t.Fatalf("exit = 0, want non-zero for a crafted -R %q", bad)
+			}
+			if n := h.counting.count(); n != 0 {
+				t.Errorf("wire requests = %d, want 0 (crafted -R rejected before the wire)", n)
+			}
+			if !strings.Contains(h.stderr.String(), "unsupported owner or name") {
+				t.Errorf("rejection was not the charset error; stderr=%q", h.stderr.String())
+			}
+		})
+	}
+}
+
+// TestRepoArgFromEnvRejectsCraftedSegments pins the same hardening on the GH_REPO
+// route: GH_REPO flows through the same parseRepoArg, so a crafted value there is
+// rejected offline too (cli-surface R8).
+func TestRepoArgFromEnvRejectsCraftedSegments(t *testing.T) {
+	h := newHarnessOffline(t)
+	h.env["GH_REPO"] = "foo/bar?actor=x"
+	if code := h.run("list"); code == 0 {
+		t.Fatalf("exit = 0, want non-zero for a crafted GH_REPO")
+	}
+	if n := h.counting.count(); n != 0 {
+		t.Errorf("wire requests = %d, want 0 (crafted GH_REPO rejected before the wire)", n)
+	}
+}
+
 // TestExplicitGitHubHostEqualsBareForm pins AC7's second half: -R
 // github.com/cli/cli behaves identically to -R cli/cli. Both resolve to the same
 // identity, issue the same request, and print the same output.
