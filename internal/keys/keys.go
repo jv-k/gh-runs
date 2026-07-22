@@ -87,6 +87,24 @@
 // and scrolling reuses the motion bindings (R4, R5, R15, R21, R22). n also names the confirm
 // modal's abort, but the two never fire in the same context: the modal captures input while
 // a search is not open, exactly as enter and esc are shared across the detail and the modal.
+//
+// Approve and ApprovalsFilter are the approvals stage (BUILD-ORDER stage 12) added the same
+// way: the Feed keys that act on a Run blocked on a human decision, and that apply the saved
+// filter behind the badge (approvals R9, R11, R12). The canon names no literal for either, so
+// unclaimed literals are chosen and documented here, each a motion-independent action identical
+// in both profiles and distinct from every key already bound in the list. A opens the approval
+// decision over the awaiting Run under the cursor and submits it inside the pane, the way x
+// opens and submits the dispatch form: a fork-PR Run offers approve, a pending-deployment Run
+// offers the environments review with a required comment, and a Run awaiting nothing leaves the
+// key inert, so each kind offers only its own action (R2, R3, AC2). It is shared across the
+// open-from-the-Feed and submit-inside-the-pane contexts, which never fire at once because the
+// pane captures input while open. b applies the approvals saved filter, the badge's activation,
+// narrowing the Feed to the Runs blocked on a decision and fetching nothing to do it (R5, R9);
+// the mnemonic is the canon's own word for these Runs, blocked, and b is distinct from a, the
+// Storage tab's Artifacts-only filter. Inside the review pane ToggleSelect (space) flips the
+// decision between approve and reject, OpenDetail (enter) edits the comment with FilterAccept
+// and FilterCancel committing or cancelling it, and CloseDetail (esc) closes the pane, so the
+// pane mints only the one Approve binding it shares with the Feed.
 package keys
 
 import (
@@ -132,12 +150,16 @@ type Profile struct {
 	LogExport      key.Binding // e: export the whole-Run log archive to disk (log-viewer R11)
 	LogNextMatch   key.Binding // n: move to the next in-log search match (log-viewer R21)
 	LogPrevMatch   key.Binding // N: move to the previous in-log search match (log-viewer R21)
-	Refresh        key.Binding // r: apply deferred changes, refresh (R10, R11)
-	OpenDetail     key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
-	CloseDetail    key.Binding // esc: close the Run detail pane (BUILD-ORDER stage 8, run-detail)
-	Filter         key.Binding // /: filter (R22, R23)
-	Help           key.Binding // ?: help (bubbles/help renders the registry)
-	Quit           key.Binding // q, ctrl+c: quit, and ctrl+c binds nothing else (R7)
+
+	Approve         key.Binding // A: open the approval decision over the cursor awaiting Run, and submit it (approvals R11, R12)
+	ApprovalsFilter key.Binding // b: apply the approvals saved filter over the Feed, the badge's activation (approvals R9)
+
+	Refresh     key.Binding // r: apply deferred changes, refresh (R10, R11)
+	OpenDetail  key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
+	CloseDetail key.Binding // esc: close the Run detail pane (BUILD-ORDER stage 8, run-detail)
+	Filter      key.Binding // /: filter (R22, R23)
+	Help        key.Binding // ?: help (bubbles/help renders the registry)
+	Quit        key.Binding // q, ctrl+c: quit, and ctrl+c binds nothing else (R7)
 
 	// Filter input. The Feed's filter is a text input (R22, R23), and its accept and
 	// cancel keys are declared here so the Feed matches them with key.Matches rather than
@@ -178,12 +200,16 @@ func shared(name string) Profile {
 		LogExport:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export archive")),
 		LogNextMatch:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
 		LogPrevMatch:   key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous match")),
-		Refresh:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
-		OpenDetail:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
-		CloseDetail:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close detail")),
-		Filter:         key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Help:           key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-		Quit:           key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+
+		Approve:         key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve/review")),
+		ApprovalsFilter: key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "awaiting")),
+
+		Refresh:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		OpenDetail:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
+		CloseDetail: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close detail")),
+		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 
 		FilterAccept: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "accept filter")),
 		FilterCancel: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel filter")),
@@ -283,6 +309,7 @@ func (p Profile) Bindings() []key.Binding {
 		p.Cancel, p.ForceCancel, p.Rerun, p.RerunFailed, p.ArtifactsOnly, p.ToggleWorkflow,
 		p.Dispatch,
 		p.LogTimestamps, p.LogDelete, p.LogExport, p.LogNextMatch, p.LogPrevMatch,
+		p.Approve, p.ApprovalsFilter,
 		p.Refresh, p.OpenDetail, p.CloseDetail, p.Filter, p.Help, p.Quit,
 		p.FilterAccept, p.FilterCancel,
 		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,
