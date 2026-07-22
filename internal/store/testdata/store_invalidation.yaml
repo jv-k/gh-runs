@@ -1,0 +1,73 @@
+---
+version: 2
+interactions:
+    # Interaction 0: an unconditional GET of the Runs listing for cli/cli. It
+    # answers 200 with an ETag, so the store persists it, tagged with the
+    # host-qualified repository github.com/cli/cli (local-store R14).
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers:
+            Accept:
+                - 'application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview'
+            Authorization:
+                - token dummy-fixed-token
+        url: https://api.github.com/repos/cli/cli/actions/runs
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 31
+        body: '[{"id":1,"status":"completed"}]'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"etag-list"'
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4999"
+            X-Ratelimit-Used:
+                - "1"
+        status: 200 OK
+        code: 200
+    # Interaction 1: a DELETE of one Run in the same repository, answering 204. A
+    # successful write must invalidate the repository's cached entries (local-store
+    # R10), so the listing entry persisted by interaction 0 must be gone afterward.
+    # This is a taped DELETE, never a live one: this tool deletes irreversibly, and
+    # deletion is exercised against cassettes and never against an account.
+    - id: 1
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers:
+            Accept:
+                - 'application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview'
+            Authorization:
+                - token dummy-fixed-token
+        url: https://api.github.com/repos/cli/cli/actions/runs/999
+        method: DELETE
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        body: ""
+        headers:
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4998"
+            X-Ratelimit-Used:
+                - "2"
+        status: 204 No Content
+        code: 204
