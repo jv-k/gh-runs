@@ -1,0 +1,18 @@
+---
+version: 2
+# A pending-deployment review the account is not a designated reviewer for (approvals R14,
+# AC10). The 403 is an expected outcome, not an error or a retry. No live review is issued:
+# this is replayed in ModeReplayOnly.
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/458/pending_deployments
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"You do not have permission to review deployments for this workflow run."}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]

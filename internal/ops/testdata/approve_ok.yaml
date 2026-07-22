@@ -1,0 +1,20 @@
+---
+version: 2
+# A fork-PR Run approval, taped from the approve-a-workflow-run-for-a-fork-pull-request
+# endpoint (approvals R11). The POST carries no body, and a 201 is the approval accepted.
+# The matcher ignores the request body, so the tape asserts the endpoint and the tool
+# asserts it issued exactly one POST and no DELETE. No live approve is issued: this is
+# replayed in ModeReplayOnly.
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/123/approve
+      response:
+        status: 201 Created
+        code: 201
+        body: '{}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]
