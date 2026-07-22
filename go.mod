@@ -13,6 +13,7 @@ require (
 	github.com/cli/go-gh/v2 v2.13.0
 	github.com/jonboulle/clockwork v0.5.0
 	gopkg.in/dnaeon/go-vcr.v4 v4.0.7
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -30,5 +31,4 @@ require (
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/term v0.30.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
