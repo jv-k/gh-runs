@@ -1,0 +1,9 @@
+[1mFrozen set: 5 Runs[m
+[1m  REPOSITORY              RUN ID        STATUS       CONCLUSION       WORKFLOW      STARTED         [m
+> cli/cli                 4675883901    completed    success          CI            2026-07-20 10:00
+  cli/cli                 4675883902    completed    failure          CI            2026-07-20 09:00
+  acme/api                4675883903    in_progress                   Deploy        2026-07-20 08:00
+  acme/api                4675883904    queued                        Deploy        2026-07-20 07:00
+  cli/cli                 4675883905    completed    cancelled        Release       2026-07-19 06:00
+
+[38;2;138;138;138m  row 1 of 5.  v/n/esc to return.[m

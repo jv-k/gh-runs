@@ -1,0 +1,12 @@
+[1mDelete 47 Runs across 3 repositories[m
+
+  cli/cli                 40
+  acme/api                4[38;2;138;138;138m (4 skipped)[m
+  old/legacy              3[38;2;138;138;138m (3 skipped)[m
+
+[1;38;2;255;135;95m  4 of 47 selected Runs are in read-only repos and will be skipped[m
+[38;2;255;95;95m  3 of 47 are in archived repos and can never be cleaned[m
+
+[1m  Type 47 to confirm: [m[1;38;2;0;175;255m[m
+
+[38;2;138;138;138m  Press v to inspect the frozen set.  n/esc to cancel.[m
