@@ -32,6 +32,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/limiter"
+	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 	"github.com/jv-k/gh-runs/v2/internal/tui"
@@ -115,11 +116,25 @@ func run() int {
 		Current: ghclient.CurrentRepo,
 	})
 
-	// main.go picks the surface (ADR-0011, cli-surface R1): bare `gh runs` opens the
-	// TUI, and any subcommand or argument runs the CLI. The composition root already
-	// knows both, and that is where the choice belongs.
-	if len(os.Args[1:]) == 0 {
-		return runTUI(cfg, clk, client, gov, transport, disc)
+	// The write engine. It is the only DELETE path and the only writer of the deletion
+	// log (ADR-0011, ADR-0019). main.go supplies the log's path so ops owns no directory
+	// policy, exactly as it supplies the store's directory (R29), and the two thresholds
+	// config resolved and clamped (settings R12, R21). It shares the one client, so the
+	// governor paces its DELETEs and the store sits above them.
+	purge := ops.New(ops.Options{
+		Client:           client,
+		Clock:            clk,
+		LogPath:          deletionLogPath(),
+		ConfirmThreshold: cfg.ConfirmThreshold,
+		BreakerFailures:  cfg.BreakerFailures,
+	})
+
+	// main.go picks the surface (ADR-0011, cli-surface R1, R25): bare `gh runs`, and the
+	// intent-synonym bare `gh runs delete`, open the TUI, where deletion is one
+	// operation; any subcommand carrying flags or arguments runs the CLI. The composition
+	// root already knows both, and that is where the choice belongs.
+	if opensTUI(os.Args[1:]) {
+		return runTUI(cfg, clk, client, gov, transport, disc, purge)
 	}
 
 	// The read half's dependencies. The discovered set is a function so cli stays
@@ -134,6 +149,26 @@ func run() int {
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
 		Clock:   clk,
+		Purge:   purge,
+		// RepoSnapshot is the capability data Plan gates eligibility on (purge R10). It
+		// carries only Known repositories, so a repository in scope but not yet
+		// enumerated is absent and Plan fails closed rather than guessing (repo-discovery
+		// R8, ADR-0019).
+		RepoSnapshot: func() (map[domain.RepoID]domain.Repo, error) {
+			if disc.Reload() == 0 {
+				if err := disc.Pass(context.Background(), nil); err != nil {
+					return nil, err
+				}
+			}
+			records := disc.Records()
+			m := make(map[domain.RepoID]domain.Repo, len(records))
+			for _, r := range records {
+				if r.Known {
+					m[r.ID()] = r.Repo()
+				}
+			}
+			return m, nil
+		},
 		Discovered: func() ([]domain.RepoID, error) {
 			if disc.Reload() == 0 {
 				if err := disc.Pass(context.Background(), nil); err != nil {
@@ -161,7 +196,7 @@ func run() int {
 // the scheduler on the chain, discovery's poll set and the governor's Budget Readout,
 // hands the root the engine channel and the pulls it broadcasts, runs the program, and
 // stops the engine cleanly, bounded so quit stays snappy (ADR-0015).
-func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *governor.Governor, transport *store.Transport, disc *discovery.Discovery) int {
+func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *governor.Governor, transport *store.Transport, disc *discovery.Discovery, purge *ops.Ops) int {
 	if !term.FromEnv().IsTerminalOutput() {
 		fmt.Fprintln(os.Stderr, "gh-runs: standard output is not a terminal; refusing to open the dashboard. Run `gh runs list` for non-interactive output.")
 		return 1
@@ -212,6 +247,10 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		// everything else.
 		DetailFetch: rundetail.ClientFetch(client),
 		Clock:       clk,
+		// The Feed's delete key freezes the selection into a Plan through this engine and
+		// opens the confirmation over it (purge R4 to R9). It is the same ops the CLI's
+		// delete command uses, so both surfaces run one confirmation and one DELETE path.
+		Ops: purge,
 	})
 
 	// tea.WithContext ties the program to the same context the engine runs under, so a
@@ -300,8 +339,8 @@ func newestRevalidated(transport *store.Transport, ids []domain.RepoID) time.Tim
 // storeDir returns the local store's directory under the XDG cache home
 // (local-store R1, ADR-0017). Everything this tool derives lives there, while the
 // deletion log alone keeps the XDG state home. main.go supplies the path so the
-// store owns no directory policy of its own (ADR-0011), exactly as it will supply
-// the deletion log's path to ops.
+// store owns no directory policy of its own (ADR-0011), exactly as it supplies the
+// deletion log's path to ops.
 func storeDir() string {
 	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
 		return filepath.Join(dir, "gh-runs")
@@ -311,4 +350,28 @@ func storeDir() string {
 		return filepath.Join(os.TempDir(), "gh-runs")
 	}
 	return filepath.Join(home, ".cache", "gh-runs")
+}
+
+// deletionLogPath returns the append-only deletion log's path under the XDG state
+// home, defaulting to ~/.local/state/gh-runs/deletions.log (purge R29, settings R2).
+// It is state, not cache: nobody wants it on a second machine or in a dotfiles
+// repository, and it is the one thing under the state directory recoverable from
+// nowhere else. main.go owns the path so ops owns no directory policy (ADR-0011).
+func deletionLogPath() string {
+	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
+		return filepath.Join(dir, "gh-runs", "deletions.log")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "gh-runs", "deletions.log")
+	}
+	return filepath.Join(home, ".local", "state", "gh-runs", "deletions.log")
+}
+
+// opensTUI reports whether the invocation opens the TUI rather than the CLI: bare
+// `gh runs`, and the intent-synonym bare `gh runs delete` with no other argument
+// (cli-surface R1, R25). Any subcommand carrying a flag or an argument runs the CLI,
+// where the delete command's guards apply (R26).
+func opensTUI(args []string) bool {
+	return len(args) == 0 || (len(args) == 1 && args[0] == "delete")
 }

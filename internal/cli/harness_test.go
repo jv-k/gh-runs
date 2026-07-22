@@ -2,7 +2,9 @@ package cli_test
 
 import (
 	"bytes"
+	"context"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +19,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/limiter"
+	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 )
 
@@ -54,12 +57,16 @@ type countingRT struct {
 	base http.RoundTripper
 	mu   sync.Mutex
 	n    int
+	del  int
 	urls []string
 }
 
 func (c *countingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	c.mu.Lock()
 	c.n++
+	if req.Method == http.MethodDelete {
+		c.del++
+	}
 	c.urls = append(c.urls, req.URL.String())
 	c.mu.Unlock()
 	return c.base.RoundTrip(req)
@@ -69,6 +76,15 @@ func (c *countingRT) count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.n
+}
+
+// deletes counts the DELETE requests that reached the wire, so a delete test proves
+// exactly how many Runs were attempted, and that a guard or a dry-run issued none
+// (cli-surface R10, R11, AC9, AC20).
+func (c *countingRT) deletes() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.del
 }
 
 // countMatching counts wire requests whose URL contains substr, so a fan-out
@@ -109,6 +125,8 @@ type harness struct {
 	stdout   *bytes.Buffer
 	stderr   *bytes.Buffer
 	env      map[string]string
+	logDir   string
+	snapshot map[domain.RepoID]domain.Repo
 }
 
 // newHarness assembles the chain over the named cassette in testdata. A cold
@@ -154,12 +172,28 @@ func newHarnessOverBase(t *testing.T, base http.RoundTripper) *harness {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	env := map[string]string{}
+	// The write half's ops engine over the same chain, with a deletion log in a temp
+	// dir a test can inspect (purge R28, R29). The snapshot defaults to o/r writable,
+	// the repository the delete cassettes use; withSnapshot overrides it.
+	logDir := t.TempDir()
+	purge := ops.New(ops.Options{
+		Client:           client,
+		Clock:            clk,
+		LogPath:          logDir + "/gh-runs/deletions.log",
+		ConfirmThreshold: 50,
+		BreakerFailures:  50,
+	})
+	snapshot := map[domain.RepoID]domain.Repo{
+		gh("o", "r"): {ID: gh("o", "r"), Permissions: domain.Permissions{Push: true}},
+	}
 	h := &harness{
 		counting: counting,
 		clk:      clk,
 		stdout:   stdout,
 		stderr:   stderr,
 		env:      env,
+		logDir:   logDir,
+		snapshot: snapshot,
 	}
 	h.deps = cli.Deps{
 		Client:  client,
@@ -167,10 +201,12 @@ func newHarnessOverBase(t *testing.T, base http.RoundTripper) *harness {
 		Stdout:  stdout,
 		Stderr:  stderr,
 		Clock:   clk,
+		Purge:   purge,
 		Current: func() (domain.RepoID, error) { return domain.RepoID{}, errNoCurrentRepo },
 		Discovered: func() ([]domain.RepoID, error) {
 			return nil, errNoDiscoverySet
 		},
+		RepoSnapshot: func() (map[domain.RepoID]domain.Repo, error) { return h.snapshot, nil },
 	}
 	return h
 }
@@ -193,6 +229,34 @@ func (h *harness) withDiscovered(ids ...domain.RepoID) *harness {
 // (cli-surface R17). Output is captured in the harness buffers.
 func (h *harness) run(args ...string) int {
 	return cli.Execute(h.deps, args)
+}
+
+// runDriven executes a write command while driving the fake clock, so the governor's
+// paced DELETEs release without a real sleep (purge R27). It runs Execute in a
+// goroutine and advances virtual time whenever a paced write parks, stopping when the
+// command returns. A read-only command finishes without parking and returns at once.
+func (h *harness) runDriven(args ...string) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		code := cli.Execute(h.deps, args)
+		cancel()
+		done <- code
+	}()
+	for {
+		if err := h.clk.BlockUntilContext(ctx, 1); err != nil {
+			break
+		}
+		h.clk.Advance(200 * time.Millisecond)
+	}
+	return <-done
+}
+
+// logExists reports whether the deletion log was written, so a test proves --dry-run
+// writes none (cli-surface R10, AC9).
+func (h *harness) logExists() bool {
+	_, err := os.Stat(h.logDir + "/gh-runs/deletions.log")
+	return err == nil
 }
 
 // gh builds a github.com-qualified repository identity.

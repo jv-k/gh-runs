@@ -17,6 +17,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +28,8 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
+	"github.com/jv-k/gh-runs/v2/internal/ops"
 )
 
 // Requester issues a request through the transport chain and returns the response
@@ -45,6 +48,19 @@ import (
 // mirrors this signature and moves with it.
 type Requester interface {
 	Request(method, path string, body io.Reader) (*http.Response, error)
+}
+
+// Purger is the write half's whole entry into ops: the three-call chain plus the
+// crawl that resolves the affected set (ADR-0019). *ops.Ops satisfies it. --dry-run
+// stops after Plan over Crawl's Items and the real delete Confirms and Executes them,
+// so both surfaces share one resolution and cannot diverge (cli-surface R10, R20). It
+// is an interface so a test injects a fake or a cassette-backed ops and no test issues
+// a live DELETE (purge R28).
+type Purger interface {
+	Crawl(ctx context.Context, repos []domain.RepoID, flt filter.Filter) ([]ops.Item, error)
+	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error)
+	Confirm(p ops.Plan, in ops.Input) (ops.Confirmed, error)
+	Execute(ctx context.Context, c ops.Confirmed) (ops.Summary, error)
 }
 
 // Deps carries the surface's seams. main.go fills them from the chain and
@@ -71,16 +87,34 @@ type Deps struct {
 	// Clock is the injected clock, read for the table's relative age column so a
 	// golden output is deterministic (BUILD-ORDER's testing seams).
 	Clock clock.Clock
+	// Purge is the write half's ops engine, nil for a read-only invocation. The delete
+	// command routes through it (cli-surface R10, R11).
+	Purge Purger
+	// RepoSnapshot is the discovered capability data Plan gates eligibility on (purge
+	// R10), keyed by RepoID. main.go wires it from discovery; a test passes a fixed map.
+	RepoSnapshot func() (map[domain.RepoID]domain.Repo, error)
 }
 
 // The process exit codes, gh's documented taxonomy (cli-surface R17, verified
-// against gh help exit-codes). The read half reaches 0, 1 and 4; 2 (a cancelled
-// Purge) belongs to the write half at stage 9.
+// against gh help exit-codes): 0 success, 1 failure, 2 a cancelled Purge, 4
+// authentication required.
 const (
-	exitOK      = 0
-	exitFailure = 1
-	exitAuth    = 4
+	exitOK        = 0
+	exitFailure   = 1
+	exitCancelled = 2
+	exitAuth      = 4
 )
+
+// exitError carries a specific exit code from a command up to classify, for the
+// write half's codes the error type alone does not encode: a cancelled Purge exits 2
+// and a partially failed one exits 1, neither of which is an *api.HTTPError
+// (cli-surface R17, AC13, AC20).
+type exitError struct {
+	code int
+	msg  string
+}
+
+func (e *exitError) Error() string { return e.msg }
 
 // Execute builds the command over deps, runs it against args, and returns a
 // process exit code (cli-surface R17). main.go passes os.Args[1:] and calls
@@ -104,6 +138,10 @@ func Execute(deps Deps, args []string) int {
 // so authentication exits 4 rather than a generic 1 (AC14). Everything else is a
 // failure, exit 1.
 func classify(err error) int {
+	var exitErr *exitError
+	if errors.As(err, &exitErr) {
+		return exitErr.code
+	}
 	var httpErr *api.HTTPError
 	if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized {
 		return exitAuth
@@ -122,5 +160,6 @@ func newRootCmd(deps Deps) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(newListCmd(deps))
+	root.AddCommand(newDeleteCmd(deps))
 	return root
 }

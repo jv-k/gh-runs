@@ -19,6 +19,15 @@
 // view's fold and timestamp toggles) join this registry when their features name
 // them (R7a); the canon names no key literal for them yet, so none is invented
 // here.
+//
+// Delete is the exception the Purge stage (BUILD-ORDER stage 9) added: the Feed's
+// key that opens the graduated confirmation over the selection (purge R4 to R9).
+// live-run-feed R7a's registry table names the confirm-modal keys and the inspect
+// key but no literal for the action that opens the modal, and log-viewer R17 only
+// says log deletion needs a key "distinct from Run deletion", implying Run deletion
+// has one. The literal d is chosen here, unclaimed and conventional (vim's own
+// delete operator), and distinct from the log-deletion key stage 12 will name. It
+// is a motion-independent action, so it is identical in both profiles.
 package keys
 
 import (
@@ -51,6 +60,7 @@ type Profile struct {
 	SelectTab    key.Binding // 1/2/3: jump to a tab by position (R2)
 	Settings     key.Binding // ,: settings, reachable from any tab (R2)
 	ToggleSelect key.Binding // space: toggle row selection (purge R4)
+	Delete       key.Binding // d: open the graduated confirmation over the selection (purge R4 to R9)
 	Refresh      key.Binding // r: apply deferred changes, refresh (R10, R11)
 	OpenDetail   key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
 	CloseDetail  key.Binding // esc: close the Run detail pane (BUILD-ORDER stage 8, run-detail)
@@ -84,6 +94,7 @@ func shared(name string) Profile {
 		SelectTab:    key.NewBinding(key.WithKeys("1", "2", "3"), key.WithHelp("1/2/3", "jump to tab")),
 		Settings:     key.NewBinding(key.WithKeys(","), key.WithHelp(",", "settings")),
 		ToggleSelect: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select")),
+		Delete:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		OpenDetail:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
 		CloseDetail:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close detail")),
@@ -185,7 +196,7 @@ func ForName(name string) (Profile, bool) {
 func (p Profile) Bindings() []key.Binding {
 	bindings := []key.Binding{
 		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
-		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect,
+		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect, p.Delete,
 		p.Refresh, p.OpenDetail, p.CloseDetail, p.Filter, p.Help, p.Quit,
 		p.FilterAccept, p.FilterCancel,
 		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,

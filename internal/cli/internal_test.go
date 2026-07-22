@@ -10,6 +10,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
+	"github.com/jv-k/gh-runs/v2/internal/ops"
 )
 
 // TestRenderTableSanitisesControlBytes pins the human-table hardening: untrusted run
@@ -43,6 +44,32 @@ func TestRenderTableSanitisesControlBytes(t *testing.T) {
 	}
 	if !strings.Contains(got, "push") {
 		t.Errorf("event tab was not stripped into a single cell: %q", got)
+	}
+}
+
+// TestPrintSummarySanitisesControlBytes pins that a failure reason derived from a hostile
+// API error body is stripped of terminal control bytes before it reaches the terminal, so a
+// crafted "message" from a fanned-out third-party repository cannot move the cursor or
+// rewrite prior lines through the end-of-Purge summary (security review). It mirrors the
+// list table's defense. The R29 deletion log's recorded reason is write-only and stays raw
+// by design, so only the terminal render is sanitised, not what ops records.
+func TestPrintSummarySanitisesControlBytes(t *testing.T) {
+	var out bytes.Buffer
+	deps := Deps{Stdout: &out, Stderr: &out, Clock: clock.Real()}
+	sum := ops.Summary{
+		Total:   3,
+		Deleted: 2,
+		Failures: []ops.FailureGroup{
+			{Reason: "HTTP 403: \x1b[31mForbidden\x1b[0m\x1b[2K", Count: 1},
+		},
+	}
+	printSummary(deps, sum)
+	got := out.String()
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("summary output still carries an ESC byte: %q", got)
+	}
+	if !strings.Contains(got, "Forbidden") {
+		t.Errorf("visible failure reason text was lost to the escape strip: %q", got)
 	}
 }
 

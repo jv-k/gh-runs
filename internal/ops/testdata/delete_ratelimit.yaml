@@ -1,0 +1,54 @@
+---
+version: 2
+# Run 1's DELETE answers a 403 whose documentation_url points at the fine-grained-PAT
+# permissions page, NOT at this endpoint's reference, so it fails the authorization-shape
+# correspondence and the governor classifies it as rate limiting, the safe default. It is
+# taped three times (consumed in order, ReplayableInteractions off), which both drives R19a's
+# bound and proves it: a fourth DELETE to run 1 has no tape, so if Execute issued one the
+# replay would error. After three the Run is reclassified and skipped (R19a, AC14a), and the
+# Purge proceeds to run 2, which deletes cleanly.
+interactions:
+    - id: 0
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4321"]
+    - id: 1
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4320"]
+    - id: 2
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4319"]
+    - id: 3
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/2
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4318"]
+            X-Ratelimit-Reset: ["1789000000"]

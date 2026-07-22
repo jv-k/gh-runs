@@ -1,0 +1,42 @@
+---
+version: 2
+# Three authorization 403s in a row (documentation_url points at this endpoint, the measured
+# authorization shape, so the governor classifies each as a failure, not a rate limit). With
+# the breaker threshold set to 3 the Purge stops after the third. Only three DELETEs are taped:
+# a fourth Run in the plan is never attempted, and if it were the replay would error, so the
+# tape proves "no further DELETE" (purge R21, AC13). The reasons differ per Run so the summary's
+# grouping is exercised too (R22, AC18).
+interactions:
+    - id: 0
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Must have admin rights to Repository.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#delete-a-workflow-run"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4200"]
+    - id: 1
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/2
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Must have admin rights to Repository.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#delete-a-workflow-run"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4199"]
+    - id: 2
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/3
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Token is missing the actions scope.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#delete-a-workflow-run"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4198"]
