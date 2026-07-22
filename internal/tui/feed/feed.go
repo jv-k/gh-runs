@@ -32,6 +32,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/jv-k/gh-runs/v2/internal/approvals"
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
@@ -39,6 +40,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
+	"github.com/jv-k/gh-runs/v2/internal/tui/approval"
 	"github.com/jv-k/gh-runs/v2/internal/tui/confirm"
 	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
@@ -90,6 +92,12 @@ type Options struct {
 	// delete uses (R17). All are nil in a golden test, where the log pane never opens.
 	LogFetch  logview.Fetch
 	LogExport logview.Exporter
+	// Approver runs the two approval writes and ApprovalFetch reads a Run's pending deployments,
+	// both for the decision pane the Approve key opens over an awaiting Run (approvals R11, R12).
+	// main.go wires Approver to the shared ops engine and ApprovalFetch over the shared client;
+	// a golden test leaves them nil, and the Approve key is then inert.
+	Approver      approval.Approver
+	ApprovalFetch approval.Fetcher
 }
 
 // Model is the Feed tab's state. The live map is the truth per repository; the
@@ -160,6 +168,19 @@ type Model struct {
 	confirmOpen bool
 	planner     Planner
 
+	// approval is the decision pane, opened over the awaiting Run under the cursor on the
+	// Approve key (approvals R11, R12, ADR-0011: a tab may import a pane). While it is open it
+	// is a modal: the Feed routes every key to it and paints it in place of the list. approver
+	// gates whether the Approve key opens it at all, nil in a golden test where it is inert.
+	approval     approval.Model
+	approvalOpen bool
+	approver     approval.Approver
+
+	// approvalsFilter is the badge's saved filter (approvals R1, R9). When on, liveView keeps
+	// only the Runs awaiting a decision. It is a client-side predicate over held Runs, so it
+	// issues no request and spends no Budget (R5, AC4).
+	approvalsFilter bool
+
 	showHelp bool
 
 	// totals carries each filtered repository's reachable and claimed counts for R24's
@@ -212,6 +233,12 @@ func New(opts Options) Model {
 		}),
 		confirm: confirm.New(opts.Profile),
 		planner: opts.Ops,
+		approval: approval.New(approval.Options{
+			Profile:  opts.Profile,
+			Approver: opts.Approver,
+			Fetch:    opts.ApprovalFetch,
+		}),
+		approver: opts.Approver,
 	}
 }
 
@@ -240,7 +267,7 @@ func (m Model) SetActive(active bool) Model {
 // or a y that must confirm rather than switch context, is not stolen as a global
 // navigation key (ADR-0011, R7).
 func (m Model) CapturesInput() bool {
-	return m.filterActive || m.confirmOpen || (m.detailOpen && m.detail.CapturesInput())
+	return m.filterActive || m.confirmOpen || m.approvalOpen || (m.detailOpen && m.detail.CapturesInput())
 }
 
 // Update handles one message the root routed here. Size and data broadcasts reach it
@@ -256,6 +283,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.detail, cmd = m.detail.Update(msg)
 		m.confirm, _ = m.confirm.Update(msg)
+		m.approval, _ = m.approval.Update(msg)
 		return m, cmd
 
 	case scheduler.Update:
@@ -291,13 +319,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 
-	// A message the Feed does not consume is forwarded to the pane. The pane's own tagged
-	// messages (its debounce settle, its fast-tier tick, a tagged Jobs response) reach the
-	// Feed as broadcasts, and only the pane can name them (ADR-0015's type-visibility
-	// targeting); a closed pane discards them by its own open gate.
+	// A message the Feed does not consume is forwarded to the panes. Each pane's own tagged
+	// messages (the detail pane's debounce settle and Jobs response, the approval pane's
+	// DeploymentsLoaded and Reviewed) reach the Feed as broadcasts, and only the naming pane
+	// consumes them (ADR-0015's type-visibility targeting); a closed pane discards them by its
+	// own open gate.
 	var cmd tea.Cmd
 	m.detail, cmd = m.detail.Update(msg)
-	return m, cmd
+	var acmd tea.Cmd
+	m.approval, acmd = m.approval.Update(msg)
+	return m, tea.Batch(cmd, acmd)
 }
 
 // handleKey matches a press against the active profile's registry bindings, never a
@@ -306,6 +337,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.confirmOpen {
 		return m.handleConfirmKey(k)
+	}
+	if m.approvalOpen {
+		return m.handleApprovalKey(k)
 	}
 	if m.filterActive {
 		return m.handleFilterKey(k)
@@ -321,6 +355,14 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	switch {
+	case key.Matches(k, m.profile.Approve):
+		// Open the decision over the awaiting Run under the cursor, routed by Kind (approvals
+		// R11, R12). Inert on a Run awaiting nothing, so each kind offers only its own action.
+		return m.openApproval()
+	case key.Matches(k, m.profile.ApprovalsFilter):
+		// Activate the badge's saved filter, narrowing the Feed to the Runs awaiting a decision
+		// and fetching nothing to do it (approvals R9, AC8).
+		return m.toggleApprovalsFilter(), m.publishViewport()
 	case key.Matches(k, m.profile.Delete):
 		return m.openConfirm(ops.OpDelete), nil
 	case key.Matches(k, m.profile.Cancel):
@@ -548,6 +590,86 @@ func (m Model) handleConfirmKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+// openApproval opens the decision pane over the Run under the cursor when it is awaiting a
+// decision, routing by Kind (approvals R11, R12, R3). With no approver wired, no Run under the
+// cursor, or a Run awaiting nothing, it is inert, so the Approve key offers an action only
+// where one exists (AC2). The pane owns the fetch and the write; the Feed only holds it open
+// and paints it in place of the list.
+func (m Model) openApproval() (Model, tea.Cmd) {
+	if m.approver == nil {
+		return m, nil
+	}
+	r, ok := m.cursorRun()
+	if !ok {
+		return m, nil
+	}
+	kind := approvals.Classify(r)
+	if kind == approvals.KindNone {
+		return m, nil // AC2: a Run awaiting nothing offers no action
+	}
+	var cmd tea.Cmd
+	m.approval, cmd = m.approval.Open(approval.Target{
+		Repo:  r.Repo,
+		RunID: r.ID,
+		Kind:  kind,
+		Title: approvalTitle(r),
+	})
+	m.approvalOpen = true
+	return m, cmd
+}
+
+// handleApprovalKey drives the decision pane while it is open, routing every key to it (R7)
+// and dropping the modal when the pane closes itself, on esc or after the operator dismisses a
+// terminal outcome. A successful write changes the Run's fields, and the Feed's badge and
+// filter follow through the ordinary poll, so nothing here forces a refresh (R15).
+func (m Model) handleApprovalKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.approval, cmd = m.approval.Update(k)
+	if !m.approval.IsOpen() {
+		m.approvalOpen = false
+	}
+	return m, cmd
+}
+
+// toggleApprovalsFilter applies or lifts the badge's saved filter (approvals R9), narrowing
+// the Feed to the Runs awaiting a decision and back. It applies the view at once, keeping the
+// cursor on its Run ID, and issues no request, because the predicate is client-side over held
+// Runs (R5, AC4). It opens no view and switches no tab, so the Feed stays the focused surface
+// with the filter applied (AC8).
+func (m Model) toggleApprovalsFilter() Model {
+	m.approvalsFilter = !m.approvalsFilter
+	m.applyView(m.liveView())
+	return m
+}
+
+// approvalCount is the number of held Runs awaiting a decision, counted across every
+// repository's live truth (approvals R7). It counts the Runs actually held that match the
+// predicate, never a total_count, and it is independent of the text filter and the saved
+// filter, so the badge reflects what the Feed has reached rather than what is on screen (R10).
+// Following the live truth is what lets the badge clear through the Feed's ordinary poll: when
+// an approved Run's fields change on the next poll it drops out of the count with no bespoke
+// refresh (R15, AC11).
+func (m Model) approvalCount() int {
+	n := 0
+	for _, runs := range m.live {
+		for i := range runs {
+			if approvals.Awaiting(runs[i]) {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// approvalTitle is the Run's display title for the decision pane's header, its display_title
+// where the API served one, else the workflow label. The pane sanitises it before painting.
+func approvalTitle(r domain.Run) string {
+	if r.DisplayTitle != "" {
+		return r.DisplayTitle
+	}
+	return workflowLabel(r)
+}
+
 // cursorRun is the Run under the cursor, or false when the list is empty.
 func (m Model) cursorRun() (domain.Run, bool) {
 	if m.cursor < 0 || m.cursor >= len(m.displayedIDs) {
@@ -709,6 +831,12 @@ func (m Model) liveView() []domain.Run {
 	var all []domain.Run
 	for _, runs := range m.live {
 		for i := range runs {
+			// The approvals saved filter is a client-side predicate applied ahead of the text
+			// filter, so an active badge narrows the view to the Runs awaiting a decision without
+			// a request (approvals R5, R9).
+			if m.approvalsFilter && !approvals.Awaiting(runs[i]) {
+				continue
+			}
 			if m.filter.Match(runs[i]) {
 				all = append(all, runs[i])
 			}

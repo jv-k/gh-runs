@@ -133,6 +133,22 @@ func TestGoldenUnknownConclusion(t *testing.T) {
 	goldie.New(t).Assert(t, "unknown_conclusion", []byte(m.View()))
 }
 
+// TestGoldenApprovalBadge fixes the approvals badge (approvals R8, R10): the count of Runs
+// awaiting a decision atop the list, worded neutrally and naming the saved-filter key, over one
+// fork-PR Run (completed, action_required) and one pending deployment (waiting). A healthy
+// completed Run is present too and is not counted.
+func TestGoldenApprovalBadge(t *testing.T) {
+	m := newFeed(100, 7)
+	id := repoID("o", "r")
+	m = discovered(m, repo("o", "r", true, false))
+	m = feedRuns(m, id,
+		mkRun(29516338954, "o", "r", "CI", domain.StatusCompleted, domain.ConclusionActionRequired, t0),
+		mkRun(29516338001, "o", "r", "Deploy", domain.StatusWaiting, "", t0.Add(-time.Hour)),
+		mkRun(29516337000, "o", "r", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0.Add(-2*time.Hour)),
+	)
+	goldie.New(t).Assert(t, "approval_badge", []byte(m.View()))
+}
+
 // TestGoldenNarrowTerminal fixes AC20: below 100 columns the Feed paints no rows and
 // states the width it needs.
 func TestGoldenNarrowTerminal(t *testing.T) {
