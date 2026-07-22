@@ -298,7 +298,15 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	switch {
 	case key.Matches(k, m.profile.Delete):
-		return m.openConfirm(), nil
+		return m.openConfirm(ops.OpDelete), nil
+	case key.Matches(k, m.profile.Cancel):
+		return m.openConfirm(ops.OpCancel), nil
+	case key.Matches(k, m.profile.ForceCancel):
+		return m.openConfirm(ops.OpForceCancel), nil
+	case key.Matches(k, m.profile.Rerun):
+		return m.openRerun(ops.OpRerun), nil
+	case key.Matches(k, m.profile.RerunFailed):
+		return m.openRerun(ops.OpRerunFailed), nil
 	case key.Matches(k, m.profile.RowUp):
 		m.moveCursor(-1)
 	case key.Matches(k, m.profile.RowDown):
@@ -367,15 +375,20 @@ func (m Model) openDetail() (Model, tea.Cmd) {
 	return m, cmd
 }
 
-// openConfirm freezes the selection into a Plan and opens the confirmation modal over
-// it (purge R4 to R9). The frozen set is R4's ID-keyed selection, or the Run under the
-// cursor when nothing is selected, and it freezes here at modal open: RunItem copies
-// each Run by value, so a poll arriving afterwards cannot change the set (R5). With no
-// planner wired, an empty set, or a repository whose capability is not yet known, it
-// stays closed, keeping the destructive action disabled (repo-discovery R8, ADR-0019's
-// fail-closed Plan). Executing the resulting confirmation is the running-Purge surface,
-// deferred from this stage; the delete key's job here is to raise the confirmation.
-func (m Model) openConfirm() Model {
+// openConfirm freezes the selection into a Plan for op and opens the confirmation modal
+// over it (purge R4 to R9, run-lifecycle R16, R17). The frozen set is R4's ID-keyed
+// selection, or the Run under the cursor when nothing is selected, and it freezes here
+// at modal open: RunItem copies each Run by value, so a poll arriving afterwards cannot
+// change the set (R5). With no planner wired, an empty set, or a repository whose
+// capability is not yet known, it stays closed, keeping the destructive action disabled
+// (repo-discovery R8, ADR-0019's fail-closed Plan).
+//
+// A single re-run or re-run-failed prices at FrictionNone (run-lifecycle R18): it takes
+// no confirmation, so the pane opens no modal (ADR-0019). Launching Execute over that
+// confirmed set is the running surface this stage defers, exactly as the Purge stage
+// defers launching a Purge from a confirmed delete Plan. Every other case opens the
+// graduated confirmation, which is one shared component reused unchanged.
+func (m Model) openConfirm(op ops.Operation) Model {
 	if m.planner == nil {
 		return m
 	}
@@ -383,13 +396,32 @@ func (m Model) openConfirm() Model {
 	if len(items) == 0 {
 		return m
 	}
-	plan, err := m.planner.Plan(ops.OpDelete, items, m.repoSnapshot())
+	plan, err := m.planner.Plan(op, items, m.repoSnapshot())
 	if err != nil {
-		return m // fail closed: an unknown repository keeps the delete disabled (repo-discovery R8)
+		return m // fail closed: an unknown repository keeps the action disabled (repo-discovery R8)
+	}
+	if plan.Friction() == ops.FrictionNone {
+		return m // R18: a single re-run takes no modal; launching it is the deferred running surface
 	}
 	m.confirm = m.confirm.Open(plan)
 	m.confirmOpen = true
 	return m
+}
+
+// openRerun raises a re-run or re-run-failed confirmation, first applying run-detail
+// R18's Orphaned-Run exclusion: a Run whose Workflow is deleted can produce no further
+// Run, so re-run is not offered for it (run-detail R18, AC15). The detail pane holds the
+// Workflow State it resolved, so when it is open over an Orphaned Run the re-run key is
+// inert. The permission half of the gate (push && !archived) is enforced by ops.Plan's
+// eligibility stamp, consistently with the Feed and every other operation, so this adds
+// only the deleted-Workflow limb the shared Plan cannot see (a Run does not carry its
+// Workflow's State). The eligibility of a full multi-selection is shown in the modal's
+// skip lines as for any operation.
+func (m Model) openRerun(op ops.Operation) Model {
+	if m.detailOpen && m.detail.IsOrphaned() {
+		return m // run-detail R18, AC15: no re-run for an Orphaned Run
+	}
+	return m.openConfirm(op)
 }
 
 // frozenSelection builds R4's frozen set: a RunItem per selected Run ID in displayed

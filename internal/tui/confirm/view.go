@@ -132,13 +132,17 @@ func (m Model) eligibilityLines() []string {
 
 // promptLine is R7's friction prompt: y/N below the threshold, and the exact typed
 // count at or above it or across repositories. The typed buffer is echoed so the
-// operator sees what they have entered (R7, AC6, AC7).
+// operator sees what they have entered (R7, AC6, AC7). The y/N verb tracks the
+// operation, so a reused pane names what it will do: "Cancel these Runs?" for a cancel,
+// "Delete these Runs?" for a Purge (run-lifecycle R17 reuses this pane, and the headline
+// is already verb-aware). operationVerb(OpDelete) is "Delete", so a Purge's prompt is
+// unchanged.
 func (m Model) promptLine() string {
 	if m.plan.Friction() == ops.FrictionTypedCount {
 		prompt := stylePrompt.Render(indent + "Type " + strconv.Itoa(m.plan.Total()) + " to confirm: ")
 		return prompt + styleTyped.Render(m.typed)
 	}
-	return stylePrompt.Render(indent + "Delete these " + pluralNoun(m.plan) + "? [y/N]")
+	return stylePrompt.Render(indent + operationVerb(m.plan.Operation()) + " these " + pluralNoun(m.plan) + "? [y/N]")
 }
 
 // inspectHint names the key that opens R30's viewport, drawn from the registry so the

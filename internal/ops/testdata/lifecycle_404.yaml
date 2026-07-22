@@ -1,0 +1,32 @@
+---
+version: 2
+# The same Run, deleted out from under two operations, and the 404 read two opposite ways
+# (run-lifecycle R22, AC13). The endpoints differ, so one cassette carries both and the
+# matcher tells them apart by URL.
+interactions:
+    # cancel: a 404 means the Run is gone, therefore not running, therefore the requested
+    # end state holds. Recorded as a skip.
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/1/cancel
+      response:
+        status: 404 Not Found
+        code: 404
+        body: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4900"]
+    # re-run: a 404 means the Run cannot gain an Attempt. Recorded as a failure, the
+    # opposite reading of the identical status.
+    - id: 1
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/1/rerun
+      response:
+        status: 404 Not Found
+        code: 404
+        body: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4899"]

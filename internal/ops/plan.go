@@ -35,10 +35,27 @@ type Plan struct {
 	items     []Item
 	friction  FrictionLevel
 	breakdown []RepoCount
+	debug     bool
 }
 
 // Operation is the verb this Plan was built for.
 func (p Plan) Operation() Operation { return p.op }
+
+// WithDebugLogging turns on enable_debug_logging for a re-run or re-run-failed Plan,
+// the opt-in R14 offers at the point of invocation and AC14 pins (defaulting off). It
+// returns a copy so the value stays immutable, and it is meaningful only for the two
+// re-run operations: Execute sends the flag on their request bodies and nowhere else,
+// so setting it on any other Operation's Plan is inert. It leaves the friction and the
+// breakdown untouched, because debug logging changes the request body and not the blast
+// radius (run-lifecycle R14, AC14).
+func (p Plan) WithDebugLogging() Plan {
+	p.debug = true
+	return p
+}
+
+// DebugLogging reports whether this Plan carries R14's enable_debug_logging opt-in, so
+// the confirm modal can echo the choice at the point of invocation (R14).
+func (p Plan) DebugLogging() bool { return p.debug }
 
 // Items is the frozen set in selection order, a copy so a caller cannot mutate the
 // Plan's held set (ADR-0019). The confirm pane's inspect viewport pages this, and

@@ -1,0 +1,17 @@
+---
+version: 2
+# Re-run failed Jobs is a distinct operation against a distinct endpoint, offered where the
+# Run has Jobs that failed (run-lifecycle R13). It is a re-run and obeys the same Attempt
+# model: its 201 added an Attempt. The debug opt-in applies to it as to plain re-run (R14).
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/1/rerun-failed-jobs
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]
