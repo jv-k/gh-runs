@@ -19,10 +19,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
+	"github.com/jv-k/gh-runs/v2/internal/domain"
 )
 
 // rateLimitPrefix marks the headers that describe an exchange rather than an
@@ -31,36 +34,151 @@ import (
 // (ADR-0012). Go canonicalises x-ratelimit-* to this casing.
 const rateLimitPrefix = "X-Ratelimit-"
 
+// schemaVersion is the on-disk format the running binary understands. An entry
+// carrying any other version is discarded and rebuilt rather than migrated in
+// place or read optimistically (local-store R12). R11 is what makes discarding
+// always available: the cost of a rebuild is one slow launch, never data loss.
+const schemaVersion = 1
+
+// maxStoreBytes is the store's total on-disk bound (local-store R15, ADR-0017).
+// It is a compiled constant and not a user knob, by R9's argument transferred:
+// no value a user could pick improves on LRU eviction. It is a backstop, not a
+// target, and the reference workload sits an order of magnitude below it. It is a
+// var rather than a const only so the eviction test can lower it; nothing in the
+// product writes to it. The per-repository bound is R16's and applies upstream,
+// before eviction is ever involved.
+var maxStoreBytes int64 = 50 << 20
+
 // Transport is the store's RoundTripper.
 type Transport struct {
 	base http.RoundTripper
 	dir  string
 	clk  clock.Clock
+
+	// writer is true when this process holds the advisory lock and may write. A
+	// process that does not still reads and revalidates, but writes nothing
+	// (local-store R21). lock is the held file; nil for a reader.
+	writer bool
+	lock   *fileLock
+
+	// invalidated is a degraded reader's in-memory view of repositories its own
+	// writes have changed (local-store R23). It suppresses the persisted entry
+	// without reaching it, because the writing process owns that file. A writer
+	// never touches this map: it deletes the files instead. Guarded by mu.
+	mu          sync.Mutex
+	invalidated map[string]bool
+
+	// writeMu serialises the writer's disk mutations. RoundTrip is called
+	// concurrently by go-gh (the Feed polls many repositories at once), so an
+	// eviction sweep must not interleave with another write, and an invalidation
+	// must not race a persist. Writes themselves land atomically by rename, so a
+	// reader, in this process or the other, never observes a partial file (AC18).
+	writeMu sync.Mutex
 }
 
 // NewTransport returns a Transport dialing through base and persisting ETags and
 // payloads under dir. main.go supplies dir (the XDG cache directory in
 // production, per ADR-0017); a test supplies a temp dir. The clock records each
-// entry's last-revalidated time (local-store R3, R17).
+// entry's last-revalidated time (local-store R3, R17). It takes the advisory
+// write lock non-blocking at startup (R21): a process that gets it writes for its
+// lifetime, one that does not degrades to a reader on the spot.
 func NewTransport(base http.RoundTripper, dir string, clk clock.Clock) *Transport {
-	return &Transport{base: base, dir: dir, clk: clk}
+	t := &Transport{
+		base:        base,
+		dir:         dir,
+		clk:         clk,
+		invalidated: make(map[string]bool),
+	}
+	t.acquire()
+	return t
+}
+
+// acquire takes the advisory write lock without blocking (local-store R21). A
+// store with no directory, an unwritable one, or a contended lock all leave the
+// transport a reader: it does not wait, does not poll the lock, and does not
+// delay a launch (R22). The lock file is created empty and never written to.
+func (t *Transport) acquire() {
+	if t.dir == "" {
+		return
+	}
+	if err := os.MkdirAll(t.dir, 0o755); err != nil {
+		return
+	}
+	lock, ok := acquireLock(filepath.Join(t.dir, lockName))
+	if !ok {
+		return
+	}
+	t.lock = lock
+	t.writer = true
+}
+
+// releaseLock drops the advisory lock. Production never calls it: the process
+// holds the lock for its lifetime and the kernel releases it at exit (local-store
+// R21, R22). It exists for tests that stand in for a holding process ending.
+func (t *Transport) releaseLock() error {
+	if t.lock == nil {
+		return nil
+	}
+	err := t.lock.release()
+	t.lock = nil
+	t.writer = false
+	return err
+}
+
+// isInvalidated reports whether a degraded reader has invalidated repo in its own
+// view this session (local-store R23). A writer never populates the map, so this
+// is always false for a writer, which reaches disk instead.
+func (t *Transport) isInvalidated(repo string) bool {
+	if repo == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.invalidated[repo]
 }
 
 // entry is one persisted resource. It carries only the ETag, the entity headers
 // and the payload, never a request header, so the token never reaches disk
-// (local-store R20, AC14a).
+// (local-store R20, AC14a). Schema versions it (R12), and Repo host-qualifies its
+// owning repository so a successful write can invalidate it (R10, R14).
 type entry struct {
+	Schema          int                 `json:"schema"`
 	ETag            string              `json:"etag"`
+	Repo            string              `json:"repo,omitempty"`
 	Header          map[string][]string `json:"header"`
 	Body            []byte              `json:"body"`
 	LastRevalidated time.Time           `json:"last_revalidated"`
 }
 
 // RoundTrip sends a conditional request when it holds an ETag for this key, and
-// reconstitutes a 200 from the resulting 304.
+// reconstitutes a 200 from the resulting 304. A non-GET is a write: never
+// conditional, and on success it invalidates the repository's cached entries.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method != http.MethodGet {
+		// A write is never revalidated: its key would never match a persisted GET,
+		// and its body must survive to reach the wire. On a 2xx the tool has just
+		// changed the repository, so its cached reads are invalidated immediately
+		// rather than left to be discovered at the next revalidation (local-store
+		// R10). The caller owns the returned body.
+		resp, err := t.base.RoundTrip(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			t.invalidate(repoOf(req))
+		}
+		return resp, nil
+	}
+
 	key := t.key(req)
-	cached, hasCached := t.load(key)
+	var cached entry
+	var hasCached bool
+	// A degraded reader that invalidated this repository skips the persisted
+	// entry rather than reaching it (local-store R23): the writing process owns
+	// that file, and the read simply goes out unconditional.
+	if !t.isInvalidated(repoOf(req)) {
+		cached, hasCached = t.load(key)
+	}
 
 	sent := req
 	if hasCached && cached.ETag != "" {
@@ -79,7 +197,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	case resp.StatusCode == http.StatusNotModified && hasCached:
 		return t.reconstitute(req, resp, cached, key)
 	case resp.StatusCode == http.StatusOK:
-		return t.persist(resp, key)
+		return t.persist(req, resp, key)
 	default:
 		return resp, nil
 	}
@@ -103,6 +221,28 @@ func (t *Transport) key(req *http.Request) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// repoOf returns the host-qualified repository a request addresses, as
+// host/owner/name (local-store R14, ADR-0009), or "" for a request that names no
+// repository. The GitHub REST host api.github.com maps to the repository host
+// github.com, the enterprise-agnostic derivation go-gh itself uses. It reuses
+// domain.RepoID so the qualification format has one source, and a bare owner/name
+// can never be produced (AC14).
+func repoOf(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "repos" || parts[1] == "" || parts[2] == "" {
+		return ""
+	}
+	id := domain.RepoID{
+		Host:  strings.TrimPrefix(req.URL.Host, "api."),
+		Owner: parts[1],
+		Name:  parts[2],
+	}
+	return id.String()
+}
+
 // drainBody reads a request body for hashing and restores it (and GetBody) so the
 // round trip can still send it.
 func drainBody(req *http.Request) []byte {
@@ -120,7 +260,7 @@ func drainBody(req *http.Request) []byte {
 
 // persist saves a 200's ETag, entity headers and payload, then hands the caller a
 // fresh body because the original is consumed.
-func (t *Transport) persist(resp *http.Response, key string) (*http.Response, error) {
+func (t *Transport) persist(req *http.Request, resp *http.Response, key string) (*http.Response, error) {
 	body, err := io.ReadAll(resp.Body)
 	if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
 		err = closeErr
@@ -132,6 +272,7 @@ func (t *Transport) persist(resp *http.Response, key string) (*http.Response, er
 	if etag := resp.Header.Get("ETag"); etag != "" {
 		t.save(key, entry{
 			ETag:            etag,
+			Repo:            repoOf(req),
 			Header:          entityHeaders(resp.Header),
 			Body:            body,
 			LastRevalidated: t.clk.Now(),
@@ -213,22 +354,150 @@ func (t *Transport) load(key string) (entry, bool) {
 	if err := json.Unmarshal(data, &e); err != nil {
 		return entry{}, false
 	}
+	// A version this binary does not recognise is discarded, not migrated in
+	// place or read optimistically (local-store R12). A file written by an older
+	// or newer format, or one whose schema field is absent, reads as a miss and
+	// is rebuilt on the next 200.
+	if e.Schema != schemaVersion {
+		return entry{}, false
+	}
 	return e, true
 }
 
 // save writes a persisted entry best-effort. A write failure costs a future cold
 // start its speed and nothing else (local-store R11), so it is swallowed rather
 // than surfaced. The file is 0600 and its name is a hash, so no token is written.
+// A degraded reader never writes to the store (R21, R23), so save is a no-op for
+// one: its newly observed ETags die with the process, and the next cold start is
+// slightly colder for it.
 func (t *Transport) save(key string, e entry) {
-	if t.dir == "" {
+	if t.dir == "" || !t.writer {
 		return
 	}
 	if err := os.MkdirAll(t.dir, 0o755); err != nil {
 		return
 	}
+	e.Schema = schemaVersion
 	data, err := json.Marshal(e)
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(t.path(key), data, 0o600)
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+	if !writeFileAtomic(t.dir, t.path(key), data) {
+		return
+	}
+	t.enforceBound()
+}
+
+// writeFileAtomic writes data to a fresh temp file in dir and renames it over
+// path, so a reader never observes a half-written entry (AC18). Rename is atomic
+// within a filesystem, and the temp name is unique and does not end in .json, so
+// the entry glob never sees it. It reports whether the entry landed. A failure
+// costs a future cold start its speed and nothing else (local-store R11).
+func writeFileAtomic(dir, path string, data []byte) bool {
+	tmp, err := os.CreateTemp(dir, "store.tmp-*")
+	if err != nil {
+		return false
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return false
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return false
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return false
+	}
+	return true
+}
+
+// enforceBound evicts the oldest entries by last-revalidated time until the
+// store's total size is within maxStoreBytes (local-store R15, ADR-0017). It runs
+// at write time, after the new entry lands, so a write that carries the store
+// past the bound pays for itself. R3's timestamp supplies the ordering, so
+// eviction keeps no bookkeeping of its own. The just-written entry sorts newest
+// and is evicted last, so a write never evicts itself while an older entry
+// remains (AC15).
+func (t *Transport) enforceBound() {
+	files, err := filepath.Glob(filepath.Join(t.dir, "*.json"))
+	if err != nil {
+		return
+	}
+	type meta struct {
+		path string
+		size int64
+		age  time.Time
+	}
+	metas := make([]meta, 0, len(files))
+	var total int64
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var e entry
+		if err := json.Unmarshal(data, &e); err != nil {
+			continue
+		}
+		size := int64(len(data))
+		metas = append(metas, meta{path: f, size: size, age: e.LastRevalidated})
+		total += size
+	}
+	if total <= maxStoreBytes {
+		return
+	}
+	sort.Slice(metas, func(i, j int) bool { return metas[i].age.Before(metas[j].age) })
+	for _, m := range metas {
+		if total <= maxStoreBytes {
+			return
+		}
+		if err := os.Remove(m.path); err == nil {
+			total -= m.size
+		}
+	}
+}
+
+// invalidate drops repo's cached entries after a successful write, so the write
+// is not shadowed by the stale reads it just changed (local-store R10). A writer
+// removes the persisted files; a degraded reader marks repo in its own in-memory
+// view instead and never reaches the persisted entry, because the writing process
+// owns that file (R23). It is a no-op for a request that named no repository.
+func (t *Transport) invalidate(repo string) {
+	if repo == "" {
+		return
+	}
+	if !t.writer {
+		t.mu.Lock()
+		t.invalidated[repo] = true
+		t.mu.Unlock()
+		return
+	}
+	if t.dir == "" {
+		return
+	}
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+	files, err := filepath.Glob(filepath.Join(t.dir, "*.json"))
+	if err != nil {
+		return
+	}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var e entry
+		if err := json.Unmarshal(data, &e); err != nil {
+			continue
+		}
+		if e.Repo == repo {
+			_ = os.Remove(f)
+		}
+	}
 }

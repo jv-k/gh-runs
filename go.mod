@@ -12,6 +12,7 @@ toolchain go1.26.5
 require (
 	github.com/cli/go-gh/v2 v2.13.0
 	github.com/jonboulle/clockwork v0.5.0
+	golang.org/x/sys v0.31.0
 	gopkg.in/dnaeon/go-vcr.v4 v4.0.7
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -28,7 +29,6 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/thlib/go-timezone-local v0.0.0-20210907160436-ef149e42d28e // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
-	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/term v0.30.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 )
