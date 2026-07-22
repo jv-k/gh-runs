@@ -34,6 +34,41 @@ const (
 	ConclusionStartupFailure Conclusion = "startup_failure"
 )
 
+// StatusValues is the six Statuses, the membership list the filter engine
+// validates a permissive -s value against (ADR-0016). It lives here beside the
+// constants so there is one shelf of truth: filter is the single validation
+// point for every consumer, and a second table one package over is the drift
+// ADR-0014 defines these types to prevent. It returns a fresh slice so a caller
+// cannot mutate the vocabulary.
+func StatusValues() []Status {
+	return []Status{
+		StatusQueued,
+		StatusInProgress,
+		StatusCompleted,
+		StatusWaiting,
+		StatusRequested,
+		StatusPending,
+	}
+}
+
+// ConclusionValues is the nine Conclusions the filter engine validates against
+// (ADR-0016). ConclusionNone is deliberately absent: "" is the null Conclusion
+// carries until a Run completes, never a value a person types, and gh's 15-value
+// -s enum is these nine plus the six Statuses with nothing left over (R4).
+func ConclusionValues() []Conclusion {
+	return []Conclusion{
+		ConclusionSuccess,
+		ConclusionFailure,
+		ConclusionCancelled,
+		ConclusionSkipped,
+		ConclusionTimedOut,
+		ConclusionNeutral,
+		ConclusionActionRequired,
+		ConclusionStale,
+		ConclusionStartupFailure,
+	}
+}
+
 // State is a Workflow's lifecycle value. A Workflow has a State and
 // never a Status or a Conclusion.
 type State string
