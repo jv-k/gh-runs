@@ -57,10 +57,14 @@ func ClientFetch(client Requester) Fetch {
 	}
 }
 
-// jobsPath is a Run's Jobs listing, the latest Attempt's. It carries no query, so it is
-// neither filter=all, which was measured to return only the latest Attempt anyway, nor an
-// attempts/N/jobs segment, which serves total_count: 0. Both are the history the API does
-// not build, and never sending them is R6, AC3 and AC4 as a property of the path itself.
+// jobsPath is a Run's Jobs listing, the latest Attempt's. Its only query is per_page=100, the
+// API's page ceiling: resolved open question 3 measured a 38-job Run served 30 with a Link
+// rel=next, and the fast tier is "one request per Run for any Run up to 100 Jobs", which holds
+// only at the full page (R1). The pane follows no Link header, so anything under 100 defaults
+// to 30 and silently drops the rest. The query carries neither filter=all, which was measured
+// to return only the latest Attempt anyway, nor an attempts/N/jobs segment, which serves
+// total_count: 0. Both are the history the API does not build, and never sending them is R6,
+// AC3 and AC4 as a property of the path itself.
 func jobsPath(repo domain.RepoID, runID int64) string {
-	return "repos/" + repo.Owner + "/" + repo.Name + "/actions/runs/" + strconv.FormatInt(runID, 10) + "/jobs"
+	return "repos/" + repo.Owner + "/" + repo.Name + "/actions/runs/" + strconv.FormatInt(runID, 10) + "/jobs?per_page=100"
 }

@@ -37,7 +37,7 @@ func TestClientFetchPathHasNoAttemptHistory(t *testing.T) {
 	if _, err := ClientFetch(rr)(repoID("cli", "cli"), 4821); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	if want := "repos/cli/cli/actions/runs/4821/jobs"; rr.path != want {
+	if want := "repos/cli/cli/actions/runs/4821/jobs?per_page=100"; rr.path != want {
 		t.Fatalf("jobs path = %q, want %q (R6)", rr.path, want)
 	}
 	if strings.Contains(rr.path, "filter=all") {
@@ -45,6 +45,21 @@ func TestClientFetchPathHasNoAttemptHistory(t *testing.T) {
 	}
 	if strings.Contains(rr.path, "attempts/") {
 		t.Fatalf("the jobs path requested a prior Attempt's Jobs (AC3): %q", rr.path)
+	}
+}
+
+// TestClientFetchRequestsAFullFirstPage pins resolved open question 3: the fast tier is "one
+// request per Run for any Run up to 100 Jobs", measured on a 38-job Run whose first page
+// served 30 and a Link rel=next. That property holds only at per_page=100, the API's ceiling.
+// Without it the GET defaults to 30 per page and a 31-to-100-job Run silently shows its first
+// 30 (R1). The pane follows no Link header, so the page must be large enough in one request.
+func TestClientFetchRequestsAFullFirstPage(t *testing.T) {
+	rr := &recordingRequester{status: http.StatusOK, body: `{"total_count":0,"jobs":[]}`}
+	if _, err := ClientFetch(rr)(repoID("cli", "cli"), 4821); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if !strings.Contains(rr.path, "per_page=100") {
+		t.Fatalf("the jobs path did not request per_page=100, so a 31-to-100-job Run loses Jobs (R1): %q", rr.path)
 	}
 }
 
