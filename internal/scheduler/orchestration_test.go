@@ -89,6 +89,40 @@ func TestExhaustionStopsAndResumes(t *testing.T) {
 	}
 }
 
+// TestExhaustionWithZeroResetWaitsTheSlowInterval is R16's degenerate case and the
+// untilResume slow-target branch. A Readout that is exhausted but carries no resume
+// instant (a zero or already-past reset) must not busy-spin: the loop stays paused,
+// issues no poll, and re-checks on the slow-tier interval rather than immediately. The
+// governor may supply a resume time on a later response, so the loop re-reads the
+// Readout each slow tick rather than sleeping forever.
+func TestExhaustionWithZeroResetWaitsTheSlowInterval(t *testing.T) {
+	a := gh("acme", "a")
+	budget := &fakeBudget{}
+	budget.set(governor.Readout{Exhausted: true}) // zero Reset: no resume instant known
+	h := newHarness(t, harnessConfig{base: stubRT{}, pollSet: []domain.RepoID{a}, budget: budget})
+	h.start(t)
+
+	// Exhausted with no reset: the loop pauses and waits the slow interval, not zero.
+	h.waitSettle(t, slowTarget)
+	if _, paused := h.s.Paused(); !paused {
+		t.Fatalf("Paused() = false, want true (exhausted with a zero reset must still pause)")
+	}
+	if got := h.counting.count(); got != 0 {
+		t.Errorf("wire requests while exhausted = %d, want 0", got)
+	}
+
+	// It stays paused across the slow-interval re-check: still no poll, still paused.
+	h.blockUntil(1)
+	h.clk.Advance(slowTarget)
+	h.waitSettle(t, slowTarget)
+	if _, paused := h.s.Paused(); !paused {
+		t.Errorf("Paused() = false after a slow-interval re-check, want it still paused")
+	}
+	if got := h.counting.count(); got != 0 {
+		t.Errorf("wire requests after the re-check = %d, want 0 (still exhausted)", got)
+	}
+}
+
 // TestDemotesUnderForeignPressure is AC10 and AC12. With the Budget Readout reporting
 // pressure the scheduler did not itself cause, the scheduler demotes exactly as it
 // would for its own consumption: the slow tier stretches from 30s to 60s, so requests
