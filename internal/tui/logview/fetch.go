@@ -21,9 +21,10 @@ const maxLogBytes = 25 << 20
 
 // Requester issues a request through the transport chain and returns the response for the
 // caller to read and close. It is ghclient.Client's Request surface (ADR-0012), narrowed to
-// the log fetch and the archive export. Its http.Client follows the 303 the logs endpoint
-// returns to a signed blob URL (R13). A cassette-backed ghclient fills it in production and
-// in tests, so a fetch replays what the API actually said with no live network.
+// the log fetch and the archive export. Its http.Client follows the 302 the logs endpoint
+// returns to a signed blob URL (R13, taped in testdata/job_log.yaml). A cassette-backed
+// ghclient fills it in production and in tests, so a fetch replays what the API actually
+// said with no live network.
 type Requester interface {
 	Request(method, path string, body io.Reader) (*http.Response, error)
 }
@@ -41,7 +42,7 @@ type Fetch func(repo domain.RepoID, jobID int64) ([]byte, error)
 type Exporter func(repo domain.RepoID, runID int64) (path string, err error)
 
 // ClientFetch is the production Fetch, wired in main.go over the shared ghclient (ADR-0015).
-// It issues one GET for a Job's log, follows the 303 to the signed blob, and returns the
+// It issues one GET for a Job's log, follows the 302 to the signed blob, and returns the
 // bytes up to maxLogBytes. It re-requests the endpoint every call and reuses no signed URL:
 // the URL expires in about a minute, so each fetch follows the redirect afresh and nothing
 // persists, caches or logs it (R13). A non-200 (a 404 for deleted or in-progress logs, or a
