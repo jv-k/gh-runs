@@ -30,6 +30,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/tui/feed"
+	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
@@ -92,6 +93,11 @@ type Options struct {
 	// ops engine, so the Storage tab's DELETE travels the one mutation entry a Purge does.
 	StorageFetch storage.Fetch
 	StorageOps   storage.Planner
+	// LogFetch reads one Job's log and LogExport downloads the whole-Run archive, both for the
+	// log view the Feed's detail pane opens over a Job (log-viewer R1, R11). main.go wires them
+	// over the shared client; the log-deletion planner reuses Ops, the one mutation entry.
+	LogFetch  logview.Fetch
+	LogExport logview.Exporter
 }
 
 // Model is the root. It holds the three tabs, the focused index, and the seams it pulls
@@ -122,6 +128,8 @@ func New(opts Options) Model {
 		DetailFetch: opts.DetailFetch,
 		Clock:       opts.Clock,
 		Ops:         opts.Ops,
+		LogFetch:    opts.LogFetch,
+		LogExport:   opts.LogExport,
 	})
 	// The Storage tab shares the account's discovered repositories with the Feed's gate: it
 	// fans one cache-usage request out over them (R0) and reads their permissions and

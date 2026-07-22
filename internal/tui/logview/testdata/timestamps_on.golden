@@ -1,0 +1,18 @@
+[1mcli/cli · CI · Job: build[m
+
+[1;38;2;0;175;255;48;2;48;48;48m▸ 2026-07-15T03:11:52.0835958Z Set up job[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Run actions/checkout@v4[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Set up Go[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Restore cache[m
+[38;2;255;135;95m2026-07-15T03:11:52.0835958Z WARNING node 16 is deprecated, upgrade to node 20[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Download dependencies[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Build[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Run tests[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Run go vet[m
+[38;2;255;135;95m2026-07-15T03:11:52.0835958Z WARNING set-output is deprecated, use $GITHUB_OUTPUT[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Upload coverage[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Save cache[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Post Run actions/checkout@v4[m
+[1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Complete job[m
+
+[38;2;138;138;138mt timestamps · space fold · / search · D delete logs · e export · r refetch · esc close[m

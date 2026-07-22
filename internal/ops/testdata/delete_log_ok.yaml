@@ -1,0 +1,20 @@
+---
+version: 2
+# One clean log DELETE, 204 No Content, against the Run's own logs endpoint
+# (log-viewer R17). Log deletion travels the same single mutation entry a Run, a Cache
+# and an Artifact deletion do, ops.Execute over the store-governor-limiter chain, and is
+# logged one line per attempt with kind log carrying the Run's id (purge R29). The URL is
+# runs/{id}/logs, deleting the whole Run's logs, which is what the API offers: viewing is
+# per Job (log-viewer R1), deletion is per Run.
+interactions:
+    - id: 0
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/4675883901/logs
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]

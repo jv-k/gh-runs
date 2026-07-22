@@ -40,6 +40,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/tui/confirm"
+	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 )
 
@@ -83,6 +84,12 @@ type Options struct {
 	// (purge R4 to R9). main.go wires it to the shared ops engine; a golden test leaves
 	// it nil, and the delete key is then inert.
 	Ops Planner
+	// LogFetch and LogExport are the log view's seams, threaded through the detail pane this
+	// tab opens (log-viewer R1, R11). LogFetch reads one Job's log and LogExport downloads the
+	// whole-Run archive; the log-deletion planner reuses Ops, the same engine the Feed's own
+	// delete uses (R17). All are nil in a golden test, where the log pane never opens.
+	LogFetch  logview.Fetch
+	LogExport logview.Exporter
 }
 
 // Model is the Feed tab's state. The live map is the truth per repository; the
@@ -195,9 +202,16 @@ func New(opts Options) Model {
 		repos:       make(map[string]domain.Repo),
 		totals:      make(map[string]capTotal),
 		filterInput: ti,
-		detail:      rundetail.New(rundetail.Options{Fetch: opts.DetailFetch, Clock: opts.Clock}),
-		confirm:     confirm.New(opts.Profile),
-		planner:     opts.Ops,
+		detail: rundetail.New(rundetail.Options{
+			Fetch:      opts.DetailFetch,
+			Clock:      opts.Clock,
+			Profile:    opts.Profile,
+			LogFetch:   opts.LogFetch,
+			LogPlanner: opts.Ops, // the log-deletion planner is the same ops engine (log-viewer R17)
+			LogExport:  opts.LogExport,
+		}),
+		confirm: confirm.New(opts.Profile),
+		planner: opts.Ops,
 	}
 }
 
@@ -226,7 +240,7 @@ func (m Model) SetActive(active bool) Model {
 // or a y that must confirm rather than switch context, is not stolen as a global
 // navigation key (ADR-0011, R7).
 func (m Model) CapturesInput() bool {
-	return m.filterActive || m.confirmOpen
+	return m.filterActive || m.confirmOpen || (m.detailOpen && m.detail.CapturesInput())
 }
 
 // Update handles one message the root routed here. Size and data broadcasts reach it
@@ -295,6 +309,16 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	if m.filterActive {
 		return m.handleFilterKey(k)
+	}
+	// Recursive focus: when the detail pane holds key focus (the operator has descended into its
+	// Job list or opened a Job's log), it gets the key and the Feed does not also act, so the log
+	// view's own fold, timestamp, search and delete keys never collide with the list's actions
+	// (ADR-0011's recursive focus). A key the pane does not use is swallowed, not run as a list
+	// action, because focus is the pane's while it captures.
+	if m.detailOpen && m.detail.CapturesKeys() {
+		var cmd tea.Cmd
+		m.detail, cmd = m.detail.HandleKey(k)
+		return m, cmd
 	}
 	switch {
 	case key.Matches(k, m.profile.Delete):
@@ -365,14 +389,31 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 // the Feed does not yet resolve it, so R8's marker stays off until that seam is wired; this
 // is the one call site that will set it.
 func (m Model) openDetail() (Model, tea.Cmd) {
+	if m.detailOpen {
+		// Already open and Feed-focused: a second open-detail press descends into the pane, so
+		// motion moves its Job cursor and a further press opens the selected Job's log
+		// (log-viewer R1, ADR-0011's recursive focus).
+		m.detail = m.detail.Focus()
+		return m, nil
+	}
 	r, ok := m.cursorRun()
 	if !ok {
 		return m, nil
 	}
 	m.detailOpen = true
+	repo, known := m.repoCapability(r)
+	m.detail = m.detail.SetRepoCapability(repo, known) // the log-delete gate reads this (log-viewer R17)
 	var cmd tea.Cmd
 	m.detail, cmd = m.detail.Open(r)
 	return m, cmd
+}
+
+// repoCapability is the discovered capability for a Run's repository, and whether it is known
+// yet. The detail pane hands it to the log view's delete gate, which fails closed on an
+// unknown repository (repo-discovery R8, log-viewer R17).
+func (m Model) repoCapability(r domain.Run) (domain.Repo, bool) {
+	repo, ok := m.repos[r.Repo.String()]
+	return repo, ok
 }
 
 // openConfirm freezes the selection into a Plan for op and opens the confirmation modal
@@ -528,6 +569,8 @@ func (m Model) retargetDetail() (Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	repo, known := m.repoCapability(r)
+	m.detail = m.detail.SetRepoCapability(repo, known) // keep the log-delete gate matched to the Run on screen
 	var cmd tea.Cmd
 	m.detail, cmd = m.detail.SelectRun(r)
 	return m, cmd

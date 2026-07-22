@@ -36,6 +36,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 	"github.com/jv-k/gh-runs/v2/internal/tui"
+	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 )
@@ -258,6 +259,12 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		// engine, so its DELETE travels the one mutation entry a Purge does (R17).
 		StorageFetch: storage.ClientFetch(client),
 		StorageOps:   purge,
+		// The log view fetches a Job's plain text and, on request, downloads the whole-Run
+		// archive to the working directory, both over the same client (log-viewer R1, R11). Its
+		// deletion reuses purge, the one mutation entry, so a log DELETE is paced and logged like
+		// every other (R17).
+		LogFetch:  logview.ClientFetch(client),
+		LogExport: logview.ClientExport(client, exportDir()),
 	})
 
 	// tea.WithContext ties the program to the same context the engine runs under, so a
@@ -357,6 +364,17 @@ func storeDir() string {
 		return filepath.Join(os.TempDir(), "gh-runs")
 	}
 	return filepath.Join(home, ".cache", "gh-runs")
+}
+
+// exportDir is where a whole-Run log archive is written on export: the current working
+// directory, where a user expects a download to land (log-viewer R11). It is not state and
+// not cache: it is a file the user asked for, so it goes where they are, not under XDG. A
+// working directory that cannot be resolved falls back to ".", the same directory by name.
+func exportDir() string {
+	if dir, err := os.Getwd(); err == nil {
+		return dir
+	}
+	return "."
 }
 
 // deletionLogPath returns the append-only deletion log's path under the XDG state

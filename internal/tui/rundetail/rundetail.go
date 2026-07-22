@@ -2,9 +2,10 @@
 // the Run's Attempt as a badge, and their timing (run-detail Purpose). It is a pane, not
 // a tab and not a tea.Model. It exposes View() string and an Update the Feed drives, and
 // it is imported by feed, which opens it over the selection (ADR-0011's pane contract). It
-// imports nothing in tui: not feed (its opener), not logview (the pane stage 12 opens from
-// it). Structured so logview slots in later without a rewrite, the Jobs are held as an
-// ordered slice a Job cursor can index when that stage arrives.
+// imports logview, the pane it opens over a Job (stage 12), and never feed, its opener, nor
+// any tab (ADR-0011, BUILD-ORDER's chain: logview cannot reach back up to rundetail). The
+// Jobs are held as an ordered slice a Job cursor indexes, which is what lets the operator
+// descend into the pane, pick a Job, and open its log (log-viewer R1: "from Run detail").
 //
 // The pane fetches for itself over an injected Fetch function, constructed in main.go and
 // backed by ghclient, so tests drive it with a fake and no real transport (ADR-0015). It
@@ -20,11 +21,14 @@ package rundetail
 import (
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
+	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 )
 
 const (
@@ -50,9 +54,17 @@ type Fetch func(repo domain.RepoID, runID int64) ([]domain.Job, error)
 // (ADR-0015). A nil Fetch resolves every selection to "no Jobs yet" rather than panicking,
 // which is what a Feed constructed for a golden with no transport holds. A nil Clock
 // defaults to the wall clock; a test injects a fake so the timing column is deterministic.
+// The Log seams are threaded down to the logview pane this one opens over a Job (stage 12):
+// Profile is the keybinding set the log view matches, LogFetch reads one Job's log, LogPlanner
+// freezes the log-deletion set, and LogExport downloads the whole-Run archive. All are nil in
+// a golden test, where the log pane never opens.
 type Options struct {
-	Fetch Fetch
-	Clock clock.Clock
+	Fetch      Fetch
+	Clock      clock.Clock
+	Profile    keys.Profile
+	LogFetch   logview.Fetch
+	LogPlanner logview.Planner
+	LogExport  logview.Exporter
 }
 
 // loadState is where the pane is in fetching the selected Run's Jobs. It is deliberately
@@ -75,18 +87,30 @@ type Model struct {
 	width int
 	open  bool
 
-	fetch Fetch
-	clk   clock.Clock
+	fetch   Fetch
+	clk     clock.Clock
+	profile keys.Profile
 
-	run     domain.Run
-	haveRun bool
-	wfState domain.State // the selected Run's Workflow State; deleted marks an Orphaned Run (R8)
+	run       domain.Run
+	haveRun   bool
+	wfState   domain.State // the selected Run's Workflow State; deleted marks an Orphaned Run (R8)
+	repo      domain.Repo  // the Run's repository capability, stamped by the Feed for the log-delete gate
+	repoKnown bool         // discovery has recorded the capability; the delete gate fails closed otherwise
 
 	jobs  []domain.Job
 	state loadState
 
 	fetching bool             // a fetch is issued and its result not yet in; gates the resume below
 	readout  governor.Readout // R16: the pane pauses on the same Budget as the Feed
+
+	// The log view (stage 12): a pane this one opens over a selected Job. jobCursor indexes the
+	// Jobs slice, and active is the job-focus sub-mode the operator descends into to pick a Job
+	// and open its log. The Jobs are already held as an ordered slice, so the cursor slots in
+	// (log-viewer R1: "from Run detail"). rundetail imports logview and opens it; logview never
+	// imports rundetail (ADR-0011's pane contract, BUILD-ORDER's chain).
+	log       logview.Model
+	active    bool // job-focus: motion moves the Job cursor and enter opens the log
+	jobCursor int
 }
 
 // settleMsg fires when the debounce elapses for the Run it names (R10). It is tagged with
@@ -108,13 +132,25 @@ type jobsMsg struct {
 	err   error
 }
 
-// New returns a pane over opts. It is closed and holds no Run until the Feed opens it.
+// New returns a pane over opts. It is closed and holds no Run until the Feed opens it. It
+// constructs the log view it opens over a Job, threading that pane's seams down (stage 12).
 func New(opts Options) Model {
 	clk := opts.Clock
 	if clk == nil {
 		clk = clock.Real()
 	}
-	return Model{fetch: opts.Fetch, clk: clk}
+	return Model{
+		fetch:   opts.Fetch,
+		clk:     clk,
+		profile: opts.Profile,
+		log: logview.New(logview.Options{
+			Profile:  opts.Profile,
+			Fetch:    opts.LogFetch,
+			Exporter: opts.LogExport,
+			Planner:  opts.LogPlanner,
+			Clock:    clk,
+		}),
+	}
 }
 
 // IsOpen reports whether the pane is showing, which the Feed reads to decide whether to
@@ -132,10 +168,119 @@ func (m Model) Open(run domain.Run) (Model, tea.Cmd) {
 
 // Close hides the pane. It leaves the held Run and Jobs in place but stops every loop: the
 // settle, refresh and fetch handlers all gate on open, so a tick in flight becomes a
-// no-op (R14). The Feed stops painting it (IsOpen is false), so nothing stale is shown.
+// no-op (R14). The Feed stops painting it (IsOpen is false), so nothing stale is shown. It
+// also closes the log view and leaves job-focus, so a reopen starts from the Jobs list.
 func (m Model) Close() Model {
 	m.open = false
+	m.active = false
+	m.log = m.log.Close()
 	return m
+}
+
+// Focus descends into the pane's job-focus sub-mode, where motion moves the Job cursor and the
+// open key opens the selected Job's log (log-viewer R1). The Feed calls it when the operator
+// presses the open-detail key a second time over an already-open pane, which is the recursive
+// focus ADR-0011 describes. It is a no-op while the pane is closed.
+func (m Model) Focus() Model {
+	if !m.open {
+		return m
+	}
+	m.active = true
+	return m
+}
+
+// CapturesKeys reports whether the pane holds key focus, which the Feed reads to route keys
+// here rather than acting on them itself (ADR-0011's recursive focus). It is true in job-focus
+// and while the log view is open, so the Feed's motion and actions stand down and the pane, or
+// the log view beneath it, owns the keys.
+func (m Model) CapturesKeys() bool {
+	return m.open && (m.active || m.log.IsOpen())
+}
+
+// CapturesInput reports whether the pane holds text-input focus, which is true while the log
+// view's search input or delete confirmation is up. The Feed and the root read it up the chain
+// so a typed query or a typed confirmation count is not stolen as a global key (R7).
+func (m Model) CapturesInput() bool {
+	return m.open && m.log.IsOpen() && m.log.CapturesInput()
+}
+
+// SetRepoCapability stamps the Run's repository capability, which the log view's delete gate
+// reads (log-viewer R17). known is false when discovery has not recorded it, which keeps log
+// deletion disabled (repo-discovery R8). The Feed sets it when it opens the pane and as the
+// cursor moves, so the capability always matches the Run on screen.
+func (m Model) SetRepoCapability(repo domain.Repo, known bool) Model {
+	m.repo = repo
+	m.repoKnown = known
+	return m
+}
+
+// HandleKey drives the pane while it holds key focus (CapturesKeys), returning the pane and
+// any Cmd. The Feed swallows the key whether or not the pane acts on it, because focus is the
+// pane's while it captures (ADR-0011's recursive focus). When the log view is open, every key
+// reaches it, including its own fold, timestamp, search, delete, export and close keys. In
+// job-focus, motion moves the Job cursor, the open key opens the selected Job's log
+// (log-viewer R1), and the close key leaves job-focus back to the Feed-driven detail.
+func (m Model) HandleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.log.IsOpen() {
+		var cmd tea.Cmd
+		m.log, cmd, _ = m.log.HandleKey(k)
+		return m, cmd
+	}
+	if !m.active {
+		return m, nil
+	}
+	switch {
+	case key.Matches(k, m.profile.CloseDetail): // esc leaves job-focus, back to the Feed-driven detail
+		m.active = false
+	case key.Matches(k, m.profile.OpenDetail): // enter opens the selected Job's log (log-viewer R1)
+		return m.openLog()
+	case key.Matches(k, m.profile.RowUp):
+		m.moveJobCursor(-1)
+	case key.Matches(k, m.profile.RowDown):
+		m.moveJobCursor(1)
+	case key.Matches(k, m.profile.PageUp):
+		m.moveJobCursor(-1)
+	case key.Matches(k, m.profile.PageDown):
+		m.moveJobCursor(1)
+	case key.Matches(k, m.profile.FirstRow):
+		m.jobCursor = 0
+	case key.Matches(k, m.profile.LastRow):
+		m.jobCursor = len(m.jobs) - 1
+		m.clampJobCursor()
+	}
+	return m, nil
+}
+
+// openLog opens the log view over the Job under the cursor (log-viewer R1: "from Run detail").
+// It arms the log fetch and passes the Run's repository capability so the log-delete gate
+// resolves. With no Job under the cursor it is a no-op.
+func (m Model) openLog() (Model, tea.Cmd) {
+	if m.jobCursor < 0 || m.jobCursor >= len(m.jobs) {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.log, cmd = m.log.Open(m.run, m.jobs[m.jobCursor], m.repo, m.repoKnown)
+	return m, cmd
+}
+
+// moveJobCursor moves the Job cursor by delta, clamped to the Jobs slice.
+func (m *Model) moveJobCursor(delta int) {
+	m.jobCursor += delta
+	m.clampJobCursor()
+}
+
+// clampJobCursor keeps the Job cursor within the Jobs slice, or at zero when it is empty.
+func (m *Model) clampJobCursor() {
+	if len(m.jobs) == 0 {
+		m.jobCursor = 0
+		return
+	}
+	if m.jobCursor < 0 {
+		m.jobCursor = 0
+	}
+	if m.jobCursor >= len(m.jobs) {
+		m.jobCursor = len(m.jobs) - 1
+	}
 }
 
 // SelectRun re-points the pane at the Feed's current selection while it is open, and is
@@ -169,13 +314,17 @@ func (m Model) IsOrphaned() bool { return m.wfState == domain.StateDeleted }
 
 // Update handles one message the Feed forwarded. It consumes its own tagged messages, the
 // size it lays out against, and the broadcast Budget Readout it pauses on (R16, ADR-0015).
-// A key press is the Feed's: the pane holds no binding at this stage (motion moves the
-// Feed's cursor, and its close key is the Feed's), so keys never reach here.
+// A key press does not arrive here: the Feed routes keys to HandleKey when this pane holds
+// focus (recursive focus), so the two paths never collide. Any message the pane does not own,
+// including the log view's own tagged fetch and export results, is forwarded to the log pane,
+// whose messages are unexported and so only it can name (ADR-0015's type-visibility targeting).
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		return m, nil
+		var cmd tea.Cmd
+		m.log, cmd = m.log.Update(msg) // keep the log pane laid out even while closed
+		return m, cmd
 	case governor.Readout:
 		return m.onReadout(msg)
 	case settleMsg:
@@ -185,7 +334,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case jobsMsg:
 		return m.onJobs(msg)
 	}
-	return m, nil
+	// A message the pane does not consume is forwarded to the log view: its logFetchedMsg and
+	// exportDoneMsg reach here as broadcasts, and only that package can name them (ADR-0015).
+	var cmd tea.Cmd
+	m.log, cmd = m.log.Update(msg)
+	return m, cmd
 }
 
 // target points the pane at run. A change of Run ID is a fresh selection: it clears the
@@ -203,6 +356,12 @@ func (m Model) target(run domain.Run) (Model, tea.Cmd) {
 	m.wfState = "" // the deleted marker is per-Run; a new selection starts unknown (R8)
 	m.jobs = nil
 	m.state = statePending // R12: pending, never the previous Run's Jobs
+	// A new Run resets the Job cursor and leaves any log view: the previous Run's Job and its
+	// log are stale under the new identity (log-viewer R1). A cursor move that opened a log
+	// would have captured keys and frozen the Feed cursor, so this path is defensive.
+	m.jobCursor = 0
+	m.active = false
+	m.log = m.log.Close()
 	if !m.open {
 		return m, nil
 	}
@@ -253,6 +412,7 @@ func (m Model) onJobs(msg jobsMsg) (Model, tea.Cmd) {
 		m.jobs = msg.jobs
 		m.state = stateLoaded
 	}
+	m.clampJobCursor() // a refetch can change how many Jobs there are (log-viewer R1)
 	if live(m.run) && !m.readout.Exhausted {
 		return m, refreshTick(m.run.ID)
 	}
