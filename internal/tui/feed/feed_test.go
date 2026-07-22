@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/jonboulle/clockwork"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
@@ -470,6 +471,88 @@ func TestViewSanitisesRunDerivedText(t *testing.T) {
 	// The visible text keeps its characters, contiguous, once the controls are dropped.
 	if !strings.Contains(view, "CIpwnedowned") {
 		t.Fatalf("the sanitiser dropped or split visible workflow text:\n%q", view)
+	}
+}
+
+// feedWithDetail builds a Feed whose detail pane has a no-op fetch and a fixed clock, so a
+// wiring test can open the pane without a live transport (ADR-0015). The pane stays in its
+// pending state, because the debounce Cmd the open returns is not run: these tests exercise
+// the Feed-to-pane wiring, and the pane's own fetch state machine is tested in rundetail.
+func feedWithDetail(width, height int) Model {
+	m := New(Options{
+		Profile:     keys.Standard,
+		DetailFetch: func(domain.RepoID, int64) ([]domain.Job, error) { return nil, nil },
+		Clock:       clockwork.NewFakeClockAt(t0),
+	})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	return m
+}
+
+// TestDetailPaneOpensAndCloses pins the Feed-to-pane wiring: the OpenDetail key opens the
+// pane over the Run under the cursor and the CloseDetail key closes it (ADR-0011, stage 8).
+func TestDetailPaneOpensAndCloses(t *testing.T) {
+	m := feedWithDetail(120, 40)
+	m = feedRuns(m, repoID("acme", "api"), mkRun(1, "acme", "api", "Build", domain.StatusInProgress, "", t0))
+	if m.detailOpen {
+		t.Fatal("the detail pane was open before any key")
+	}
+
+	m = m.Update2(press("enter")) // OpenDetail
+	if !m.detailOpen || !m.detail.IsOpen() {
+		t.Fatalf("enter did not open the detail pane (stage 8)")
+	}
+	if !strings.Contains(m.View(), "Loading") {
+		t.Fatalf("the freshly opened pane did not paint its pending state below the list (R12):\n%s", m.View())
+	}
+
+	m = m.Update2(press("esc")) // CloseDetail
+	if m.detailOpen || m.detail.IsOpen() {
+		t.Fatalf("esc did not close the detail pane")
+	}
+	if strings.Contains(m.View(), "Loading") {
+		t.Fatalf("the closed pane was still painted below the list")
+	}
+}
+
+// TestDetailPaneFollowsCursor pins the "feed reports where its cursor is" half of the split
+// (ADR-0011): with the pane open, moving the cursor onto another Run re-points the pane at
+// it, which is the motion R10 debounces and AC1 counts one fetch for. The Run numbers are
+// distinct and appear only in the pane's identity, so the assertion reads the pane, not the
+// list.
+func TestDetailPaneFollowsCursor(t *testing.T) {
+	m := feedWithDetail(120, 40)
+	id := repoID("acme", "api")
+	alpha := mkRun(1, "acme", "api", "Alpha", domain.StatusInProgress, "", t0)
+	alpha.RunNumber = 11
+	bravo := mkRun(2, "acme", "api", "Bravo", domain.StatusInProgress, "", t0.Add(-time.Hour))
+	bravo.RunNumber = 22
+	m = feedRuns(m, id, alpha, bravo)
+
+	m = m.Update2(press("enter")) // open over the top row, Alpha
+	if !strings.Contains(m.View(), "Run #11") {
+		t.Fatalf("the pane did not open over the cursor's Run (Alpha):\n%s", m.View())
+	}
+	m = m.Update2(press("down")) // cursor moves to Bravo; the pane follows
+	if !strings.Contains(m.View(), "Run #22") {
+		t.Fatalf("the pane did not follow the cursor to Bravo (R10, AC1):\n%s", m.View())
+	}
+	if strings.Contains(m.View(), "Run #11") {
+		t.Fatalf("the pane still shows the previous Run after the cursor moved (R11, R12)")
+	}
+}
+
+// TestDetailPaneReceivesBudgetBroadcast pins that a broadcast reaches the open pane through
+// the Feed's forwarding (ADR-0015): the Budget Readout pauses the pane on the same Budget as
+// the Feed (R16). The pane's own View is read, so the Feed's own banner cannot mask it.
+func TestDetailPaneReceivesBudgetBroadcast(t *testing.T) {
+	m := feedWithDetail(120, 40)
+	m = feedRuns(m, repoID("acme", "api"), mkRun(1, "acme", "api", "Build", domain.StatusInProgress, "", t0))
+	m = m.Update2(press("enter"))
+
+	reset := time.Date(2026, 7, 15, 17, 9, 0, 0, time.UTC)
+	m, _ = m.Update(governor.Readout{Exhausted: true, Reset: reset})
+	if !strings.Contains(m.detail.View(), "paused") {
+		t.Fatalf("the Budget broadcast did not reach the open pane (R16, ADR-0015):\n%s", m.detail.View())
 	}
 }
 

@@ -35,6 +35,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 	"github.com/jv-k/gh-runs/v2/internal/tui"
+	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 )
 
 // responseHeaderTimeout bounds how long any single request waits for its response
@@ -205,6 +206,12 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		Revalidated: func() time.Time { return newestRevalidated(transport, disc.PollSet()) },
 		SetViewport: sched.SetViewport,
 		Profile:     profile,
+		// The detail pane fetches its Run's Jobs over the same client the whole tool shares,
+		// so the store revalidates and the governor accounts each request (ADR-0015). The
+		// clock is the tool's, so the pane's timing column reads the same wall clock as
+		// everything else.
+		DetailFetch: rundetail.ClientFetch(client),
+		Clock:       clk,
 	})
 
 	// tea.WithContext ties the program to the same context the engine runs under, so a

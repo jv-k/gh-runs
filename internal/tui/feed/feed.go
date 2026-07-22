@@ -12,8 +12,15 @@
 // wholesale as each RunsFetched arrives, interleaved and sorted by EffectiveStart
 // (ADR-0015). It renders to a frame from held state alone, with no live terminal and
 // no network, which is what makes R36's goldens cheap. feed imports domain, filter,
-// keys and governor, and lipgloss and bubbles for rendering; it never imports another
-// tab or the root (ADR-0011).
+// keys and governor, and lipgloss and bubbles for rendering; it also imports the rundetail
+// pane it opens over its selection, which is the one import direction the tab contract
+// permits (a tab may import a pane). It never imports another tab or the root (ADR-0011).
+//
+// The Feed opens rundetail on the OpenDetail key over the Run under its cursor, closes it on
+// CloseDetail, and while it is open reports the cursor's Run to it on every move so the pane
+// debounces one fetch per settle (run-detail R10, AC1). The pane owns that debounce, the
+// fast-tier refresh and the discard rule; the Feed reports where its cursor is and forwards
+// the broadcasts the pane pauses and lays out on (ADR-0011, ADR-0015).
 package feed
 
 import (
@@ -25,11 +32,13 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
+	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 )
 
 // ReposDiscovered carries the account's discovered repositories, so the Feed's
@@ -51,9 +60,14 @@ type RevalidatedAt time.Time
 // Options carries the Feed's construction seams. The root fills them: the profile is
 // the resolved keybinding set (R7a), and SetViewport publishes the visible
 // repositories to the scheduler's medium tier (R5, ADR-0021), nil in a golden test.
+// DetailFetch and Clock are the detail pane's seams, threaded through the root from main.go
+// (ADR-0015): DetailFetch backs the pane's Job fetch and Clock its timing column, both nil
+// in a golden test that never opens the pane.
 type Options struct {
 	Profile     keys.Profile
 	SetViewport func([]domain.RepoID)
+	DetailFetch rundetail.Fetch
+	Clock       clock.Clock
 }
 
 // Model is the Feed tab's state. The live map is the truth per repository; the
@@ -109,6 +123,13 @@ type Model struct {
 	readout governor.Readout // R29, R30: shown only under pressure or on exhaustion
 	asOf    time.Time        // local-store R7: what a paused Feed is showing, and as of when
 
+	// detail is the Run detail pane, opened over the selection (ADR-0011, BUILD-ORDER stage
+	// 8). detailOpen gates whether keys open or close it, whether the cursor's Run is
+	// reported to it, and whether it is painted below the list. The pane owns its own
+	// fetch state; the Feed owns only whether it is open and which Run it follows.
+	detail     rundetail.Model
+	detailOpen bool
+
 	showHelp bool
 
 	// totals carries each filtered repository's reachable and claimed counts for R24's
@@ -151,6 +172,7 @@ func New(opts Options) Model {
 		repos:       make(map[string]domain.Repo),
 		totals:      make(map[string]capTotal),
 		filterInput: ti,
+		detail:      rundetail.New(rundetail.Options{Fetch: opts.DetailFetch, Clock: opts.Clock}),
 	}
 }
 
@@ -188,13 +210,22 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.filterInput.SetWidth(max(msg.Width-2, 0))
-		return m, nil
+		// Keep the pane laid out even while it is closed, so its first painted frame is
+		// already sized when it opens (ADR-0011: width is a correctness property).
+		var cmd tea.Cmd
+		m.detail, cmd = m.detail.Update(msg)
+		return m, cmd
 
 	case scheduler.Update:
 		// One repository's fresh Runs, replacing its slice wholesale (ADR-0015).
 		m.live[msg.Repo.String()] = msg.Runs
 		m.recompute()
-		return m, m.publishViewport()
+		// Report the cursor's freshest Run to the open pane, so its Attempt badge tracks a
+		// re-run (R17) and its liveness gate reads the current Status (R13). A same-Run
+		// report refreshes fields in place and issues no fetch.
+		var dcmd tea.Cmd
+		m, dcmd = m.retargetDetail()
+		return m, tea.Batch(m.publishViewport(), dcmd)
 
 	case ReposDiscovered:
 		for _, r := range msg {
@@ -208,12 +239,23 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case governor.Readout:
 		m.readout = msg
-		return m, nil
+		// The pane pauses on the same Budget as the Feed (run-detail R16), so it must see the
+		// exhaustion broadcast whether or not it is open.
+		var cmd tea.Cmd
+		m.detail, cmd = m.detail.Update(msg)
+		return m, cmd
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
-	return m, nil
+
+	// A message the Feed does not consume is forwarded to the pane. The pane's own tagged
+	// messages (its debounce settle, its fast-tier tick, a tagged Jobs response) reach the
+	// Feed as broadcasts, and only the pane can name them (ADR-0015's type-visibility
+	// targeting); a closed pane discards them by its own open gate.
+	var cmd tea.Cmd
+	m.detail, cmd = m.detail.Update(msg)
+	return m, cmd
 }
 
 // handleKey matches a press against the active profile's registry bindings, never a
@@ -253,10 +295,69 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.applyView(m.liveView())
 		m.filterActive = true
 		return m, m.filterInput.Focus()
+	case key.Matches(k, m.profile.OpenDetail):
+		// Open the detail pane over the Run under the cursor (run-detail, BUILD-ORDER
+		// stage 8). The pane then owns the fetch; the Feed only holds it open.
+		return m.openDetail()
+	case key.Matches(k, m.profile.CloseDetail):
+		// Close the pane. A no-op when nothing is open; esc has no other binding in the
+		// list, and while the filter input is focused it is FilterCancel's, matched above.
+		m.detailOpen = false
+		m.detail = m.detail.Close()
+		return m, nil
 	case key.Matches(k, m.profile.Help):
 		m.showHelp = !m.showHelp
 	}
-	return m, m.publishViewport()
+	// A motion or selection key may have moved the cursor onto another Run; report it to the
+	// open pane so the pane debounces one fetch per settle (R10, AC1). A same-Run report is a
+	// no-op, so a non-motion key issues nothing.
+	cmd := m.publishViewport()
+	var dcmd tea.Cmd
+	m, dcmd = m.retargetDetail()
+	return m, tea.Batch(cmd, dcmd)
+}
+
+// openDetail opens the detail pane over the Run under the cursor, the OpenDetail key's
+// handler (BUILD-ORDER stage 8). With no row under the cursor it is a no-op. The pane owns
+// the debounce, the fetch and the discard rule; the Feed reports the cursor and forwards
+// broadcasts (ADR-0011, ADR-0015). The Workflow's deleted State is not stamped on a Run and
+// the Feed does not yet resolve it, so R8's marker stays off until that seam is wired; this
+// is the one call site that will set it.
+func (m Model) openDetail() (Model, tea.Cmd) {
+	r, ok := m.cursorRun()
+	if !ok {
+		return m, nil
+	}
+	m.detailOpen = true
+	var cmd tea.Cmd
+	m.detail, cmd = m.detail.Open(r)
+	return m, cmd
+}
+
+// cursorRun is the Run under the cursor, or false when the list is empty.
+func (m Model) cursorRun() (domain.Run, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.displayedIDs) {
+		return domain.Run{}, false
+	}
+	r, ok := m.current[m.displayedIDs[m.cursor]]
+	return r, ok
+}
+
+// retargetDetail reports the cursor's Run to the open pane, the "feed reports where its
+// cursor is" half of the split (ADR-0011). It is a no-op while the pane is closed or the
+// list is empty; the pane's SelectRun no-ops a same-Run report, so following the cursor onto
+// the row it already rests on issues no fetch (R10, AC1).
+func (m Model) retargetDetail() (Model, tea.Cmd) {
+	if !m.detailOpen {
+		return m, nil
+	}
+	r, ok := m.cursorRun()
+	if !ok {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.detail, cmd = m.detail.SelectRun(r)
+	return m, cmd
 }
 
 // handleFilterKey drives the filter input. FilterAccept (enter) accepts the filter and
