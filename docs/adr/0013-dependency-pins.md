@@ -21,6 +21,7 @@ It exists because `go.mod` records **what** and cannot record **why**. Half the 
 | `gopkg.in/dnaeon/go-vcr.v4` | `v4.0.7` | **Major version is load-bearing** |
 | `github.com/jonboulle/clockwork` | `v0.5.0` | Ordinary, replaces an archived library |
 | `github.com/sebdah/goldie/v2` | `v2.8.0` | Ordinary |
+| `golang.org/x/sys` | `v0.31.0` | Ordinary, promoted to direct for the lock. See below |
 
 ## The Go floor is computed from the dependencies, not picked
 
@@ -70,6 +71,16 @@ The suffixed GitHub path is safe precisely because it breaks. The unsuffixed one
 | `CLICOLOR=0` | `TrueColor` | gh would suppress. `cliColor` only ever raises |
 
 Three specifications disagree here and the library follows none of them. no-color.org says present and **not** an empty string. gh 2.92.0 says **any** value. `strconv.ParseBool` accepts eleven spellings and rejects `yes`. The canon followed gh deliberately ([settings](../features/settings/requirements.md) R15), so the canon resolves it, in one function, and the library is left to do the part it is good at: **`colorprofile.Writer` is still the only thing that degrades a styled string, and the profile handed to it is ours to choose.** Its own documentation states the split we are relying on, that `NO_COLOR` "will disable colors but not text decoration".
+
+## The advisory lock adds no module, and promotes one line
+
+[local-store](../features/local-store/requirements.md) R21's advisory file lock needs `flock(2)` semantics on unix and `LockFileEx` on Windows, and R22 leaves the spelling to this ADR to record when stage 1 lands. It is recorded here, and the headline is that the lock adds no new module.
+
+On unix the lock reaches `flock(2)` through the standard library alone, `syscall.Flock(fd, LOCK_EX|LOCK_NB)`, so that limb pins nothing. A separate open of the same file is denied even within one process, which is what lets one holder exclude another and makes [local-store](../features/local-store/requirements.md) AC18 provable in a single test process.
+
+On Windows there is no `flock`, and `LockFileEx` is not in the standard `syscall` package. It lives in `golang.org/x/sys/windows`, which is already in the module graph as an indirect dependency at `v0.31.0`. The Windows limb imports it directly, so the line moves from indirect to direct, exactly as colorprofile's did above and for the same reason: a `go.mod` line changed and the version did not. No new module arrives, `go.sum` is unchanged, and the pin set is the set it already was. 2.0.0 ships Windows ([PRD](../PRD.md), Scope), so this limb is required rather than optional.
+
+A wrapper library was the alternative, `gofrs/flock` being the usual one. It would add a module and its transitive graph to spare two short platform files, and it buys nothing the standard library and `golang.org/x/sys` do not already give, both of which are pinned here regardless.
 
 ## go-gh, cobra and the clock
 
