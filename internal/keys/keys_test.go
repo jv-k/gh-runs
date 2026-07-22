@@ -55,6 +55,49 @@ func TestMotionProfilesDiffer(t *testing.T) {
 	assertKeys(t, "Standard.LastRow", keys.Standard.LastRow, "end")
 }
 
+// motionFields names R7a's motion axis, the only fields on which Vim and
+// Standard may disagree. It is transcribed from R7a's motion table, not read
+// back off the profiles, so TestProfilesDifferOnlyOnMotion checks the registry
+// against the requirement rather than against itself.
+var motionFields = map[string]bool{
+	"RowUp":    true,
+	"RowDown":  true,
+	"PageUp":   true,
+	"PageDown": true,
+	"FirstRow": true,
+	"LastRow":  true,
+}
+
+// TestProfilesDifferOnlyOnMotion computes, by reflecting over the two profiles,
+// the exact set of key.Binding fields on which Vim and Standard disagree, and
+// asserts it is the motion set and nothing more (R7a: "differ on motion, and
+// nowhere else"). assertShared pins the shared bindings by hand, so a future
+// shared binding a contributor forks by bypassing shared() and never adds to
+// that helper would keep the suite green. This closes the gap structurally: any
+// non-motion field that diverges, or a motion field that stops diverging, fails
+// here, with no hand-maintained enumeration to remember to extend.
+func TestProfilesDifferOnlyOnMotion(t *testing.T) {
+	bindingType := reflect.TypeOf(key.Binding{})
+	vim := reflect.ValueOf(keys.Vim)
+	std := reflect.ValueOf(keys.Standard)
+	rt := vim.Type()
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		if f.Type != bindingType {
+			continue
+		}
+		vb := vim.Field(i).Interface().(key.Binding)
+		sb := std.Field(i).Interface().(key.Binding)
+		differs := !reflect.DeepEqual(vb, sb)
+		switch {
+		case differs && !motionFields[f.Name]:
+			t.Errorf("field %s differs between Vim and Standard (Vim %v, Standard %v) but is not a motion binding; R7a permits divergence only on motion", f.Name, vb.Keys(), sb.Keys())
+		case !differs && motionFields[f.Name]:
+			t.Errorf("field %s is a motion binding but is identical in both profiles; R7a requires the motion axis to differ", f.Name)
+		}
+	}
+}
+
 // assertShared pins every binding that R7a declares identical in both profiles
 // ("differ on motion, and nowhere else"). Running it against Vim and against
 // Standard asserts both the keys and the sameness: if either profile forked one
