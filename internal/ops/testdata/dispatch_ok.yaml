@@ -1,0 +1,21 @@
+---
+version: 2
+# One workflow_dispatch trigger, taped from the measured return_run_details:true path
+# (workflow-dispatch R16, research note #27). The POST carries the ref and the operator's
+# inputs, and the 200 response carries {workflow_run_id, run_url, html_url}, all three
+# populated, so a Dispatch resolves to a known Run with no correlation poll. The matcher
+# ignores the request body, so the tape asserts the endpoint and the tool asserts the body it
+# sent. No live dispatch is issued: this is replayed in ModeReplayOnly.
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/workflows/9001/dispatches
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"workflow_run_id":29803635501,"run_url":"https://api.github.com/repos/o/r/actions/runs/29803635501","html_url":"https://github.com/o/r/actions/runs/29803635501"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]
