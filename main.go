@@ -36,6 +36,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 	"github.com/jv-k/gh-runs/v2/internal/tui"
+	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
 	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
@@ -266,6 +267,14 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		// and travels the one write path every other write does (R5).
 		WorkflowFetch: workflows.ClientFetch(client),
 		WorkflowOps:   purge,
+		// The dispatch form the Workflows tab opens reads the Workflow YAML at a ref and the
+		// repository's environments over the same client (workflow-dispatch R5, R7), triggers the
+		// workflow_dispatch through the same ops engine so it is paced and travels ops's write path
+		// (R16), and remembers last-used inputs in the same local-store the discovery results live
+		// in (R25). One client, one ops, one store, exactly as every other surface.
+		DispatchFetch: dispatch.NewClientFetch(client),
+		DispatchOps:   purge,
+		DispatchStore: transport,
 		// The log view fetches a Job's plain text and, on request, downloads the whole-Run
 		// archive to the working directory, both over the same client (log-viewer R1, R11). Its
 		// deletion reuses purge, the one mutation entry, so a log DELETE is paced and logged like

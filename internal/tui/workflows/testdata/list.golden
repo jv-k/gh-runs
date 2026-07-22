@@ -8,4 +8,4 @@
   cli/cli             Release           .github/workflows/release…  [38;2;255;175;0mdisabled_manually   [m  [38;2;95;175;215mEnable[m
   old/legacy          Deploy            .github/workflows/deploy.…  [38;2;135;215;135mactive              [m  [38;2;255;95;95marchived[m
 
-[38;2;138;138;138m  s enable/disable   r refresh[m
+[38;2;138;138;138m  s enable/disable   x dispatch   r refresh[m

@@ -4,4 +4,4 @@
 [1m  REPOSITORY          NAME              PATH                        STATE                 ACTION[m
 [38;2;95;175;255m> [mcli/cli             CI                .github/workflows/ci.yml    [38;2;135;215;135mactive              [m  [38;2;95;175;215mDisable[m
 
-[38;2;138;138;138m  s enable/disable   r refresh[m
+[38;2;138;138;138m  s enable/disable   x dispatch   r refresh[m
