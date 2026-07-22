@@ -1,0 +1,118 @@
+---
+version: 2
+interactions:
+    # Interaction 0: enumeration, one page, two repositories, no next.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '[{"name":"zeta","full_name":"jv-k/zeta","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"eta","full_name":"jv-k/eta","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false}]'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"enum-1"'
+            X-Ratelimit-Remaining:
+                - "4000"
+            X-Ratelimit-Used:
+                - "1000"
+    # Interaction 1: zeta's first probe, unconditional (no If-None-Match). It has a
+    # Run, so it enters the poll set, and its ETag is persisted for the re-probe.
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/zeta/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":1,"workflow_runs":[{"id":700,"status":"completed","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"zeta-v1"'
+            X-Ratelimit-Remaining:
+                - "3999"
+            X-Ratelimit-Used:
+                - "1001"
+    # Interaction 2: eta's first probe, unconditional. Empty, so no Runs yet.
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/eta/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":0,"workflow_runs":[]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"eta-v1"'
+            X-Ratelimit-Remaining:
+                - "3998"
+            X-Ratelimit-Used:
+                - "1002"
+    # Interaction 3: zeta's re-probe, conditional (If-None-Match zeta-v1). Nothing
+    # changed, so a 304: the store reconstitutes a 200 from it and it costs zero
+    # primary allowance (R12, AC10). x-ratelimit-used stays 1002, unchanged.
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/zeta/actions/runs
+        headers:
+            If-None-Match:
+                - '"zeta-v1"'
+      response:
+        status: 304 Not Modified
+        code: 304
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: ''
+        headers:
+            Etag:
+                - '"zeta-v1"'
+            X-Ratelimit-Remaining:
+                - "3998"
+            X-Ratelimit-Used:
+                - "1002"
+    # Interaction 4: eta's re-probe, conditional (If-None-Match eta-v1). eta has
+    # acquired its first Run, so its own ETag no longer matches and it answers 200
+    # with a new ETag: it reveals itself and enters the poll set (R12, AC10). This
+    # 200 is the one request the whole re-probe spends.
+    - id: 4
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/eta/actions/runs
+        headers:
+            If-None-Match:
+                - '"eta-v1"'
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":1,"workflow_runs":[{"id":800,"status":"queued","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"eta-v2"'
+            X-Ratelimit-Remaining:
+                - "3997"
+            X-Ratelimit-Used:
+                - "1003"

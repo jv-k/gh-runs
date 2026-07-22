@@ -1,0 +1,52 @@
+---
+version: 2
+interactions:
+    # Interaction 0: enumeration, one page, two repositories.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"withetag","full_name":"jv-k/withetag","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"noetag","full_name":"jv-k/noetag","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false}]'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"enum-1"'
+            X-Ratelimit-Remaining:
+                - "4000"
+    # Interaction 1: withetag's probe returns an ETag, so it lands in the fast
+    # revalidation tier (R12, ADR-0020).
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/withetag/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":1,"workflow_runs":[{"id":900,"status":"completed"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"withetag-v1"'
+            X-Ratelimit-Remaining:
+                - "3999"
+    # Interaction 2: noetag's probe returns NO ETag header, the empty-list case open
+    # question 4 left unmeasured. A repository with no persisted ETag lands in the
+    # hourly tier, which is exactly what the two-tier split self-adapts to.
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/noetag/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":1,"workflow_runs":[{"id":901,"status":"completed"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "3998"

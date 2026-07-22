@@ -1,0 +1,89 @@
+---
+version: 2
+interactions:
+    # Interaction 0: the fast path's Run listing for the repository the tool was
+    # launched inside. One request paints its Runs before enumeration or any other
+    # probe (R14, AC11). It has Runs, so it enters the poll set.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/local/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"workflow_runs":[{"id":1,"status":"completed","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"local-runs-v1"'
+            X-Ratelimit-Remaining:
+                - "4000"
+    # Interaction 1: enumeration, one page. It does NOT contain local: this is the
+    # clone the account does not own, which never appears in /user/repos, so R22's
+    # adoption applies.
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"owned-a","full_name":"acme/owned-a","owner":{"login":"acme"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"owned-b","full_name":"acme/owned-b","owner":{"login":"acme"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false}]'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"enum-1"'
+            X-Ratelimit-Remaining:
+                - "3999"
+    # Interaction 2: owned-a's probe. Has Runs.
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/owned-a/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":1,"workflow_runs":[{"id":10,"status":"completed"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"owned-a-v1"'
+            X-Ratelimit-Remaining:
+                - "3998"
+    # Interaction 3: owned-b's probe. No Runs.
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/owned-b/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":0,"workflow_runs":[]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"owned-b-v1"'
+            X-Ratelimit-Remaining:
+                - "3997"
+    # Interaction 4: R22's one adoption request. GET /repos/{owner}/{repo} learns
+    # local's capability (permissions, archived, disabled) so it can be gated and
+    # admitted for the session.
+    - id: 4
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/local
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"name":"local","full_name":"jv-k/local","owner":{"login":"jv-k"},"permissions":{"admin":false,"maintain":false,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"local-repo-v1"'
+            X-Ratelimit-Remaining:
+                - "3996"
