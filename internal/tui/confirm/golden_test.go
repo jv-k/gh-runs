@@ -29,11 +29,16 @@ func gRun(id int64, owner, name, workflow string, st domain.Status, cc domain.Co
 
 func planFrom(t *testing.T, threshold int, items []ops.Item, repos ...domain.Repo) ops.Plan {
 	t.Helper()
+	return planForOp(t, ops.OpDelete, threshold, items, repos...)
+}
+
+func planForOp(t *testing.T, op ops.Operation, threshold int, items []ops.Item, repos ...domain.Repo) ops.Plan {
+	t.Helper()
 	m := make(map[domain.RepoID]domain.Repo)
 	for _, r := range repos {
 		m[r.ID] = r
 	}
-	p, err := planOps(threshold).Plan(ops.OpDelete, items, m)
+	p, err := planOps(threshold).Plan(op, items, m)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -56,6 +61,21 @@ func TestGoldenYNModal(t *testing.T) {
 	}
 	p := planFrom(t, 50, items, writable("octo", "hello"))
 	goldie.New(t).Assert(t, "yn_modal", []byte(sized(p, 100, 20).View()))
+}
+
+// TestGoldenCancelModal fixes the reused pane rendering a bulk cancel (run-lifecycle
+// R17): the same modal shape as a Purge, with the verb tracking the operation, so the
+// y/N prompt reads "Cancel these Runs?" rather than "Delete these Runs?". A single-repo
+// set of three cancels below the threshold confirms with y/N (R18's bulk case still
+// confirms, and the single-Run asymmetry is the Feed's, not the pane's).
+func TestGoldenCancelModal(t *testing.T) {
+	items := []ops.Item{
+		ops.RunItem(gRun(201, "octo", "hello", "CI", domain.StatusInProgress, "", gStart(20, 10))),
+		ops.RunItem(gRun(202, "octo", "hello", "CI", domain.StatusInProgress, "", gStart(20, 9))),
+		ops.RunItem(gRun(203, "octo", "hello", "Release", domain.StatusQueued, "", gStart(20, 8))),
+	}
+	p := planForOp(t, ops.OpCancel, 50, items, writable("octo", "hello"))
+	goldie.New(t).Assert(t, "cancel_modal", []byte(sized(p, 100, 20).View()))
 }
 
 // TestGoldenTypedCountModal fixes the at-threshold single-repository modal: the typed

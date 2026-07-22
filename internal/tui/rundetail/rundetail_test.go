@@ -378,3 +378,20 @@ func TestViewSanitisesJobAndStepText(t *testing.T) {
 		t.Fatalf("the sanitiser dropped or split visible Job or Step text:\n%q", view)
 	}
 }
+
+// TestIsOrphanedGatesReRun pins run-detail R18's Workflow-State limb (AC15, resolved open
+// question 8): a Run whose Workflow is deleted is Orphaned, so the pane reports it and the
+// Feed keeps the re-run key inert over it. An unresolved Workflow State reads as a live
+// successor, so a Run is not treated as Orphaned until the Feed resolves a deleted State.
+func TestIsOrphanedGatesReRun(t *testing.T) {
+	m := New(Options{})
+	if m.IsOrphaned() {
+		t.Errorf("a pane with no resolved Workflow State reported Orphaned; the default is a live successor (R8)")
+	}
+	if !m.SetWorkflowState(domain.StateDeleted).IsOrphaned() {
+		t.Errorf("a deleted Workflow did not read as Orphaned (R18, AC15)")
+	}
+	if m.SetWorkflowState(domain.StateActive).IsOrphaned() {
+		t.Errorf("a live Workflow read as Orphaned; only a deleted Workflow gates re-run (R18)")
+	}
+}

@@ -159,6 +159,14 @@ func (m Model) SetWorkflowState(s domain.State) Model {
 	return m
 }
 
+// IsOrphaned reports whether the selected Run's Workflow is deleted, which makes it an
+// Orphaned Run: no further Run can follow it. run-detail R18 excludes an Orphaned Run from
+// the re-run gate, because a deleted Workflow can produce no further Run, so the Feed reads
+// this to keep the re-run key inert while the pane is open over one (run-detail R18, AC15,
+// and its resolved open question 8). It reads the Workflow State the Feed resolved via
+// SetWorkflowState; an unresolved state reads as not-deleted, a Run with a live successor.
+func (m Model) IsOrphaned() bool { return m.wfState == domain.StateDeleted }
+
 // Update handles one message the Feed forwarded. It consumes its own tagged messages, the
 // size it lays out against, and the broadcast Budget Readout it pauses on (R16, ADR-0015).
 // A key press is the Feed's: the pane holds no binding at this stage (motion moves the
