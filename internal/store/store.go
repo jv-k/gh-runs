@@ -49,6 +49,13 @@ const schemaVersion = 1
 // before eviction is ever involved.
 var maxStoreBytes int64 = 50 << 20
 
+// readFile indirects os.ReadFile so a test can count how many entries the store
+// reads. It guards local-store R15's efficiency property: eviction sums sizes by
+// stat and reads an entry only when the store is over its bound, so a free 304 (the
+// common case) rescans nothing. It is a var only for that observation and is never
+// reassigned in the product.
+var readFile = os.ReadFile
+
 // Transport is the store's RoundTripper.
 type Transport struct {
 	base http.RoundTripper
@@ -96,12 +103,14 @@ func NewTransport(base http.RoundTripper, dir string, clk clock.Clock) *Transpor
 // acquire takes the advisory write lock without blocking (local-store R21). A
 // store with no directory, an unwritable one, or a contended lock all leave the
 // transport a reader: it does not wait, does not poll the lock, and does not
-// delay a launch (R22). The lock file is created empty and never written to.
+// delay a launch (R22). The lock file is created empty and never written to. The
+// directory is the store's own, so it is created 0700: a per-user cache no other
+// account has reason to read (ADR-0017).
 func (t *Transport) acquire() {
 	if t.dir == "" {
 		return
 	}
-	if err := os.MkdirAll(t.dir, 0o755); err != nil {
+	if err := os.MkdirAll(t.dir, 0o700); err != nil {
 		return
 	}
 	lock, ok := acquireLock(filepath.Join(t.dir, lockName))
@@ -110,6 +119,24 @@ func (t *Transport) acquire() {
 	}
 	t.lock = lock
 	t.writer = true
+	// The writer owns the store, so it is the one to reclaim atomic-write
+	// temporaries a crashed writer left behind (local-store R11).
+	t.sweepTempFiles()
+}
+
+// sweepTempFiles reclaims orphaned atomic-write temporaries left by a writer that
+// died between os.CreateTemp and os.Rename (local-store R11). enforceBound globs
+// only *.json, so an orphan store.tmp-* would otherwise never count toward the
+// bound nor be reclaimed. It runs once at startup for the writer, best-effort: a
+// failure costs a little disk and nothing else.
+func (t *Transport) sweepTempFiles() {
+	matches, err := filepath.Glob(filepath.Join(t.dir, "store.tmp-*"))
+	if err != nil {
+		return
+	}
+	for _, f := range matches {
+		_ = os.Remove(f)
+	}
 }
 
 // releaseLock drops the advisory lock. Production never calls it: the process
@@ -346,7 +373,7 @@ func (t *Transport) load(key string) (entry, bool) {
 	if t.dir == "" {
 		return entry{}, false
 	}
-	data, err := os.ReadFile(t.path(key))
+	data, err := readFile(t.path(key))
 	if err != nil {
 		return entry{}, false
 	}
@@ -374,7 +401,7 @@ func (t *Transport) save(key string, e entry) {
 	if t.dir == "" || !t.writer {
 		return
 	}
-	if err := os.MkdirAll(t.dir, 0o755); err != nil {
+	if err := os.MkdirAll(t.dir, 0o700); err != nil {
 		return
 	}
 	e.Schema = schemaVersion
@@ -424,33 +451,53 @@ func writeFileAtomic(dir, path string, data []byte) bool {
 // eviction keeps no bookkeeping of its own. The just-written entry sorts newest
 // and is evicted last, so a write never evicts itself while an older entry
 // remains (AC15).
+//
+// The total is summed by os.Stat, not by reading every entry, so the common case
+// (a store within the bound, which every free 304 and most 200s leave it) opens no
+// file: it stats, sees it fits, and returns. Only a store actually over the bound
+// reads each entry, for its last-revalidated time. The earlier sweep read and
+// unmarshalled every entry on every write, which was quadratic across a poll of
+// many repositories and made a supposedly free 304 expensive.
 func (t *Transport) enforceBound() {
 	files, err := filepath.Glob(filepath.Join(t.dir, "*.json"))
 	if err != nil {
 		return
 	}
-	type meta struct {
+	type sized struct {
+		path string
+		size int64
+	}
+	all := make([]sized, 0, len(files))
+	var total int64
+	for _, f := range files {
+		info, err := os.Stat(f)
+		if err != nil {
+			continue
+		}
+		all = append(all, sized{path: f, size: info.Size()})
+		total += info.Size()
+	}
+	if total <= maxStoreBytes {
+		return
+	}
+	// Over the bound: read each entry now, and only now, for its last-revalidated
+	// time, the LRU key. An entry that no longer decodes takes the zero time, so it
+	// sorts oldest and its bytes are reclaimed before any live entry's.
+	type aged struct {
 		path string
 		size int64
 		age  time.Time
 	}
-	metas := make([]meta, 0, len(files))
-	var total int64
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
+	metas := make([]aged, 0, len(all))
+	for _, s := range all {
+		var age time.Time
+		if data, err := readFile(s.path); err == nil {
+			var e entry
+			if json.Unmarshal(data, &e) == nil {
+				age = e.LastRevalidated
+			}
 		}
-		var e entry
-		if err := json.Unmarshal(data, &e); err != nil {
-			continue
-		}
-		size := int64(len(data))
-		metas = append(metas, meta{path: f, size: size, age: e.LastRevalidated})
-		total += size
-	}
-	if total <= maxStoreBytes {
-		return
+		metas = append(metas, aged{path: s.path, size: s.size, age: age})
 	}
 	sort.Slice(metas, func(i, j int) bool { return metas[i].age.Before(metas[j].age) })
 	for _, m := range metas {
@@ -488,7 +535,7 @@ func (t *Transport) invalidate(repo string) {
 		return
 	}
 	for _, f := range files {
-		data, err := os.ReadFile(f)
+		data, err := readFile(f)
 		if err != nil {
 			continue
 		}

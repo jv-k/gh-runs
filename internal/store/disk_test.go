@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -532,5 +533,174 @@ func assertLockEmpty(t *testing.T, dir string) {
 	}
 	if info.Size() != 0 {
 		t.Errorf("lock file holds %d bytes; it must be empty and stay empty (R22)", info.Size())
+	}
+}
+
+// TestNotModifiedDoesNotRescanStore pins R15's efficiency property: a free 304 must
+// not re-read the whole store. Eviction sums sizes by stat and reads an entry only
+// when the store is over its bound, so a 304 that leaves the store within bounds
+// reads exactly the one entry it revalidates. The earlier sweep read every entry on
+// every write, which made a poll of N repositories quadratic. The readFile seam
+// counts store reads so the property is observable: this same 304 would read the
+// full store-plus-one under the old sweep.
+func TestNotModifiedDoesNotRescanStore(t *testing.T) {
+	clk := clockwork.NewFakeClockAt(time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC))
+	dir := t.TempDir()
+	base := &roundTripFunc{respond: func(req *http.Request) *http.Response {
+		if req.Header.Get("If-None-Match") != "" {
+			return notModified(`"etag-1"`)
+		}
+		return ok200(`"etag-1"`, `{"ok":true}`)
+	}}
+	tr := NewTransport(base, dir, clk)
+
+	// Seed several repositories, so a full rescan would read many entries.
+	const repos = 5
+	for i := 0; i < repos; i++ {
+		getThrough(t, tr, "https://api.github.com/repos/o/r"+strconv.Itoa(i)+"/actions/runs")
+	}
+	if n := len(entryFiles(t, dir)); n != repos {
+		t.Fatalf("seed persisted %d entries, want %d", n, repos)
+	}
+
+	// Count store reads across one revalidation.
+	var reads int
+	orig := readFile
+	readFile = func(name string) ([]byte, error) {
+		reads++
+		return orig(name)
+	}
+	defer func() { readFile = orig }()
+
+	if body := getThrough(t, tr, "https://api.github.com/repos/o/r0/actions/runs"); body != `{"ok":true}` {
+		t.Fatalf("revalidation served %q, want the stored body", body)
+	}
+	if base.lastIfNoneMatch == "" {
+		t.Fatal("the revalidation was unconditional; the seeded entry should have supplied an ETag")
+	}
+
+	// Exactly one read: the load of the entry being revalidated. Eviction stat-swept
+	// the rest and read none. The old sweep read all repos entries too.
+	if reads != 1 {
+		t.Errorf("a 304 performed %d store reads, want 1 (the load alone); eviction must not rescan the store on a free 304", reads)
+	}
+}
+
+// TestPersistedLastRevalidatedTracksClock pins R3/AC8's data property: an entry's
+// last-revalidated time is the injected clock's now, stamped on the 200 that first
+// persists it and updated on every reconstituted 304. The public getter surface is
+// deferred (R7, stage 7); this asserts the persisted value, the seam the store
+// already exposes on disk.
+func TestPersistedLastRevalidatedTracksClock(t *testing.T) {
+	start := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	clk := clockwork.NewFakeClockAt(start)
+	dir := t.TempDir()
+	base := &roundTripFunc{respond: func(req *http.Request) *http.Response {
+		if req.Header.Get("If-None-Match") != "" {
+			return notModified(`"etag-1"`)
+		}
+		return ok200(`"etag-1"`, `{"ok":true}`)
+	}}
+	tr := NewTransport(base, dir, clk)
+
+	const url = "https://api.github.com/repos/cli/cli/actions/runs"
+
+	// The first GET is a 200: it persists the entry stamped at the clock's now.
+	getThrough(t, tr, url)
+	if got := readEntry(t, dir).LastRevalidated; !got.Equal(start) {
+		t.Errorf("after the 200 last_revalidated = %s, want the clock's %s", got, start)
+	}
+
+	// Advance virtual time, then revalidate. The 304 costs nothing on the wire but
+	// must still restamp last-revalidated to the new now (R3), so eviction ages the
+	// entry by when it was last seen live, not when it was first fetched.
+	clk.Advance(90 * time.Minute)
+	later := clk.Now()
+	getThrough(t, tr, url)
+	if base.lastIfNoneMatch == "" {
+		t.Fatal("the revalidation was unconditional; the entry should have supplied an ETag")
+	}
+	if got := readEntry(t, dir).LastRevalidated; !got.Equal(later) {
+		t.Errorf("after the reconstituted 304 last_revalidated = %s, want the advanced clock's %s", got, later)
+	}
+}
+
+// TestKeyDistinguishesAuthAndMethod pins AC14a: the store key separates requests
+// that must not share a cached entry. Two GETs of one URL differing only in their
+// Authorization header hash to different keys, so one token's entry can never be
+// served under another, and a GET and a DELETE of one URL hash differently, so a
+// write is never mistaken for the read it invalidates. key reads only the request,
+// so a zero-value transport suffices.
+func TestKeyDistinguishesAuthAndMethod(t *testing.T) {
+	const url = "https://api.github.com/repos/cli/cli/actions/runs"
+	tr := &Transport{}
+
+	getA := mustReq(http.MethodGet, url)
+	getA.Header.Set("Authorization", "token aaaaaaaa")
+	getB := mustReq(http.MethodGet, url)
+	getB.Header.Set("Authorization", "token bbbbbbbb")
+	del := mustReq(http.MethodDelete, url)
+	del.Header.Set("Authorization", "token aaaaaaaa")
+
+	if tr.key(getA) == tr.key(getB) {
+		t.Error("two GETs of one URL differing only in Authorization share a key; AC14a requires the token separate them")
+	}
+	if tr.key(getA) == tr.key(del) {
+		t.Error("a GET and a DELETE of one URL share a key; the method must separate a read from the write that invalidates it")
+	}
+}
+
+// TestStoreDirectoryIsPrivate pins the store's own directory to 0700: it is a
+// per-user cache (ADR-0017), and no other account has reason to read one user's
+// ETags and payloads. The entry files and the lock are already 0600; this closes
+// the directory that holds them. The permission bits are a POSIX property, so the
+// assertion is skipped on Windows, which models access by ACL instead.
+func TestStoreDirectoryIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permission bits are POSIX; Windows uses ACLs")
+	}
+	clk := clockwork.NewFakeClockAt(time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC))
+	// A directory the transport must create itself, so the assertion is about our
+	// MkdirAll mode and not the temp dir's.
+	dir := filepath.Join(t.TempDir(), "gh-runs")
+	base := &roundTripFunc{respond: func(*http.Request) *http.Response {
+		return ok200(`"etag-1"`, `{"ok":true}`)
+	}}
+	tr := NewTransport(base, dir, clk)
+	t.Cleanup(func() { _ = tr.releaseLock() })
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat store dir: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("store directory is %#o, want 0700: a per-user cache no other account should read", perm)
+	}
+}
+
+// TestStartupSweepsTempOrphans pins Item 4: a store.tmp-* left by a writer that
+// died between os.CreateTemp and os.Rename is reclaimed at the next writer's
+// startup. enforceBound globs only *.json, so nothing else would ever count the
+// orphan toward the bound or remove it (R11).
+func TestStartupSweepsTempOrphans(t *testing.T) {
+	clk := clockwork.NewFakeClockAt(time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC))
+	dir := t.TempDir()
+
+	orphan := filepath.Join(dir, "store.tmp-orphaned")
+	if err := os.WriteFile(orphan, []byte("half of an atomic write"), 0o600); err != nil {
+		t.Fatalf("seed orphan temp file: %v", err)
+	}
+
+	base := &roundTripFunc{respond: func(*http.Request) *http.Response {
+		return ok200(`"etag-1"`, `{"ok":true}`)
+	}}
+	tr := NewTransport(base, dir, clk)
+	t.Cleanup(func() { _ = tr.releaseLock() })
+	if !tr.writer {
+		t.Fatal("the transport did not become the writer, so it would not sweep the orphan")
+	}
+
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("startup left the orphan temp file in place (stat err = %v); a writer must reclaim store.tmp-* on startup (R11)", err)
 	}
 }
