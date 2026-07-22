@@ -13,7 +13,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -184,9 +186,11 @@ func Load(env Env, flags Flags) (Config, []Diagnostic) {
 	var diags []Diagnostic
 
 	// The file layer sits above the defaults. A missing file leaves the defaults
-	// in place (R3); a present one is resolved key by key, so one bad value cannot
-	// discard the rest and no problem fails the run (R14).
-	if data, ok := readConfigFile(env); ok {
+	// in place (R3); an unreadable one leaves them too but says so (R14); a present
+	// one is resolved key by key, so one bad value cannot discard the rest.
+	data, present, fileDiags := readConfigFile(env)
+	diags = append(diags, fileDiags...)
+	if present {
 		cfg, diags = resolveFile(cfg, data, diags)
 	}
 
@@ -357,17 +361,25 @@ func configDir(env Env, goos string) string {
 	return ""
 }
 
-// readConfigFile reads config.yml from the resolved config directory. A missing
-// file, or no resolvable directory, reports no file rather than an error: both
-// are valid and yield the defaults (R3).
-func readConfigFile(env Env) ([]byte, bool) {
+// readConfigFile reads config.yml from the resolved config directory. It reports
+// whether a file was present to resolve, plus any diagnostic. A missing file, or
+// no resolvable directory, is valid and quiet: both yield the defaults (R3). A
+// file that exists but cannot be read (a permission error, an IO error, a
+// directory in its place) yields a diagnostic instead of silently defaulting,
+// because that silence would hide a misconfiguration the person needs to see.
+func readConfigFile(env Env) (data []byte, present bool, diags []Diagnostic) {
 	dir := configDir(env, runtime.GOOS)
 	if dir == "" {
-		return nil, false
+		return nil, false, nil
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "config.yml"))
-	if err != nil {
-		return nil, false
+	switch {
+	case err == nil:
+		return data, true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, false, nil
+	default:
+		return nil, false, []Diagnostic{{Message: fmt.Sprintf(
+			"config.yml could not be read, using defaults: %v", err)}}
 	}
-	return data, true
 }

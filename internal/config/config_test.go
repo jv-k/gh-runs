@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -521,6 +522,9 @@ func TestEmptyFileChangesNothing(t *testing.T) {
 // This is the common case on macOS, where $XDG_CONFIG_HOME is typically unset, so
 // a config living at ~/.config would otherwise be silently ignored.
 func TestReadsFromHomeConfigWhenXDGUnset(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("on Windows configDir uses %AppData%, not $HOME/.config; TestConfigDir pins that limb")
+	}
 	home := t.TempDir()
 	appDir := filepath.Join(home, ".config", "gh-runs")
 	if err := os.MkdirAll(appDir, 0o755); err != nil {
@@ -538,5 +542,31 @@ func TestReadsFromHomeConfigWhenXDGUnset(t *testing.T) {
 	}
 	if cfg.Budget != config.TierGreedy {
 		t.Fatalf("Budget = %q, want greedy read from ~/.config/gh-runs when XDG is unset", cfg.Budget)
+	}
+}
+
+// TestUnreadableFileWarnsAndKeepsDefaults pins that a config.yml which exists but
+// cannot be read does not vanish silently. A missing file is valid and quiet
+// (R3), but a file the tool cannot read is a misconfiguration the person needs to
+// see, so the defaults stand and one diagnostic names the failure (R14 spirit).
+// A directory in the file's place is a portable stand-in for a read error that is
+// not fs.ErrNotExist, avoiding permission games that a root test runner defeats.
+func TestUnreadableFileWarnsAndKeepsDefaults(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "gh-runs", "config.yml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, diags := config.Load(env, config.Flags{})
+
+	if cfg.Budget != config.TierNormal {
+		t.Fatalf("Budget = %q, want the defaults when the file cannot be read", cfg.Budget)
+	}
+	if len(diags) != 1 {
+		t.Fatalf("want one unreadable-file diagnostic, got %d: %v", len(diags), diags)
+	}
+	if !strings.Contains(diags[0].Message, "config.yml") {
+		t.Fatalf("diagnostic %q should name the file it could not read", diags[0].Message)
 	}
 }
