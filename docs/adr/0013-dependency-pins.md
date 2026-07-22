@@ -21,7 +21,7 @@ It exists because `go.mod` records **what** and cannot record **why**. Half the 
 | `gopkg.in/dnaeon/go-vcr.v4` | `v4.0.7` | **Major version is load-bearing** |
 | `github.com/jonboulle/clockwork` | `v0.5.0` | Ordinary, replaces an archived library |
 | `github.com/sebdah/goldie/v2` | `v2.8.0` | Ordinary |
-| `golang.org/x/sys` | `v0.31.0` | Ordinary, promoted to direct for the lock. See below |
+| `golang.org/x/sys` | `v0.45.0` | Ordinary, promoted to direct for the lock, MVS-forced to `v0.45.0` by bubbles v2.1.1. See below |
 
 ## The Go floor is computed from the dependencies, not picked
 
@@ -55,6 +55,10 @@ The suffixed GitHub path is safe precisely because it breaks. The unsuffixed one
 
 `charm.land/bubbles/v2 v2.1.1` is pinned because the [PRD](../PRD.md)'s stack argument depends on it by name: gocui and raw tcell lost on "hand-rolling lists, viewports and key handling that bubbles supplies". A dependency that carries a stack decision belongs in the file that records the stack decision.
 
+**Pinning bubbles v2.1.1 raises two indirect lines through MVS.** Its own `go.mod` requires `golang.org/x/sys v0.45.0` and `github.com/lucasb-eyer/go-colorful v1.4.0`. Both sat lower before bubbles arrived, `x/sys` at `v0.31.0` (from go-gh and `x/term`) and go-colorful at `v1.2.0` (from go-gh and termenv), and MVS takes the maximum, so both rose the moment bubbles landed. Neither is a `go get -u` drift, both are tidy-clean and verified, and both stay Ordinary tier. `x/sys` is the one the pin table now records at `v0.45.0`, because it is also promoted to direct for the Windows lock below. go-colorful stays indirect and needs no line of its own.
+
+**bubbles also sets a version trap for two direct requires that do not exist yet.** Its `go.mod` requires `charm.land/bubbletea/v2 v2.0.7` and `charm.land/lipgloss/v2 v2.0.4`, both below the `v2.0.8` and `v2.0.5` this ADR pins. Today they are phantom-graph only, present in `go mod graph`, absent from `go.sum`, never compiled, because nothing yet imports a package that reaches them. **A later TUI stage that adds `charm.land/bubbletea/v2` and `charm.land/lipgloss/v2` as direct requires must pin those exact versions by hand.** A bare `go get charm.land/bubbletea/v2` resolves it to `v2.0.7` through bubbles' requirement, and lipgloss to `v2.0.4`, and the build stays green at the lower pair. MVS never reaches `v2.0.8` and `v2.0.5` on its own, so nothing but an explicit require will hold them. The path is load-bearing above for one reason and the version is load-bearing here for another.
+
 ## colorprofile is already here, and we promote it rather than adopt it
 
 **`github.com/charmbracelet/colorprofile v0.4.3` is what `charm.land/bubbletea/v2 v2.0.8` resolves today**, verified against the module graph, where it sits `// indirect`. It becomes a direct require for one reason: [settings](../features/settings/requirements.md) R15a resolves `NO_COLOR` **itself** and hands the answer to `tea.WithColorProfile`, rather than letting this library detect it. The version does not move. The line moves from indirect to direct, which is a `go.mod` line and therefore this ADR's business.
@@ -78,7 +82,7 @@ Three specifications disagree here and the library follows none of them. no-colo
 
 On unix the lock reaches `flock(2)` through the standard library alone, `syscall.Flock(fd, LOCK_EX|LOCK_NB)`, so that limb pins nothing. A separate open of the same file is denied even within one process, which is what lets one holder exclude another and makes [local-store](../features/local-store/requirements.md) AC18 provable in a single test process.
 
-On Windows there is no `flock`, and `LockFileEx` is not in the standard `syscall` package. It lives in `golang.org/x/sys/windows`, which is already in the module graph as an indirect dependency at `v0.31.0`. The Windows limb imports it directly, so the line moves from indirect to direct, exactly as colorprofile's did above and for the same reason: a `go.mod` line changed and the version did not. No new module arrives, `go.sum` is unchanged, and the pin set is the set it already was. 2.0.0 ships Windows ([PRD](../PRD.md), Scope), so this limb is required rather than optional.
+On Windows there is no `flock`, and `LockFileEx` is not in the standard `syscall` package. It lives in `golang.org/x/sys/windows`, already in the module graph. The Windows limb imports it directly, so the line moves from indirect to direct, exactly as colorprofile's did above: a `go.mod` line changes and no new module arrives. The version is a separate story, and unlike colorprofile's it did move. The promotion alone does not move it, and when this limb was first specified `x/sys` sat at `v0.31.0`. Adding `charm.land/bubbles/v2 v2.1.1` later raised it to `v0.45.0` through MVS, as the pin table and the bubbles section above both record, so `go.sum` now carries the `v0.45.0` hashes and not the old ones. No new module arrives even so: one line moved from indirect to direct and one version floated up, and the pin set is otherwise the set it already was. 2.0.0 ships Windows ([PRD](../PRD.md), Scope), so this limb is required rather than optional.
 
 A wrapper library was the alternative, `gofrs/flock` being the usual one. It would add a module and its transitive graph to spare two short platform files, and it buys nothing the standard library and `golang.org/x/sys` do not already give, both of which are pinned here regardless.
 
