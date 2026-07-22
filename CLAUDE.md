@@ -2,7 +2,7 @@
 
 **A live GitHub Actions dashboard across your repositories, where deletion is one operation.**
 
-v2 is a ground-up Go rewrite. **There is no Go code yet.** v1 was a bash script and now lives only at the `v1.0.7` tag. If you are looking for `delete-workflow-runs.sh`, it is not missing, it left main deliberately.
+v2 is a ground-up Go rewrite. **The stage 0 floor and the transport chain are built in Go**: `main.go`, `domain`, `clock`, `config` and `ghclient`, standing on the `store` and `governor` chain. The surfaces above them are not built. [docs/BUILD-ORDER.md](docs/BUILD-ORDER.md) tracks what stands where. v1 was a bash script and now lives only at the `v1.0.7` tag. If you are looking for `delete-workflow-runs.sh`, it is not missing, it left main deliberately.
 
 ## Read these first, in this order
 
