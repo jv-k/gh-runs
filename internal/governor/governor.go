@@ -85,10 +85,18 @@ type Governor struct {
 	// projected from its count. Pruned to burnWindow on use.
 	burnEvents []time.Time
 
-	// Exhaustion (R9). exhausted is authoritative for the scheduler and the Feed;
-	// exhaustReset is the resume instant, zero when none is derivable.
-	exhausted    bool
-	exhaustReset time.Time
+	// Exhaustion (R9). A rate-limit classification and a primary remaining:0 are
+	// two different lifecycles that once shared one bool, which let an interleaved
+	// clean read clear a Retry-After hold (blocker 2). They are separated here.
+	//
+	// inRateLimit is set on a rate-limit classification and stays set until a clean
+	// response confirms recovery, but only once limitResume has passed: a clean
+	// primary header arriving mid-hold must not release it. limitResume is the
+	// hold's own deadline (Retry-After, else x-ratelimit-reset), zero when the
+	// limit gave no time (AC10) or no hold is active. Primary exhaustion is derived
+	// from lastRemaining rather than stored, so a recovering header clears it free.
+	inRateLimit bool
+	limitResume time.Time
 }
 
 // New returns a Governor wrapping base and injecting clk for all timing (R21).
@@ -108,7 +116,7 @@ func New(base http.RoundTripper, clk clock.Clock) *Governor {
 // back. A read is never paced (R4).
 func (g *Governor) RoundTrip(req *http.Request) (*http.Response, error) {
 	if isWrite(req.Method) {
-		g.paceWrite()
+		g.paceWrite(req)
 	}
 	resp, err := g.base.RoundTrip(req)
 	if err != nil {
@@ -124,7 +132,7 @@ func (g *Governor) RoundTrip(req *http.Request) (*http.Response, error) {
 // (ADR-0012). Classification runs before the lock because it may read the 403
 // body, and always restores it for the consumer.
 func (g *Governor) observe(req *http.Request, resp *http.Response) {
-	limited := classify(resp)
+	limited := classify(req, resp)
 	stampRateLimited(resp, limited)
 
 	g.mu.Lock()
@@ -146,11 +154,6 @@ func (g *Governor) observe(req *http.Request, resp *http.Response) {
 	if isRead(req.Method) {
 		g.readEvents = append(g.readEvents, now)
 	}
-	// R7/R8a: every non-304 response consumed one primary point and feeds the burn
-	// projection. A 304 is free and feeds nothing.
-	if resp.StatusCode != http.StatusNotModified {
-		g.burnEvents = append(g.burnEvents, now)
-	}
 
 	switch {
 	case limited:
@@ -160,64 +163,107 @@ func (g *Governor) observe(req *http.Request, resp *http.Response) {
 		g.cleanStreak = 0
 		g.enterRateLimit(resp, now)
 	case resp.StatusCode == http.StatusNotModified:
-		// R7: a conditional request returning 304 costs zero primary allowance.
+		// R7: a conditional request returning 304 costs zero primary allowance and
+		// feeds no burn.
 		g.notModified++
-		g.recordClean()
+		g.recordClean(now)
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		// R7: a 200 costs one primary point.
+		// R7/R8a: a 200 costs one primary point, and burn tracks the same 2xx basis
+		// as primaryUsed. Counting a 403, 429 or 5xx toward burn would over-report
+		// it and bias the pressure projection, past R8a's cited R7 arithmetic.
 		g.primaryUsed++
-		g.recordClean()
+		g.burnEvents = append(g.burnEvents, now)
+		g.recordClean(now)
 	default:
 		// An authorization 403, a 404 or a 5xx is neither clean nor a rate limit.
 		// It breaks the clean streak's consecutiveness without backing off, so a
-		// stream of authorization 403s never ramps the write rate (open question 1).
+		// stream of authorization 403s never ramps the write rate (open question 1),
+		// and it feeds no burn. Exhaustion is derived from lastRemaining, so a
+		// remaining:0 here still reads as exhausted without a stored flag.
 		g.cleanStreak = 0
-		g.exhausted = g.lastRemaining == 0
 	}
+
+	// Prune both windows on append so their growth tracks window occupancy however
+	// often a getter is polled: a headless Purge that never reads the Readout must
+	// not leak one time.Time per request across a multi-hour run.
+	g.readEvents = pruneBefore(g.readEvents, now.Add(-readWindow))
+	g.burnEvents = pruneBefore(g.burnEvents, now.Add(-burnWindow))
 }
 
-// recordClean advances the ramp on a clean response (R10) and clears exhaustion
-// when the headers say the allowance is not zero.
-func (g *Governor) recordClean() {
+// recordClean advances the ramp on a clean response (R10) and clears a rate-limit
+// hold once recovery is genuinely confirmed. Recovery is confirmed only after the
+// hold's own deadline has passed (blocker 2): a clean primary header arriving
+// mid-hold must not release a Retry-After the limit itself set, so the clear is
+// gated on limitResume. Clearing it here stops the Readout reporting a stale past
+// resume instant once recovery is real.
+func (g *Governor) recordClean(now time.Time) {
 	g.cleanStreak++
 	if g.cleanStreak >= cleanBeforeRamp {
 		g.ramp()
 		g.cleanStreak = 0
 	}
-	g.exhausted = g.lastRemaining == 0
-}
-
-// enterRateLimit records a rate-limit classification. Exhaustion is published
-// whatever the primary headers say (R9, ADR-0018), and the next write is pushed
-// past the resume instant so the governor issues nothing until virtual time
-// passes it (R12, AC4). The request itself is never a failure (R13): the consumer
-// re-attempts it, which is the classification stamp's whole purpose (R14).
-func (g *Governor) enterRateLimit(resp *http.Response, now time.Time) {
-	g.exhausted = true
-	// A Retry-After interval is the explicit backoff signal and is recorded as an
-	// absolute instant (R12). Without one, resumeInstantLocked falls back to
-	// x-ratelimit-reset, so exhaustReset is only stamped when Retry-After supplies
-	// a resume the header cannot.
-	if ra := resp.Header.Get("Retry-After"); ra != "" {
-		if secs, err := strconv.Atoi(ra); err == nil {
-			g.exhaustReset = now.Add(time.Duration(secs) * time.Second)
-		}
+	if g.inRateLimit && (g.limitResume.IsZero() || !now.Before(g.limitResume)) {
+		g.inRateLimit = false
+		g.limitResume = time.Time{}
 	}
 }
 
-// resumeInstantLocked is the instant the account may issue again (R9): a
-// Retry-After derived resume where one was recorded, otherwise x-ratelimit-reset,
-// otherwise the zero time, which is exhaustion without a time rather than an
-// invented one (AC10). The lastReset guard keeps 1970 out: time.Unix(0,0) is not
-// the zero time, so a never-observed reset must not become the epoch.
-func (g *Governor) resumeInstantLocked() time.Time {
-	if !g.exhaustReset.IsZero() {
-		return g.exhaustReset
+// enterRateLimit records a rate-limit classification. Exhaustion is published
+// whatever the primary headers say (R9, ADR-0018) through the hold this sets, and
+// the next write is pushed past the resume instant so the governor issues nothing
+// until virtual time passes it (R12, AC4). The resume instant is the Retry-After
+// interval where one is supplied, else x-ratelimit-reset, else none (R9). paceWrite
+// gates the write hold on limitResume alone, independent of the primary header, so
+// an interleaved clean read cannot release it (blocker 2). The request itself is
+// never a failure (R13): the consumer re-attempts it, which is the classification
+// stamp's whole purpose (R14).
+func (g *Governor) enterRateLimit(resp *http.Response, now time.Time) {
+	g.inRateLimit = true
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		if secs, err := strconv.Atoi(ra); err == nil {
+			g.limitResume = now.Add(time.Duration(secs) * time.Second)
+			return
+		}
+	}
+	if g.lastReset != 0 {
+		g.limitResume = time.Unix(g.lastReset, 0)
+		return
+	}
+	g.limitResume = time.Time{} // AC10: exhausted, with no time to resume from.
+}
+
+// resumeInstantLocked is the instant the account may issue again (R9): the active
+// rate-limit hold's deadline where one is still in the future, otherwise the
+// primary x-ratelimit-reset, otherwise the zero time, which is exhaustion without
+// a time rather than an invented one (AC10). A hold deadline already in the past
+// is stale and falls through to the current primary reset, so the Readout stops
+// reporting it once recovery is due. The lastReset guard keeps 1970 out:
+// time.Unix(0,0) is not the zero time, so a never-observed reset must not become
+// the epoch.
+func (g *Governor) resumeInstantLocked(now time.Time) time.Time {
+	if !g.limitResume.IsZero() && now.Before(g.limitResume) {
+		return g.limitResume
 	}
 	if g.lastReset != 0 {
 		return time.Unix(g.lastReset, 0)
 	}
 	return time.Time{}
+}
+
+// exhaustedLocked reports whether the Readout is exhausted (R9): a primary
+// remaining of zero, or an active rate-limit classification. The rate-limit case
+// stays exhausted while its hold is active, or where the limit gave no time to
+// wait for (AC10). It is derived rather than stored so a recovering primary header
+// clears the primary case for free, and so an interleaved clean read cannot clear
+// the rate-limit case before its deadline (blocker 2).
+func (g *Governor) exhaustedLocked(now time.Time) bool {
+	if g.lastRemaining == 0 {
+		return true
+	}
+	if g.inRateLimit {
+		return g.limitResume.IsZero() || now.Before(g.limitResume)
+	}
+	return false
 }
 
 // ramp is R10's additive increase, capped at R11's ceiling.
@@ -281,37 +327,59 @@ func (g *Governor) dynamicCeilingLocked(now time.Time) float64 {
 // (R11). It prunes the window first, so an old burst stops depressing the ceiling
 // once it ages out.
 func (g *Governor) readPointsPerMinLocked(now time.Time) float64 {
-	cutoff := now.Add(-readWindow)
+	g.readEvents = pruneBefore(g.readEvents, now.Add(-readWindow))
+	return float64(len(g.readEvents)) * readPoints
+}
+
+// pruneBefore drops the leading elements of events at or before cutoff, compacting
+// in place, and returns the retained slice. The read window and the burn window
+// prune identically, so one helper serves both, and observe calls it on append to
+// bound growth regardless of getter cadence.
+func pruneBefore(events []time.Time, cutoff time.Time) []time.Time {
 	drop := 0
-	for drop < len(g.readEvents) && !g.readEvents[drop].After(cutoff) {
+	for drop < len(events) && !events[drop].After(cutoff) {
 		drop++
 	}
 	if drop > 0 {
-		n := copy(g.readEvents, g.readEvents[drop:])
-		g.readEvents = g.readEvents[:n]
+		n := copy(events, events[drop:])
+		events = events[:n]
 	}
-	return float64(len(g.readEvents)) * readPoints
+	return events
 }
 
 // paceWrite blocks until this write's slot on the injected clock (R2, R21). It
 // claims the slot under the lock, so concurrent writes take successive slots one
 // interval apart (R3: one global throttle, whatever the repository count), then
-// sleeps outside the lock. The slot never precedes an exhaustion resume, so a
-// backed-off governor issues nothing until virtual time passes it (R9, AC9).
-func (g *Governor) paceWrite() {
+// waits outside the lock. No write precedes a hold instant, so a backed-off
+// governor issues nothing until virtual time passes it (R9, AC4, AC9). Two holds
+// apply and are honoured independently:
+//
+//   - a rate-limit hold (blocker 2), gated purely on limitResume's own deadline,
+//     so an interleaved clean read that observes a healthy primary remaining
+//     cannot shorten it;
+//   - a primary-exhaustion hold at remaining:0, gated on the current header, so a
+//     recovering primary remaining releases it. The two are different policies.
+//
+// It honours req.Context() cancellation so a cancelled Purge stops waiting out its
+// pacing interval rather than parking to the deadline.
+func (g *Governor) paceWrite(req *http.Request) {
 	g.mu.Lock()
 	now := g.clk.Now()
 	start := now
 	if g.nextWrite.After(start) {
 		start = g.nextWrite
 	}
-	// While exhausted, no write precedes the resume instant, so the governor
-	// issues nothing until virtual time passes it (R9, AC9). This covers both a
-	// rate-limit classification (a Retry-After resume) and a plain remaining:0
-	// (the header reset), because resumeInstantLocked reads both.
-	if g.exhausted {
-		if resume := g.resumeInstantLocked(); resume.After(start) {
-			start = resume
+	// The rate-limit hold survives interleaved clean reads: it is gated on the
+	// deadline the limit itself supplied, not on the primary-remaining flag a clean
+	// header would clear (blocker 2, R12, AC4).
+	if !g.limitResume.IsZero() && start.Before(g.limitResume) {
+		start = g.limitResume
+	}
+	// Primary exhaustion holds until the primary reset, and a recovering header
+	// releases it (R9, AC9).
+	if g.lastRemaining == 0 && g.lastReset != 0 {
+		if reset := time.Unix(g.lastReset, 0); start.Before(reset) {
+			start = reset
 		}
 	}
 	g.nextWrite = start.Add(g.intervalLocked())
@@ -319,7 +387,12 @@ func (g *Governor) paceWrite() {
 	g.mu.Unlock()
 
 	if wait > 0 {
-		g.clk.Sleep(wait)
+		timer := g.clk.NewTimer(wait)
+		select {
+		case <-timer.Chan():
+		case <-req.Context().Done():
+			timer.Stop()
+		}
 	}
 }
 
@@ -352,6 +425,11 @@ func (g *Governor) effectiveRateLocked() float64 {
 // limit appears nowhere: the same burst is fine on a healthy remaining and doomed
 // on a low one, which is exactly what a percentage cannot see (ADR-0007).
 func (g *Governor) pressureLocked(now time.Time) bool {
+	if g.lastRemaining < 0 {
+		// No x-ratelimit-remaining has been observed, so there is nothing to
+		// project. A missing header must not force a false pressure reading.
+		return false
+	}
 	burn := g.burnPerSecondLocked(now)
 	if burn == 0 {
 		return false
@@ -371,15 +449,7 @@ func (g *Governor) pressureLocked(now time.Time) bool {
 // under-report in the first five minutes of a session is the safe direction, when
 // the failure R29 names is a readout nobody believes.
 func (g *Governor) burnPerSecondLocked(now time.Time) float64 {
-	cutoff := now.Add(-burnWindow)
-	drop := 0
-	for drop < len(g.burnEvents) && !g.burnEvents[drop].After(cutoff) {
-		drop++
-	}
-	if drop > 0 {
-		n := copy(g.burnEvents, g.burnEvents[drop:])
-		g.burnEvents = g.burnEvents[:n]
-	}
+	g.burnEvents = pruneBefore(g.burnEvents, now.Add(-burnWindow))
 	return float64(len(g.burnEvents)) / burnWindow.Seconds()
 }
 
@@ -412,8 +482,10 @@ func (g *Governor) Remaining() int64 {
 // component that asks" is a getter, asked. Remaining and Reset are wired from the
 // x-ratelimit-* headers observe already reads (R5). A zero Reset is R9 kept, not
 // a bug: with no reset instant observed, lastReset stays 0 and Reset stays the
-// zero time rather than an invented one. Pressure and Exhausted await burn
-// tracking (stage 2) and stay false while burn is zero.
+// zero time rather than an invented one (AC10). Pressure is R8a's projection over
+// the burn window, false while burn is zero, and Exhausted covers both a primary
+// remaining:0 and an active rate-limit hold (R9, ADR-0018), the latter surviving
+// interleaved clean reads until its own deadline (blocker 2).
 func (g *Governor) Readout() Readout {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -421,9 +493,9 @@ func (g *Governor) Readout() Readout {
 
 	return Readout{
 		Remaining: int(g.lastRemaining),
-		Reset:     g.resumeInstantLocked(),
+		Reset:     g.resumeInstantLocked(now),
 		Pressure:  g.pressureLocked(now),
-		Exhausted: g.exhausted,
+		Exhausted: g.exhaustedLocked(now),
 	}
 }
 

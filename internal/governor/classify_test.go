@@ -25,7 +25,8 @@ func TestClassification(t *testing.T) {
 	}{
 		{"clean", false, "a 200 is not a rate-limit response"},
 		{"forbidden_ratelimit", true, "a 403 without the authorization shape defaults to rate limiting (open question 1)"},
-		{"forbidden_auth", false, "a 403 matching the measured authorization shape is an authorization outcome (open question 1)"},
+		{"repos/cli/cli/actions/permissions", false, "a 403 whose documentation_url points at the called endpoint's own reference page is the measured authorization shape (open question 1)"},
+		{"repos/o/r/actions/runs", true, "a secondary-limit 403 whose documentation_url points at the rate-limits page, not the called endpoint, defaults to rate limiting (open question 1)"},
 		{"too_many", true, "a 429 is always a rate-limit response (R12, R14)"},
 	}
 	for _, tc := range cases {

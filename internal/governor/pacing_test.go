@@ -50,20 +50,35 @@ func TestColdStartPacing(t *testing.T) {
 		issued <- clk.Now()
 	}()
 
-	// Wait until the second write is parked on the clock, then prove it has not
-	// been issued yet: the cold-start interval is a full second.
+	// Wait until the second write is parked on the clock.
 	if err := clk.BlockUntilContext(context.Background(), 1); err != nil {
 		t.Fatalf("block until the write parks: %v", err)
 	}
+
+	// Advance half the cold interval. At 2/sec the write would release here, so
+	// confirming it is STILL parked pins AC1's 1s interval rather than merely
+	// proving the write waits for some unspecified duration. A single Advance(1s)
+	// would pass even at 2/sec, because a released writer reports the advanced now
+	// whatever its real deadline was. When the writer is still parked (one waiter)
+	// this returns at once and consumes no real time; a faster rate that had
+	// already released leaves zero waiters, so the bounded context fails fast
+	// instead of hanging.
+	clk.Advance(500 * time.Millisecond)
+	stillParked, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := clk.BlockUntilContext(stillParked, 1); err != nil {
+		t.Fatalf("second write left its park before the 1s cold interval; a faster rate would release at 500ms (AC1): %v", err)
+	}
 	select {
 	case at := <-issued:
-		t.Fatalf("second write issued at %v without waiting; the cold interval is ~1s (AC1)", at.Sub(t0))
+		t.Fatalf("second write issued at %v, before the 1s cold interval; a 2/sec rate would release here (AC1)", at.Sub(t0))
 	default:
 	}
 
-	clk.Advance(1 * time.Second)
+	// Advance the remaining half to the full second: the write releases at 1s.
+	clk.Advance(500 * time.Millisecond)
 	at := <-issued
 	if d := at.Sub(t0); d != time.Second {
-		t.Errorf("second write issued %v after the first, want 1s at the cold-start 1.0/sec rate (AC1)", d)
+		t.Errorf("second write issued %v after the first, want exactly 1s at the cold-start 1.0/sec rate (AC1)", d)
 	}
 }
