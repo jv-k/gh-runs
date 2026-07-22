@@ -25,6 +25,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
+	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
@@ -34,6 +35,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/tui/feed"
 	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
+	"github.com/jv-k/gh-runs/v2/internal/tui/settings"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
 )
@@ -81,6 +83,13 @@ type Options struct {
 	Revalidated func() time.Time
 	SetViewport func([]domain.RepoID)
 	Profile     keys.Profile
+	// Config is the resolved settings the Settings pane opens over, and SaveSettings
+	// persists the pane's changes back to the config file (settings R17). main.go wires
+	// SaveSettings to config.Save over the resolved config path, so the pane's only write is
+	// that one local file and never the API. A nil SaveSettings makes the pane edit in memory
+	// alone, which a headless test uses.
+	Config       config.Config
+	SaveSettings func(prev, next config.Config) error
 	// DetailFetch and Clock are the run-detail pane's seams, constructed in main.go and
 	// handed down through the Feed that opens the pane (ADR-0015): DetailFetch backs its Job
 	// fetch over ghclient, and Clock is the wall clock its timing column reads.
@@ -138,6 +147,11 @@ type Model struct {
 
 	lastReadout governor.Readout
 	haveReadout bool
+
+	// settings is the root's own pane, opened over whichever tab is focused on the Settings
+	// key (ADR-0011: a setting reachable from any tab cannot belong to one). It is not a tab
+	// and not a fourth peer; the root holds it directly and routes keys to it while it is open.
+	settings settings.Model
 }
 
 // New returns the root over opts. The Feed occupies Runs and starts focused (R2); Storage and
@@ -179,6 +193,10 @@ func New(opts Options) Model {
 		DispatchOps:   opts.DispatchOps,
 		DispatchStore: opts.DispatchStore,
 	})
+	// The Settings pane is the root's, constructed once over the resolved config and the
+	// persister so it is the authority for the running instance (R17): it edits its own copy
+	// and writes changed keys back, and does not re-read the file while running.
+	set := settings.New(opts.Profile, opts.Config, opts.SaveSettings)
 	return Model{
 		tabs: []tab{
 			feedTab{m: f.SetActive(true)},
@@ -191,6 +209,7 @@ func New(opts Options) Model {
 		readout:     opts.Readout,
 		repos:       opts.Repos,
 		revalidated: opts.Revalidated,
+		settings:    set,
 	}
 }
 
@@ -230,6 +249,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		inner := tea.WindowSizeMsg{Width: msg.Width, Height: msg.Height - tabBarHeight}
+		// The Settings pane lays out within the same inner size the tabs get, so it is sized
+		// whether or not it is open when the terminal resizes.
+		m.settings, _ = m.settings.Update(inner)
 		return m.broadcast(inner)
 
 	case tea.KeyPressMsg:
@@ -268,6 +290,15 @@ func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if isInterrupt(k) {
 		return m, tea.Quit
 	}
+	// The Settings pane is the root's, and while it is open it is the sole key target: the
+	// root routes every key but the interrupt to it and takes no global key, so esc closes it,
+	// its own edit keys reach it, and a tab switch or a quit key does not fire on the tab
+	// underneath (ADR-0011: focus resolution's one exception is settings).
+	if m.settings.IsOpen() {
+		var cmd tea.Cmd
+		m.settings, cmd = m.settings.Update(k)
+		return m, cmd
+	}
 	if m.tabs[m.active].CapturesInput() {
 		return m.routeKeyToActive(k)
 	}
@@ -284,8 +315,9 @@ func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case key.Matches(k, m.profile.Settings):
-		// The Settings pane is the root's, opened over any tab, and it is stage 13. This
-		// is its reachable-from-any-tab binding, a no-op until the pane is built (R2).
+		// Open the root's Settings pane over the focused tab (ADR-0011, R2). From here every
+		// key routes to the pane until esc closes it.
+		m.settings = m.settings.Open()
 		return m, nil
 	}
 	return m.routeKeyToActive(k)
@@ -403,7 +435,13 @@ func (m Model) revalidateCmd() tea.Cmd {
 // View composes the tab bar over the focused tab's content and sets the terminal-wide
 // fields the tab contract reserves for the root (ADR-0011).
 func (m Model) View() tea.View {
-	content := lipgloss.JoinVertical(lipgloss.Left, m.tabBar(), m.tabs[m.active].View())
+	// The Settings pane, when open, occupies the body over whichever tab is focused, with the
+	// tab bar kept for context (ADR-0011: it is opened over a tab, not as a fourth peer).
+	body := m.tabs[m.active].View()
+	if m.settings.IsOpen() {
+		body = m.settings.View()
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, m.tabBar(), body)
 	return tea.View{
 		Content:     content,
 		AltScreen:   true,

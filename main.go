@@ -246,6 +246,12 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		Revalidated: func() time.Time { return newestRevalidated(transport, disc.PollSet()) },
 		SetViewport: sched.SetViewport,
 		Profile:     profile,
+		// The Settings pane opens over the resolved config and writes changed keys back through
+		// config.Save, preserving comments, key order and keys this version does not recognise
+		// (settings R17, AC11). os.LookupEnv locates the same config.yml Load read at startup, so
+		// the pane's only write is that one local file and never the API.
+		Config:       cfg,
+		SaveSettings: func(prev, next config.Config) error { return config.Save(os.LookupEnv, prev, next) },
 		// The detail pane fetches its Run's Jobs over the same client the whole tool shares,
 		// so the store revalidates and the governor accounts each request (ADR-0015). The
 		// clock is the tool's, so the pane's timing column reads the same wall clock as
