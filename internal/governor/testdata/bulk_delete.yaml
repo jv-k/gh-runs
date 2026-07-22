@@ -1,0 +1,32 @@
+---
+version: 2
+interactions:
+    # One recorded DELETE that succeeds with 204 No Content. With replayable
+    # interactions this single tape answers every DELETE in the reference-scale
+    # Purge (AC3), so the fixture stays small while the test issues tens of
+    # thousands of writes against it. The primary headers are healthy and there
+    # are no reads in flight, so the dynamic ceiling sits at its 2.5/sec cap: the
+    # test proves the pacing, not exhaustion.
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs/1
+        method: DELETE
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        body: ""
+        headers:
+            X-Ratelimit-Remaining:
+                - "4890"
+            X-Ratelimit-Reset:
+                - "1800003600"
+        status: 204 No Content
+        code: 204

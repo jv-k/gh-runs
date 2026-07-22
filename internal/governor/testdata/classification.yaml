@@ -1,0 +1,155 @@
+---
+version: 2
+interactions:
+    # A clean 200. Not a rate-limit response; the consumer treats it normally.
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/clean
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 2
+        body: '{}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4811"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 200 OK
+        code: 200
+    # A 403 that carries no Retry-After and lacks the authorization shape (no
+    # documentation_url). Open question 1 defaults everything but the measured
+    # authorization shape to rate limiting, because misreading a rate limit as
+    # authorization keeps issuing and risks the account block. Note the healthy
+    # x-ratelimit-remaining: a secondary-limit 403 can arrive with primary
+    # headroom to spare, so the header is not the discriminator.
+    - id: 1
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/forbidden_ratelimit
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 103
+        body: '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4976"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # The measured authorization 403 (open question 1): GET on the permissions
+    # endpoint with a token lacking admin returns a documentation_url that points
+    # at THAT endpoint's own reference page, a message naming the missing
+    # permission, no Retry-After, and a healthy x-ratelimit-remaining. The doc URL
+    # corresponds to the called endpoint (actions/permissions), which is the
+    # discriminator: this is an authorization outcome, not a rate limit, so the
+    # consumer skips the Run rather than backing off forever (repo-discovery R10,
+    # purge R20).
+    - id: 2
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/cli/cli/actions/permissions
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 181
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/permissions#get-github-actions-permissions-for-a-repository"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4976"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # A 429. Always a rate-limit response, whatever the primary headers say, and
+    # it carries a Retry-After the governor must honour (R12).
+    - id: 3
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/too_many
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 110
+        body: '{"message":"You have triggered an abuse detection mechanism. Please wait a few minutes before you try again."}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Retry-After:
+                - "60"
+            X-Ratelimit-Remaining:
+                - "0"
+            X-Ratelimit-Reset:
+                - "1789000060"
+        status: 429 Too Many Requests
+        code: 429
+    # A secondary-limit 403 that DOES carry a documentation_url and no
+    # Retry-After. The doc URL points at the rate-limits page, not at the
+    # endpoint the request called (repos/o/r/actions/runs), so it does not match
+    # the measured authorization shape and defaults to rate limiting (open
+    # question 1). The primary x-ratelimit-remaining is healthy: a secondary
+    # limit names the whole token, not the primary allowance, so the header is
+    # not the discriminator. This is the shape a loose message-plus-doc-url
+    # matcher misreads as authorization, which is the account-block direction.
+    - id: 4
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 230
+        body: '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","documentation_url":"https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4952"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403

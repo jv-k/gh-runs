@@ -1,0 +1,37 @@
+---
+version: 2
+interactions:
+    # A write (DELETE) that trips the secondary limit and answers 429 with a
+    # Retry-After of 60 seconds. WithReplayableInteractions lets one taped 429
+    # answer every re-attempt, so the test can prove the governor waits the full
+    # interval before issuing the next write. The primary x-ratelimit-remaining
+    # is healthy on purpose: a secondary-limit response names the whole token, not
+    # the primary allowance, so the governor must not read headroom here as a
+    # reason to keep issuing (R12, open question 1).
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs/1
+        method: DELETE
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 75
+        body: '{"message":"You have exceeded a secondary rate limit. Please retry later."}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Retry-After:
+                - "60"
+            X-Ratelimit-Remaining:
+                - "4890"
+            X-Ratelimit-Reset:
+                - "1800003600"
+        status: 429 Too Many Requests
+        code: 429

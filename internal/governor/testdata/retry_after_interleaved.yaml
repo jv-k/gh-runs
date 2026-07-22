@@ -1,0 +1,64 @@
+---
+version: 2
+interactions:
+    # A write (DELETE) that trips the secondary limit and answers 429 with a
+    # Retry-After of 60 seconds. WithReplayableInteractions lets one taped 429
+    # answer the re-attempt. The primary x-ratelimit-remaining is healthy on
+    # purpose: a secondary-limit response names the whole token, not the primary
+    # allowance (R12, open question 1).
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs/1
+        method: DELETE
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 75
+        body: '{"message":"You have exceeded a secondary rate limit. Please retry later."}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Retry-After:
+                - "60"
+            X-Ratelimit-Remaining:
+                - "4890"
+            X-Ratelimit-Reset:
+                - "1800003600"
+        status: 429 Too Many Requests
+        code: 429
+    # A clean Feed poll (GET, 200) with a healthy primary remaining. purge R14
+    # keeps the Feed polling throughout a Purge, so this interleaved clean read is
+    # the NORMAL case, not an edge. It must not clear the Retry-After hold the 429
+    # established: the hold survives on its own deadline (blocker 2, R12, AC4).
+    - id: 1
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 2
+        body: '{}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4890"
+            X-Ratelimit-Reset:
+                - "1800003600"
+        status: 200 OK
+        code: 200
