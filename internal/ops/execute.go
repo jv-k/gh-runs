@@ -121,7 +121,7 @@ func (o *Ops) Execute(ctx context.Context, c Confirmed) (Summary, error) {
 	switch plan.op {
 	case OpDelete:
 		return o.executeDelete(ctx, plan)
-	case OpCancel, OpForceCancel, OpRerun, OpRerunFailed:
+	case OpCancel, OpForceCancel, OpRerun, OpRerunFailed, OpEnable, OpDisable:
 		return o.executeLifecycle(ctx, plan)
 	default:
 		return Summary{}, fmt.Errorf("ops: Execute does not support operation %q", plan.op)
@@ -147,13 +147,14 @@ func (o *Ops) executeDelete(ctx context.Context, plan Plan) (Summary, error) {
 	})
 }
 
-// executeLifecycle runs a bulk cancel, force-cancel, re-run or re-run-failed. It opens
-// no deletion log and requires none, because none of the four is a deletion: each
-// leaves an object standing on GitHub that carries its own record, so purge R29's log
-// MUST NOT record them (run-lifecycle R24, purge R29 scope). It reuses the Purge's
-// failure contract unchanged (R21): a rate limit backs off and is not a failure, a
-// permission or unexpected error advances the breaker, and the same consecutive count
-// circuit-breaks. Only the per-response classification differs, and mutateItem owns it.
+// executeLifecycle runs a non-deletion mutation set: a cancel, force-cancel, re-run,
+// re-run-failed, or a Workflow enable or disable. It opens no deletion log and requires
+// none, because none of these is a deletion: each leaves an object standing on GitHub
+// that carries its own record, so purge R29's log MUST NOT record them (run-lifecycle
+// R24, workflow-management R5, purge R29 scope). It reuses the Purge's failure contract
+// unchanged (R21): a rate limit backs off and is not a failure, a permission or
+// unexpected error advances the breaker, and the same consecutive count circuit-breaks.
+// Only the per-response classification differs, and mutateItem owns it.
 func (o *Ops) executeLifecycle(ctx context.Context, plan Plan) (Summary, error) {
 	return o.executeSet(ctx, plan, nil, func(ctx context.Context, _ logSink, item Item) (itemResult, error) {
 		return o.mutateItem(ctx, plan.op, plan.debug, item)
@@ -392,6 +393,16 @@ func classifyLifecycle(op Operation, resp *http.Response) (disposition, string) 
 	}
 	code := resp.StatusCode
 	switch op {
+	case OpEnable, OpDisable:
+		// A 204 is the toggle accepted (workflow-management R5). R8 re-reads the list to
+		// reflect the API's reported state rather than inferring it here, so a 2xx is
+		// dispActed and nothing about the new State is assumed. Anything else is a failure,
+		// and R7 makes a 403 despite push a permission failure surfaced with the API's own
+		// reason, never treated as a bug. A rate limit was already returned as dispRetry above.
+		if code >= 200 && code < 300 {
+			return dispActed, ""
+		}
+		return dispFailed, failureReason(resp) // R7: report the API's rejection verbatim
 	case OpCancel, OpForceCancel:
 		switch {
 		case code >= 200 && code < 300:
@@ -411,11 +422,20 @@ func classifyLifecycle(op Operation, resp *http.Response) (disposition, string) 
 	}
 }
 
-// lifecycleRequest builds the POST endpoint, and the re-run body, for one lifecycle
-// operation over a Run (run-lifecycle R6's distinct force-cancel endpoint, R13's distinct
-// re-run-failed endpoint). All four act on Runs alone (R16), so the path is always the
-// Run's. Only re-run and re-run-failed carry a body, and only when debug logging is on.
+// lifecycleRequest builds the endpoint, method and body for one non-deletion mutation.
+// The four Run operations POST the Run's own endpoint (run-lifecycle R6's distinct
+// force-cancel endpoint, R13's distinct re-run-failed endpoint), and only the two re-runs
+// carry a body, and only when debug logging is on. Enable and disable PUT the Workflow's
+// endpoint instead, addressing the Workflow by id, because they act on a Workflow rather
+// than a Run (workflow-management R5). The item's ID is the Workflow id for a toggle and
+// the Run id for the rest, stamped by the constructor, so the path is right for each.
 func lifecycleRequest(op Operation, item Item, debug bool) (method, path string, body io.Reader) {
+	switch op {
+	case OpEnable:
+		return http.MethodPut, workflowPath(item) + "/enable", nil
+	case OpDisable:
+		return http.MethodPut, workflowPath(item) + "/disable", nil
+	}
 	base := fmt.Sprintf("repos/%s/%s/actions/runs/%d", item.Repo.Owner, item.Repo.Name, item.ID)
 	switch op {
 	case OpCancel:
@@ -429,6 +449,13 @@ func lifecycleRequest(op Operation, item Item, debug bool) (method, path string,
 	default:
 		return http.MethodPost, base, nil // unreachable: Execute validated the operation
 	}
+}
+
+// workflowPath is the Workflow's Actions endpoint, addressed by id, that the enable and
+// disable PUTs extend with their verb (workflow-management R5). The id is the Workflow's,
+// carried on the Item the WorkflowItem constructor froze.
+func workflowPath(item Item) string {
+	return fmt.Sprintf("repos/%s/%s/actions/workflows/%d", item.Repo.Owner, item.Repo.Name, item.ID)
 }
 
 // rerunBody is R14's enable_debug_logging opt-in. On the default path it sends no body,

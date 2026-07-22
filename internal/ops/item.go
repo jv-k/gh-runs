@@ -32,11 +32,14 @@ const (
 	KindLog      Kind = "log"
 	KindCache    Kind = "cache"
 	KindArtifact Kind = "artifact"
+	KindWorkflow Kind = "workflow"
 )
 
 // Operation is the verb a Plan was built for. Delete resolves its endpoint per
-// Item Kind. The other four act on Runs alone (run-lifecycle R16, ADR-0019). Only
-// Delete is exercised at stage 9; the rest are the vocabulary later stages fill.
+// Item Kind. Cancel, force-cancel and the two re-runs act on Runs alone
+// (run-lifecycle R16, ADR-0019). Enable and disable act on a Workflow, and are the
+// two reversible PUT writes the rate-governor names among its ten (rate-governor R2,
+// workflow-management R5). All ten travel Execute, the one write path (ADR-0011).
 type Operation string
 
 const (
@@ -45,6 +48,8 @@ const (
 	OpForceCancel Operation = "force-cancel"
 	OpRerun       Operation = "rerun"
 	OpRerunFailed Operation = "rerun-failed"
+	OpEnable      Operation = "enable"
+	OpDisable     Operation = "disable"
 )
 
 // SkipReason is why Execute will not attempt an Item. Stamped by Plan, and the
@@ -56,6 +61,7 @@ const (
 	SkipReadOnly     SkipReason = "repository is read-only"
 	SkipArchived     SkipReason = "repository is archived"
 	SkipNotCompleted SkipReason = "run is not completed"
+	SkipDeleted      SkipReason = "workflow is deleted"
 )
 
 // Item is one member of a frozen set: purge R4's tuple (host, owner, repo, id),
@@ -72,6 +78,7 @@ type Item struct {
 	Run      *domain.Run
 	Cache    *domain.Cache
 	Artifact *domain.Artifact
+	Workflow *domain.Workflow
 
 	// Skip is stamped by Plan. A value a caller sets is overwritten (ADR-0019).
 	Skip SkipReason
@@ -91,6 +98,17 @@ func RunItem(r domain.Run) Item {
 // a Run deletion, so the inspect view renders one shape (ADR-0019).
 func LogItem(r domain.Run) Item {
 	return Item{Repo: r.Repo, Kind: KindLog, ID: r.ID, Run: &r}
+}
+
+// WorkflowItem freezes a Workflow into an Item: Kind "workflow", carrying the
+// Workflow's own id, which the enable and disable endpoints address (workflow-management
+// R5). The Workflow rides along as the display row and carries its State, which Plan
+// reads to refuse a deleted Workflow (R9). Its Repo is the Workflow's owning repository,
+// stamped at fetch, so the toggle resolves to the right repository even under all-repos
+// (R0). The constructor copies the Workflow by value, the same freeze the other
+// constructors make (ADR-0019).
+func WorkflowItem(w domain.Workflow) Item {
+	return Item{Repo: w.Repo, Kind: KindWorkflow, ID: w.ID, Workflow: &w}
 }
 
 // CacheItem freezes a Cache into an Item (storage-reclamation R17).

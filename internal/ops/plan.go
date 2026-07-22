@@ -134,6 +134,13 @@ func skipFor(op Operation, it Item, repo domain.Repo) SkipReason {
 	if op == OpDelete && it.Kind == KindRun && it.Run != nil && it.Run.Status != domain.StatusCompleted {
 		return SkipNotCompleted
 	}
+	// R9: a deleted Workflow's YAML is gone, so enable and disable have no meaning and
+	// neither is offered. The tab refuses to offer the action, and Plan refuses to build
+	// one for it too, so R9 is a property of the write path and not only of a well-behaved
+	// tab (ADR-0019, workflow-management R9).
+	if (op == OpEnable || op == OpDisable) && it.Kind == KindWorkflow && it.Workflow != nil && it.Workflow.State == domain.StateDeleted {
+		return SkipDeleted
+	}
 	return SkipNone
 }
 
@@ -142,6 +149,13 @@ func skipFor(op Operation, it Item, repo domain.Repo) SkipReason {
 // threshold, prices at TypedCount (R7, R8). Everything else prices at YN, and
 // OpDelete never reaches None at any size, because it is never a re-run.
 func frictionFor(op Operation, items []Item, threshold int) FrictionLevel {
+	// Enable and disable are reversible, so the workflow-management canon asks for no
+	// confirmation: disabling stops future triggered Runs and cancels none already going,
+	// and re-enabling is one keystroke away (R5, R8). They price at None regardless of the
+	// set, the same level a single re-run takes for the same reason (run-lifecycle R18).
+	if op == OpEnable || op == OpDisable {
+		return FrictionNone
+	}
 	if (op == OpRerun || op == OpRerunFailed) && len(items) == 1 {
 		return FrictionNone
 	}
