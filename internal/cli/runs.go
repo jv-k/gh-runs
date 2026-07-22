@@ -8,10 +8,10 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
+	"github.com/jv-k/gh-runs/v2/internal/ghlink"
 )
 
 // apiRunsPage is the fragment of an actions/runs listing the CLI reads. It
@@ -144,55 +144,5 @@ func getRunsPage(client Requester, path string) ([]domain.Run, string, error) {
 	if err := json.Unmarshal(body, &page); err != nil {
 		return nil, "", fmt.Errorf("list %s: decode: %w", path, err)
 	}
-	return page.WorkflowRuns, nextLink(resp.Header.Get("Link")), nil
-}
-
-// nextLink extracts the rel="next" URL from a Link header, or "" when none is
-// present. The scan walks angle-bracket pairs rather than splitting on commas,
-// because a GitHub Actions listing URL can carry commas of its own in a query, so
-// a naive split would tear the URL apart. It mirrors discovery's own Link parse,
-// kept local because a package may not reach into another's unexported helpers
-// (ADR-0011). Carry-forward, decided not to change now: the dedup with discovery's
-// copy waits for a third consumer, the Purge crawl at stage 9. A third copy is the
-// trigger to promote this angle-bracket walk to an exported helper on a leaf
-// package, rather than copy it a third time.
-func nextLink(header string) string {
-	for header != "" {
-		lt := strings.IndexByte(header, '<')
-		if lt < 0 {
-			return ""
-		}
-		gt := strings.IndexByte(header[lt:], '>')
-		if gt < 0 {
-			return ""
-		}
-		gt += lt
-		link := header[lt+1 : gt]
-
-		rest := header[gt+1:]
-		params := rest
-		if nextLT := strings.IndexByte(rest, '<'); nextLT >= 0 {
-			params = rest[:nextLT]
-			header = rest[nextLT:]
-		} else {
-			header = ""
-		}
-		if relIsNext(params) {
-			return link
-		}
-	}
-	return ""
-}
-
-// relIsNext reports whether a link's parameter list declares rel="next",
-// tolerating GitHub's quoting and spacing.
-func relIsNext(params string) bool {
-	for _, attr := range strings.FieldsFunc(params, func(r rune) bool { return r == ';' || r == ',' }) {
-		attr = strings.ReplaceAll(attr, "\"", "")
-		attr = strings.ReplaceAll(attr, " ", "")
-		if attr == "rel=next" {
-			return true
-		}
-	}
-	return false
+	return page.WorkflowRuns, ghlink.Next(resp.Header.Get("Link")), nil
 }

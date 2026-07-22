@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/ghlink"
 )
 
 // apiRepo is the fragment of a /user/repos entry discovery reads. The permissions
@@ -103,7 +104,7 @@ func (d *Discovery) enumeratePage(ctx context.Context, path string) ([]apiRepo, 
 	if err := json.Unmarshal(body, &repos); err != nil {
 		return nil, "", fmt.Errorf("enumerate %s: decode: %w", path, err)
 	}
-	return repos, nextLink(resp.Header.Get("Link")), nil
+	return repos, ghlink.Next(resp.Header.Get("Link")), nil
 }
 
 // splitFullName recovers owner and name from full_name ("owner/repo") when the
@@ -124,57 +125,4 @@ func splitFullName(fullName, owner, name string) (string, string) {
 		name = parts[1]
 	}
 	return owner, name
-}
-
-// nextLink extracts the rel="next" URL from a Link header, or "" when none is
-// present (R1). An unfiltered listing's Link is honest: rel="next" disappears at
-// the true end (ADR-0005), so its absence is the loop's stop condition.
-//
-// The parse is bracket-aware rather than a comma split, because the enumeration
-// URL carries commas of its own: affiliation=owner,collaborator,organization_member
-// (R1). A naive split on the Link header's entry separator would tear that query
-// apart and never find the next page. Each link is a <URL> followed by its
-// parameters up to the next '<', so the scan walks angle-bracket pairs and reads
-// the parameters between them.
-func nextLink(header string) string {
-	for header != "" {
-		lt := strings.IndexByte(header, '<')
-		if lt < 0 {
-			return ""
-		}
-		gt := strings.IndexByte(header[lt:], '>')
-		if gt < 0 {
-			return ""
-		}
-		gt += lt
-		url := header[lt+1 : gt]
-
-		rest := header[gt+1:]
-		params := rest
-		if next := strings.IndexByte(rest, '<'); next >= 0 {
-			params = rest[:next]
-			header = rest[next:]
-		} else {
-			header = ""
-		}
-		if relIsNext(params) {
-			return url
-		}
-	}
-	return ""
-}
-
-// relIsNext reports whether a link's parameter list declares rel="next",
-// tolerating the quoting and spacing GitHub uses. It splits on both attribute
-// separators so a stray comma before the next entry does not fold two attributes
-// into one.
-func relIsNext(params string) bool {
-	for _, attr := range strings.FieldsFunc(params, func(r rune) bool { return r == ';' || r == ',' }) {
-		attr = strings.ReplaceAll(attr, "\"", "")
-		attr = strings.ReplaceAll(attr, " ", "")
-		if attr == "rel=next" {
-			return true
-		}
-	}
-	return false
 }
