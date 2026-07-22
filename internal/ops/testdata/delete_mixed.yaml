@@ -1,0 +1,65 @@
+---
+version: 2
+interactions:
+    # Run 1: a clean DELETE. 204 No Content, the Run is gone because we deleted it.
+    # Logged 'deleted' (purge R29, AC19).
+    - id: 0
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining:
+                - "4980"
+            X-Ratelimit-Reset:
+                - "1789000000"
+    # Run 2: a 404. The Run is already gone, which is what was asked, so it counts as
+    # a success and is logged 'gone', held apart from 'deleted' (R18, R29, AC12, AC19).
+    - id: 1
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/2
+      response:
+        status: 404 Not Found
+        code: 404
+        body: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4979"
+    # Run 3: the API rejects an in-progress Run with 409. A Run recorded completed at
+    # crawl but now running is a skip carrying its reason, no cancel issued (R12,
+    # AC16a). The write-time rejection is the guard, synchronous with the write.
+    - id: 2
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/3
+      response:
+        status: 409 Conflict
+        code: 409
+        body: '{"message":"Cannot delete a workflow run that is in progress.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#delete-a-workflow-run"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4978"
+    # Run 4: an authorization 403 whose documentation_url points at this endpoint's own
+    # reference page, the measured authorization shape. The governor classifies it as
+    # NOT a rate limit, so it is a failure, logged 'failed' with its reason (R20, AC19).
+    - id: 3
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/4
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Must have admin rights to Repository.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#delete-a-workflow-run"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4977"

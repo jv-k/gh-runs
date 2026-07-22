@@ -1,0 +1,94 @@
+---
+version: 2
+# Eight clean DELETEs, one per Run id 1 through 8, each 204 No Content. Used where the
+# property under test is not the response (single-use, the write-only log, the only-DELETE
+# proof, cancellation), so every attempt succeeds and the test reads the counter and the log.
+interactions:
+    - id: 0
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 1
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/2
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4899"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 2
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/3
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4898"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 3
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/4
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4897"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 4
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/5
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4896"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 5
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/6
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4895"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 6
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/7
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4894"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 7
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/8
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4893"]
+            X-Ratelimit-Reset: ["1789000000"]

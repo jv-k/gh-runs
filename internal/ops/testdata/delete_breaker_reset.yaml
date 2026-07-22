@@ -1,0 +1,62 @@
+---
+version: 2
+# Two authorization 403s, then a clean 204, then two more 403s. With the breaker threshold at
+# 3 the middle success resets the consecutive counter, so the streak reaches only 2 either side
+# and the Purge never breaks: all five DELETEs are attempted (purge R21, AC13's "one success
+# resets"). Four failures are recorded and one deletion.
+interactions:
+    - id: 0
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Must have admin rights to Repository.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#delete-a-workflow-run"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4100"]
+    - id: 1
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/2
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Must have admin rights to Repository.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#delete-a-workflow-run"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4099"]
+    - id: 2
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/3
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4098"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 3
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/4
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Must have admin rights to Repository.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#delete-a-workflow-run"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4097"]
+    - id: 4
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/5
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Must have admin rights to Repository.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#delete-a-workflow-run"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4096"]
