@@ -149,13 +149,13 @@ func printDryRun(deps Deps, plan ops.Plan) error {
 		if it.Skip != ops.SkipNone {
 			row += "\t(skipped: " + string(it.Skip) + ")"
 		}
-		fmt.Fprintln(deps.Stdout, row)
+		_, _ = fmt.Fprintln(deps.Stdout, row)
 	}
-	fmt.Fprintf(deps.Stderr, "gh-runs: dry run: %d Runs would be deleted", plan.Total()-plan.Skipped())
+	note := fmt.Sprintf("gh-runs: dry run: %d Runs would be deleted", plan.Total()-plan.Skipped())
 	if plan.Skipped() > 0 {
-		fmt.Fprintf(deps.Stderr, ", %d skipped", plan.Skipped())
+		note += fmt.Sprintf(", %d skipped", plan.Skipped())
 	}
-	fmt.Fprintln(deps.Stderr, " (no DELETE issued, no log written)")
+	_, _ = fmt.Fprintln(deps.Stderr, note+" (no DELETE issued, no log written)")
 	return nil
 }
 
@@ -164,15 +164,15 @@ func printDryRun(deps Deps, plan ops.Plan) error {
 // reason (R22, AC18). It is the terminal account the CLI prints; the live progress a
 // TUI shows is the running-Purge surface's.
 func printSummary(deps Deps, sum ops.Summary) {
-	fmt.Fprintf(deps.Stdout, "Deleted %d, gone %d, skipped %d, failed %d of %d Runs.\n",
+	_, _ = fmt.Fprintf(deps.Stdout, "Deleted %d, gone %d, skipped %d, failed %d of %d Runs.\n",
 		sum.Deleted, sum.Gone, sum.Skipped, sum.FailedCount(), sum.Total)
 	groups := append([]ops.FailureGroup(nil), sum.Failures...)
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Reason < groups[j].Reason })
 	for _, g := range groups {
-		fmt.Fprintf(deps.Stdout, "  %d x %s\n", g.Count, g.Reason)
+		_, _ = fmt.Fprintf(deps.Stdout, "  %d x %s\n", g.Count, g.Reason)
 	}
 	if sum.Reason != "" {
-		fmt.Fprintln(deps.Stdout, sum.Reason)
+		_, _ = fmt.Fprintln(deps.Stdout, sum.Reason)
 	}
 }
 

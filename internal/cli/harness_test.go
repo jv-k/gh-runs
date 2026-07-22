@@ -252,17 +252,6 @@ func (h *harness) runDriven(args ...string) int {
 	return <-done
 }
 
-// withSnapshot sets the discovered capability snapshot Plan gates eligibility on, so a
-// test can mark a repository read-only or archived (purge R10, R11).
-func (h *harness) withSnapshot(repos ...domain.Repo) *harness {
-	m := make(map[domain.RepoID]domain.Repo)
-	for _, r := range repos {
-		m[r.ID] = r
-	}
-	h.snapshot = m
-	return h
-}
-
 // logExists reports whether the deletion log was written, so a test proves --dry-run
 // writes none (cli-surface R10, AC9).
 func (h *harness) logExists() bool {
