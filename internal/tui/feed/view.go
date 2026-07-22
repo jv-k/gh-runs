@@ -45,6 +45,9 @@ var (
 	styleCapLabel   = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
 	styleSelected   = lipgloss.NewStyle().Foreground(lipgloss.Color("#5fafff"))
 	styleDim        = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
+	// styleBadge is the approvals badge, in the same purple the waiting Status carries, so the
+	// count of Runs awaiting a decision reads as the awaiting hue (approvals R8).
+	styleBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#af87ff"))
 
 	// Action-state decoration on the repository cell, four visibly distinct renderings
 	// (R36's third golden). Offered is plain; the three refusals each differ.
@@ -87,6 +90,12 @@ func (m Model) View() string {
 	if m.confirmOpen {
 		return m.confirm.View()
 	}
+	// The decision pane is a modal too: while it is open it replaces the list, so the operator
+	// reads the awaiting Run and its environments rather than the Feed behind it (approvals R11,
+	// R12).
+	if m.approvalOpen {
+		return m.approval.View()
+	}
 	if m.width < minWidth {
 		return m.narrowMessage()
 	}
@@ -94,6 +103,9 @@ func (m Model) View() string {
 	var top, bottom []string
 	if b, ok := m.bannerLine(); ok {
 		top = append(top, b)
+	}
+	if a, ok := m.approvalBadgeLine(); ok {
+		top = append(top, a)
 	}
 	if c, ok := m.capLabelLine(); ok {
 		top = append(top, c)
@@ -153,6 +165,9 @@ func (m Model) rowCapacity() int {
 func (m Model) chromeLineCount() int {
 	n := 1 // header
 	if _, ok := m.bannerLine(); ok {
+		n++
+	}
+	if _, ok := m.approvalBadgeLine(); ok {
 		n++
 	}
 	if _, ok := m.capLabelLine(); ok {
@@ -388,6 +403,22 @@ func (m Model) bannerLine() (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// approvalBadgeLine is the approvals badge: the count of held Runs awaiting a human decision,
+// shown whenever the count exceeds zero and absent when it returns to zero, so it never becomes
+// permanent chrome (approvals R8, AC7). Its wording is neutral, Runs awaiting a decision rather
+// than Runs the account must act on, because reviewer standing is not knowable from Feed data
+// (R10). It names the saved-filter key, so the badge is activatable to narrow the Feed to
+// exactly these Runs (R9). The count is held data, not a fresh request (R5, AC4).
+func (m Model) approvalBadgeLine() (string, bool) {
+	n := m.approvalCount()
+	if n == 0 {
+		return "", false
+	}
+	label := fmt.Sprintf("%d %s awaiting a decision (press %s to filter)",
+		n, plural(n, "run", "runs"), m.profile.ApprovalsFilter.Help().Key)
+	return styleBadge.Render(label), true
 }
 
 // capLabelLine is R24's honest cap label. It shows the reachable count first and the

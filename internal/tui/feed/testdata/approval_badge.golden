@@ -1,0 +1,6 @@
+[1;38;2;175;135;255m2 runs awaiting a decision (press b to filter)[m
+[1mREPOSITORY           WORKFLOW           STATUS      CONCLUSION      RUN ID      STARTED             [m
+[7mo/r                 [m [7mCI                [m [7;38;2;138;138;138mcompleted  [m [7;38;2;255;175;0maction_required[m [7m29516338954[m [7m2026-07-15T16:39:00Z[m
+o/r                  Deploy             [38;2;175;135;255mwaiting    [m                 29516338001 2026-07-15T15:39:00Z
+o/r                  CI                 [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m 29516337000 2026-07-15T14:39:00Z
+[38;2;138;138;138m↓/↑ move  space select  / filter  r refresh  ? help  q quit[m  [38;2;138;138;138mStandard[m

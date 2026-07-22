@@ -1,0 +1,20 @@
+---
+version: 2
+# A pending-deployment review that approves (approvals R12). The POST carries the
+# environment ids, the state approved and the comment, and a 200 returns the affected
+# deployments. The matcher ignores the request body, so the tape asserts the endpoint and
+# the tool asserts the body it sent. No live review is issued: this is replayed in
+# ModeReplayOnly.
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/456/pending_deployments
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"environment":{"id":3734916060,"name":"scribe-protected"}}]'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]

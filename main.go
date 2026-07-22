@@ -36,6 +36,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 	"github.com/jv-k/gh-runs/v2/internal/tui"
+	"github.com/jv-k/gh-runs/v2/internal/tui/approval"
 	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
 	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
@@ -281,6 +282,13 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		// every other (R17).
 		LogFetch:  logview.ClientFetch(client),
 		LogExport: logview.ClientExport(client, exportDir()),
+		// The approvals decision pane approves a fork-PR Run or reviews a Run's pending deployments
+		// through the same ops engine every other write uses, so an approve and a review are paced
+		// and travel ops's write path (approvals R11, R12), and it reads the pending deployments
+		// over the same client the whole tool shares (R12). An approve and a review are single POSTs
+		// beside Execute, so the sole-DELETE and sole-deletion-log invariant is untouched.
+		Approver:      purge,
+		ApprovalFetch: approval.NewClientFetch(client),
 	})
 
 	// tea.WithContext ties the program to the same context the engine runs under, so a

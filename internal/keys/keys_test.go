@@ -169,6 +169,7 @@ func TestNoDuplicateListKey(t *testing.T) {
 			{"ToggleSelect", p.ToggleSelect}, {"Delete", p.Delete},
 			{"Cancel", p.Cancel}, {"ForceCancel", p.ForceCancel}, {"Rerun", p.Rerun}, {"RerunFailed", p.RerunFailed},
 			{"ArtifactsOnly", p.ArtifactsOnly}, {"ToggleWorkflow", p.ToggleWorkflow},
+			{"Approve", p.Approve}, {"ApprovalsFilter", p.ApprovalsFilter},
 			{"Refresh", p.Refresh}, {"OpenDetail", p.OpenDetail}, {"Filter", p.Filter}, {"Help", p.Help}, {"Quit", p.Quit},
 		}
 		seen := map[string]string{}
@@ -248,6 +249,30 @@ func TestLogViewBindings(t *testing.T) {
 	assertLogView(t, "Standard", keys.Standard)
 	if containsKey(keys.Vim.LogDelete, "d") {
 		t.Errorf("LogDelete binds d, which is Run deletion; R17 requires a distinct keystroke and AC6 forbids one key doing both")
+	}
+}
+
+// assertApprovals pins the two approvals-stage keys (BUILD-ORDER stage 12), identical in
+// both profiles like Delete. The canon names no literal for either, so these are the chosen
+// unclaimed keys the package documents: A opens the approval decision over the cursor awaiting
+// Run and submits it (approvals R11, R12), and b applies the saved filter behind the badge
+// (approvals R9). Transcribed from the package doc, not read back off the binding, so a drift
+// from the documented choice fails here.
+func assertApprovals(t *testing.T, name string, p keys.Profile) {
+	t.Helper()
+	assertKeys(t, name+".Approve", p.Approve, "A")                 // approvals R11, R12
+	assertKeys(t, name+".ApprovalsFilter", p.ApprovalsFilter, "b") // approvals R9
+}
+
+// TestApprovalsBindings pins the stage-12 approvals keys over both profiles, and their
+// sameness: a forked binding fails one of the two runs. A is deliberately distinct from a
+// (the Storage tab's Artifacts-only filter), so the shift is a different action, and both are
+// distinct from every other list binding, which TestNoDuplicateListKey guards.
+func TestApprovalsBindings(t *testing.T) {
+	assertApprovals(t, "Vim", keys.Vim)
+	assertApprovals(t, "Standard", keys.Standard)
+	if containsKey(keys.Vim.Approve, "a") {
+		t.Errorf("Approve binds a, which is the Storage tab's Artifacts-only filter; the approvals action is A")
 	}
 }
 

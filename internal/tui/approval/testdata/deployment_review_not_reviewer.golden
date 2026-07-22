@@ -1,0 +1,10 @@
+[1mReview pending deployments[m
+[38;2;138;138;138m  acme/api run 42  Deploy[m
+
+[38;2;138;138;138m  Environments awaiting a decision:[m
+    production[38;2;255;175;0m  (not your review)[m[38;2;138;138;138m  reviewers: release-team[m
+
+  Decision: [1m[approve][m [38;2;138;138;138m reject [m
+  Comment: [38;2;255;175;0mrequired[m
+
+[38;2;138;138;138m  space decision   enter comment   A submit   esc close[m

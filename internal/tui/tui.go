@@ -29,6 +29,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
+	"github.com/jv-k/gh-runs/v2/internal/tui/approval"
 	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
 	"github.com/jv-k/gh-runs/v2/internal/tui/feed"
 	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
@@ -113,6 +114,12 @@ type Options struct {
 	// over the shared client; the log-deletion planner reuses Ops, the one mutation entry.
 	LogFetch  logview.Fetch
 	LogExport logview.Exporter
+	// The approvals decision pane the Feed opens over an awaiting Run runs its two writes through
+	// the shared ops engine (Approver) and reads a Run's pending deployments over the shared client
+	// (ApprovalFetch) (approvals R11, R12). main.go wires both, so an approve and a review are paced
+	// and travel ops's write path exactly as every other write does.
+	Approver      approval.Approver
+	ApprovalFetch approval.Fetcher
 }
 
 // Model is the root. It holds the three tabs, the focused index, and the seams it pulls
@@ -139,13 +146,15 @@ type Model struct {
 // capability data the Feed's gate reads.
 func New(opts Options) Model {
 	f := feed.New(feed.Options{
-		Profile:     opts.Profile,
-		SetViewport: opts.SetViewport,
-		DetailFetch: opts.DetailFetch,
-		Clock:       opts.Clock,
-		Ops:         opts.Ops,
-		LogFetch:    opts.LogFetch,
-		LogExport:   opts.LogExport,
+		Profile:       opts.Profile,
+		SetViewport:   opts.SetViewport,
+		DetailFetch:   opts.DetailFetch,
+		Clock:         opts.Clock,
+		Ops:           opts.Ops,
+		LogFetch:      opts.LogFetch,
+		LogExport:     opts.LogExport,
+		Approver:      opts.Approver,
+		ApprovalFetch: opts.ApprovalFetch,
 	})
 	// The Storage tab shares the account's discovered repositories with the Feed's gate: it
 	// fans one cache-usage request out over them (R0) and reads their permissions and

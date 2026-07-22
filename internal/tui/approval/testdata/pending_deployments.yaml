@@ -1,0 +1,18 @@
+---
+version: 2
+# The environments a waiting Run awaits, taped from the pending_deployments endpoint
+# (approvals R12, real sample pytorch/pytorch run 29350572503, environment scribe-protected).
+# The read returns the ids the review targets with the names to label them, and
+# current_user_can_approve and the reviewers ride along (R10). No live request is issued: this
+# is replayed in ModeReplayOnly.
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/runs/456/pending_deployments
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"environment":{"id":3734916060,"node_id":"MDExOkVudmlyb25tZW50","name":"scribe-protected","url":"https://api.github.com/repos/o/r/environments/scribe-protected","html_url":"https://github.com/o/r/deployments/activity_log?environments_filter=scribe-protected"},"wait_timer":0,"wait_timer_started_at":null,"current_user_can_approve":true,"reviewers":[{"type":"User","reviewer":{"login":"octocat","id":1}},{"type":"Team","reviewer":{"name":"deploy-team","slug":"deploy-team","id":2}}]}]'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
