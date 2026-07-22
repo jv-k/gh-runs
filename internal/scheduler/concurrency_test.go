@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jonboulle/clockwork"
+
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/limiter"
 )
@@ -50,6 +52,18 @@ func TestConcurrencyIsBoundedByLimiter(t *testing.T) {
 	if final := base.peak(); final > limiter.Bound {
 		t.Errorf("peak over the whole run = %d, exceeded the limiter's bound of %d", final, limiter.Bound)
 	}
+}
+
+// TestStopIsIdempotent is the double-Stop guard. A second Stop must be a safe no-op:
+// without the guard it closes the already-closed Updates channel and panics. The Feed
+// owns quit (ADR-0015), so a defensive second Stop from a shutdown path must not crash
+// the process.
+func TestStopIsIdempotent(t *testing.T) {
+	clk := clockwork.NewFakeClockAt(t0)
+	s := New(Options{Clock: clk})
+	s.Start(t.Context())
+	s.Stop()
+	s.Stop() // must not panic on the second close
 }
 
 // TestStopUnwindsInFlightPoll is ADR-0018's quit contract. Stop cancels the root

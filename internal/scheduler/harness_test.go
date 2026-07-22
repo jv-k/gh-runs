@@ -276,7 +276,6 @@ type harness struct {
 	updates []Update
 	updated chan struct{}
 	drainWG sync.WaitGroup
-	started bool
 }
 
 // harnessConfig customises a harness before its Scheduler is built.
@@ -344,18 +343,13 @@ func (h *harness) waitPolls(t *testing.T, n int) {
 func (h *harness) start(t *testing.T) {
 	t.Helper()
 	h.s.Start(t.Context())
-	h.started = true
 	t.Cleanup(func() { h.stop() })
 }
 
-// stop stops the engine once and waits for the Updates drainer to finish. It is
-// idempotent, so a test may call it explicitly to assert quit behaviour and the
-// cleanup will not stop a second time.
+// stop stops the engine and waits for the Updates drainer to finish. Scheduler.Stop
+// is idempotent, so a test may call this explicitly to assert quit behaviour and the
+// registered cleanup runs it again as a safe no-op.
 func (h *harness) stop() {
-	if !h.started {
-		return
-	}
-	h.started = false
 	h.s.Stop()
 	h.drainWG.Wait()
 }

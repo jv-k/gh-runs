@@ -60,6 +60,28 @@ func TestSlowTierIsDeterministicAndConditional(t *testing.T) {
 	}
 }
 
+// TestViewportChangeWakesTheLoop is AC17 at the loop level. A repository scrolled
+// into view is promoted from the slow tier to the medium tier promptly, because
+// SetViewport wakes the sleeping loop rather than leaving the promotion to wait out
+// the up-to-30s slow interval the loop was asleep on. It is symmetric with the
+// poll-driven tier change that already wakes the loop (R8).
+func TestViewportChangeWakesTheLoop(t *testing.T) {
+	a := gh("acme", "a")
+	h := newHarness(t, harnessConfig{base: stubRT{}, pollSet: []domain.RepoID{a}})
+	h.start(t)
+
+	// Cold start: A holds only a completed Run and is off screen, so it is slow-tier
+	// and the loop goes to sleep on the 30s slow interval.
+	h.waitPolls(t, 1)
+	h.waitSettle(t, slowTarget)
+
+	// Scroll A into view. Without a wake this promotion would be adopted only at the
+	// next 30s tick; with it the loop re-evaluates at once and settles on the 5s
+	// medium interval, though no virtual time has passed.
+	h.s.SetViewport([]domain.RepoID{a})
+	h.waitSettle(t, mediumTarget)
+}
+
 // TestConditionalPollIsFreeAndSilent is AC16 and R22: a 200 with an ETag followed by
 // a 304 for the same resource. The cold-start 200 reveals a live Run and is delivered
 // to the Feed; the steady-state 304 costs zero primary allowance, is counted as a

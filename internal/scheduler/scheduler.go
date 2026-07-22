@@ -48,6 +48,13 @@ type Update struct {
 // to what the scheduler uses. A cassette-backed ghclient.Client fills it for the
 // wire-fidelity tests; a gated fake fills it where the property under test is
 // orchestration rather than the wire (R22).
+//
+// Stage-7 carry-forward: Request takes no context (ADR-0012), so Stop cannot cancel an
+// in-flight poll (a hung connection can delay quit) and the loop learns of exhaustion
+// only at its next timer fire (the pause banner can lag one tier interval). Both are
+// the safe direction, no hammering. The Feed closes this when it wires the scheduler
+// at stage 7, by adding Stop cancellation and a transport response-header timeout or a
+// context on ghclient.Request. This is the recurring ghclient-context carry-forward.
 type Requester interface {
 	Request(method, path string, body io.Reader) (*http.Response, error)
 }
@@ -127,9 +134,10 @@ type Scheduler struct {
 	// asserts. Production leaves it nil.
 	polled chan struct{}
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	stopOnce sync.Once // Stop is idempotent: only the first call closes updates
 }
 
 // New returns a Scheduler over opts. It reads nothing and issues no request: a
@@ -166,13 +174,16 @@ func (s *Scheduler) Start(ctx context.Context) {
 // unwind through the WaitGroup, then closes Updates (ADR-0018). In-flight reads
 // complete rather than draining, because they are side-effect free and their
 // responses have no consumer after quit. A poll blocked on an emit is released by
-// the cancelled context.
+// the cancelled context. Stop is idempotent: a second call is a safe no-op, so a
+// defensive Stop from a shutdown path never closes the already-closed Updates channel.
 func (s *Scheduler) Stop() {
-	if s.cancel != nil {
-		s.cancel()
-	}
-	s.wg.Wait()
-	close(s.updates)
+	s.stopOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.wg.Wait()
+		close(s.updates)
+	})
 }
 
 // Paused reports whether scheduling is stopped by Budget exhaustion and the instant
@@ -301,6 +312,11 @@ func (s *Scheduler) SetViewport(ids []domain.RepoID) {
 		next[id.String()] = true
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.viewport = next
+	s.mu.Unlock()
+	// A scroll can promote a repository from the slow tier to the medium tier, so wake
+	// the loop to adopt the new cadence now rather than at the next scheduling
+	// decision, which could be a full slow interval (30s) away while the loop sleeps.
+	// This is symmetric with the poll-driven tier change that wakes the loop (R8).
+	s.signalWake()
 }
