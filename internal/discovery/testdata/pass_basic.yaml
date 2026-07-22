@@ -1,0 +1,151 @@
+---
+version: 2
+interactions:
+    # Interaction 0: enumeration page 1. Three repositories, and a Link header
+    # whose rel="next" points at page 2, so the walk continues (repo-discovery R1).
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"alpha","full_name":"jv-k/alpha","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"beta","full_name":"jv-k/beta","owner":{"login":"jv-k"},"permissions":{"admin":false,"maintain":false,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"gamma","full_name":"jv-k/gamma","owner":{"login":"jv-k"},"permissions":{"admin":false,"maintain":false,"push":false,"triage":false,"pull":true},"archived":true,"disabled":false}]'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"enum-page-1"'
+            Link:
+                - '<https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all&page=2>; rel="next", <https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all&page=2>; rel="last"'
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4990"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "10"
+    # Interaction 1: enumeration page 2. Two repositories, and a Link header
+    # carrying prev and first but NO next: the listing is exhausted, so the walk
+    # stops here and a third page is never requested (AC1).
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all&page=2
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"delta","full_name":"jv-k/delta","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"epsilon","full_name":"jv-k/epsilon","owner":{"login":"jv-k"},"permissions":{"admin":false,"maintain":false,"push":false,"triage":false,"pull":true},"archived":false,"disabled":false}]'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"enum-page-2"'
+            Link:
+                - '<https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all>; rel="prev", <https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all>; rel="first"'
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4989"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "11"
+    # Interaction 2: alpha's probe. Non-empty workflow_runs, so alpha has Runs and
+    # enters the poll set (R3).
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":1,"workflow_runs":[{"id":101,"status":"completed","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"runs-alpha-1"'
+            X-Ratelimit-Remaining:
+                - "4988"
+            X-Ratelimit-Used:
+                - "12"
+    # Interaction 3: beta's probe. total_count is 5 but workflow_runs is empty. A
+    # classification drawn from total_count would call beta a poll-set member; the
+    # classification is drawn from the array, so beta has no Runs (R4, AC5). This is
+    # the interaction that fails if total_count is ever trusted.
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/beta/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":5,"workflow_runs":[]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"runs-beta-1"'
+            X-Ratelimit-Remaining:
+                - "4987"
+            X-Ratelimit-Used:
+                - "13"
+    # Interaction 4: gamma's probe. gamma is archived, and it is probed on the same
+    # terms as any other repository (R5, AC6): its Runs are non-empty, so it enters
+    # the poll set, and its capability is marked permanently read-only elsewhere.
+    - id: 4
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/gamma/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"workflow_runs":[{"id":301,"status":"completed","name":"release"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"runs-gamma-1"'
+            X-Ratelimit-Remaining:
+                - "4986"
+            X-Ratelimit-Used:
+                - "14"
+    # Interaction 5: delta's probe. Empty workflow_runs, so no Runs.
+    - id: 5
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/delta/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":0,"workflow_runs":[]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"runs-delta-1"'
+            X-Ratelimit-Remaining:
+                - "4985"
+            X-Ratelimit-Used:
+                - "15"
+    # Interaction 6: epsilon's probe. Non-empty, so epsilon has Runs. epsilon lacks
+    # push, so its capability is refused but not permanent (it is not archived).
+    - id: 6
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/epsilon/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":3,"workflow_runs":[{"id":501,"status":"in_progress","name":"deploy"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"runs-epsilon-1"'
+            X-Ratelimit-Remaining:
+                - "4984"
+            X-Ratelimit-Used:
+                - "16"

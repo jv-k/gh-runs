@@ -16,11 +16,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/config"
+	"github.com/jv-k/gh-runs/v2/internal/discovery"
 	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
+	"github.com/jv-k/gh-runs/v2/internal/limiter"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 )
 
@@ -43,17 +46,21 @@ func run() error {
 		fmt.Fprintln(os.Stderr, "gh-runs: config:", d.Message)
 	}
 
-	// The transport chain, nested per ADR-0012 and BUILD-ORDER's floor:
+	// The transport chain, nested per ADR-0012, ADR-0018 and BUILD-ORDER's floor:
 	//
-	//     store.NewTransport(governor.New(base, clk), dir, clk)
+	//     store.NewTransport(governor.New(limiter.New(base, Bound), clk), dir, clk)
 	//
 	// The store is outermost of ours and dials through the governor, which sits
 	// under it and above the network so it observes real network exchanges and
 	// only those. A 304 reaches the governor as a 304, before the store rewrites
-	// it to a 200. http.DefaultTransport is the base in production; a cassette is
-	// the base in a test, injected through this same parameter (local-store R19a).
+	// it to a 200. The limiter is innermost, directly above the base, bounding the
+	// whole process at Bound requests on the wire (ADR-0018): a slot measures what
+	// GitHub's concurrency cap measures, so it sits below the governor's pacing.
+	// http.DefaultTransport is the base in production; a cassette is the base in a
+	// test, injected through this same parameter one layer below the limiter
+	// (local-store R19a, ADR-0018 Consequences).
 	base := http.DefaultTransport
-	gov := governor.New(base, clk)
+	gov := governor.New(limiter.New(base, limiter.Bound), clk)
 	transport := store.NewTransport(gov, storeDir(), clk)
 
 	// go-gh installs our transport as opts.Transport with its own cache off
@@ -62,9 +69,34 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	_ = client // The surfaces that exercise the client arrive in later stages.
 
-	fmt.Printf("gh-runs: transport chain wired, budget tier %q (stage 0 floor)\n", cfg.Budget)
+	// Discovery stands on the whole chain: it issues its enumeration and probes
+	// through the client (so the governor accounts them and the store revalidates
+	// them, repo-discovery R17, R12), persists its classification and capability
+	// through the store's document primitive (local-store R2), and reads the
+	// governor's Budget Readout to stop a burst that meets exhaustion (R17). The
+	// store satisfies discovery.Store, the governor satisfies discovery.Budget, and
+	// main.go is the one place that knows all three, exactly as it is for the
+	// transport chain itself (ADR-0011). CurrentRepo is the fast-path resolver with
+	// the GH_TOKEN-aware error R14 requires.
+	disc := discovery.New(discovery.Options{
+		Client:  client,
+		Store:   transport,
+		Budget:  gov,
+		Clock:   clk,
+		Refresh: time.Duration(cfg.DiscoveryRefreshMinutes) * time.Minute,
+		Current: ghclient.CurrentRepo,
+	})
+
+	// A cold start paints from the persisted results before any request goes out
+	// (local-store R5, repo-discovery R19). Running the live discovery pass belongs
+	// to the surface that displays it (cli-surface, stage 6, exercises stages 1 to
+	// 3), so this floor reloads and reports, proving the composition rather than
+	// issuing a burst with nothing yet to render it.
+	loaded := disc.Reload()
+
+	fmt.Printf("gh-runs: transport chain and discovery wired, budget tier %q, "+
+		"%d repositories reloaded from the local store\n", cfg.Budget, loaded)
 	return nil
 }
 
