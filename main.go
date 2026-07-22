@@ -37,6 +37,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/store"
 	"github.com/jv-k/gh-runs/v2/internal/tui"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
+	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 )
 
 // responseHeaderTimeout bounds how long any single request waits for its response
@@ -251,6 +252,12 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		// opens the confirmation over it (purge R4 to R9). It is the same ops the CLI's
 		// delete command uses, so both surfaces run one confirmation and one DELETE path.
 		Ops: purge,
+		// The Storage tab reads Cache and Artifact usage over the same client, so the store
+		// revalidates and the governor accounts each request (storage-reclamation R1), and it
+		// freezes a Cache and Artifact selection into a reclamation Plan through the same ops
+		// engine, so its DELETE travels the one mutation entry a Purge does (R17).
+		StorageFetch: storage.ClientFetch(client),
+		StorageOps:   purge,
 	})
 
 	// tea.WithContext ties the program to the same context the engine runs under, so a

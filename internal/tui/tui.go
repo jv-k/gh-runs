@@ -86,6 +86,12 @@ type Options struct {
 	// Ops freezes the Feed's selection into a Plan when the delete key opens the
 	// confirmation (purge R4 to R9). main.go wires it to the shared ops engine.
 	Ops feed.Planner
+	// StorageFetch reads one repository's Cache and Artifact usage for the Storage tab,
+	// and StorageOps freezes its Cache and Artifact selection into a reclamation Plan
+	// (storage-reclamation R1, R17). main.go wires both over the shared client and the same
+	// ops engine, so the Storage tab's DELETE travels the one mutation entry a Purge does.
+	StorageFetch storage.Fetch
+	StorageOps   storage.Planner
 }
 
 // Model is the root. It holds the three tabs, the focused index, and the seams it pulls
@@ -107,8 +113,8 @@ type Model struct {
 }
 
 // New returns the root over opts. The Feed occupies Runs and starts focused (R2);
-// Workflows and Storage are their stage-11 and stage-10 placeholders, present so the
-// three-tab routing is real and the finished tabs slot in without a rewrite.
+// Storage is the real Reclamation tab (stage 11) and Workflows is its stage-11 placeholder,
+// present so the three-tab routing is real and the finished tab slots in without a rewrite.
 func New(opts Options) Model {
 	f := feed.New(feed.Options{
 		Profile:     opts.Profile,
@@ -117,11 +123,21 @@ func New(opts Options) Model {
 		Clock:       opts.Clock,
 		Ops:         opts.Ops,
 	})
+	// The Storage tab shares the account's discovered repositories with the Feed's gate: it
+	// fans one cache-usage request out over them (R0) and reads their permissions and
+	// archived flags to gate reclamation (R20). It reads the same Repos pull the root
+	// broadcasts, so a repository unknown to discovery is unknown to both.
+	st := storage.New(storage.Options{
+		Profile: opts.Profile,
+		Fetch:   opts.StorageFetch,
+		Repos:   opts.Repos,
+		Ops:     opts.StorageOps,
+	})
 	return Model{
 		tabs: []tab{
 			feedTab{m: f.SetActive(true)},
 			workflowsTab{m: workflows.New()},
-			storageTab{m: storage.New()},
+			storageTab{m: st},
 		},
 		active:      0,
 		profile:     opts.Profile,
@@ -407,15 +423,18 @@ func (t workflowsTab) SetActive(bool) tab  { return t }
 func (t workflowsTab) Title() string       { return "Workflows" }
 func (t workflowsTab) CapturesInput() bool { return false }
 
-// storageTab lifts the Storage placeholder into the tab interface. It defers nothing, so
-// SetActive is a no-op until stage 10 builds the real tab.
+// storageTab lifts the Storage tab into the tab interface (ADR-0011). It is the Reclamation
+// surface: a per-repository rollup and a merged Cache-and-Artifact list, from which a
+// selection is deleted through the shared confirmation. It captures input while its
+// confirmation modal is up, exactly as the Feed does, so a typed count is not stolen as a
+// global key (R7).
 type storageTab struct{ m storage.Model }
 
 func (t storageTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 	nm, cmd := t.m.Update(msg)
 	return storageTab{nm}, cmd
 }
-func (t storageTab) View() string        { return t.m.View() }
-func (t storageTab) SetActive(bool) tab  { return t }
-func (t storageTab) Title() string       { return "Storage" }
-func (t storageTab) CapturesInput() bool { return false }
+func (t storageTab) View() string         { return t.m.View() }
+func (t storageTab) SetActive(a bool) tab { return storageTab{t.m.SetActive(a)} }
+func (t storageTab) Title() string        { return "Storage" }
+func (t storageTab) CapturesInput() bool  { return t.m.CapturesInput() }
