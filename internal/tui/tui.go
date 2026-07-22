@@ -29,6 +29,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
+	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
 	"github.com/jv-k/gh-runs/v2/internal/tui/feed"
 	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
@@ -99,6 +100,14 @@ type Options struct {
 	// governor and travels the one write path exactly as every other write does.
 	WorkflowFetch workflows.Fetch
 	WorkflowOps   workflows.Toggler
+	// The dispatch form the Workflows tab opens over a Workflow reads its YAML at a ref and the
+	// repository's environments (DispatchFetch), triggers the workflow_dispatch through the shared
+	// ops engine (DispatchOps), and remembers last-used inputs in the local-store (DispatchStore)
+	// (workflow-dispatch R5, R7, R16, R25). main.go wires all three over the same client, ops and
+	// store the rest of the tool uses.
+	DispatchFetch dispatch.Fetcher
+	DispatchOps   dispatch.Dispatcher
+	DispatchStore dispatch.DocStore
 	// LogFetch reads one Job's log and LogExport downloads the whole-Run archive, both for the
 	// log view the Feed's detail pane opens over a Job (log-viewer R1, R11). main.go wires them
 	// over the shared client; the log-deletion planner reuses Ops, the one mutation entry.
@@ -153,10 +162,13 @@ func New(opts Options) Model {
 	// and disable (R6). A toggle travels the shared ops engine, so it is paced and travels the
 	// one write path exactly as the Feed's and Storage's mutations do (R5).
 	wf := workflows.New(workflows.Options{
-		Profile: opts.Profile,
-		Fetch:   opts.WorkflowFetch,
-		Repos:   opts.Repos,
-		Ops:     opts.WorkflowOps,
+		Profile:       opts.Profile,
+		Fetch:         opts.WorkflowFetch,
+		Repos:         opts.Repos,
+		Ops:           opts.WorkflowOps,
+		DispatchFetch: opts.DispatchFetch,
+		DispatchOps:   opts.DispatchOps,
+		DispatchStore: opts.DispatchStore,
 	})
 	return Model{
 		tabs: []tab{

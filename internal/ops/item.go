@@ -1,9 +1,17 @@
-// Package ops owns every write in the product, and Execute is the only call that
-// issues one (ADR-0011, ADR-0019). It freezes a selection into a Plan, prices the
-// confirmation friction R7 demands of that blast radius, validates the operator's
-// answer into an unforgeable Confirmed, and executes it: the deletes paced by the
-// governor's AIMD ramp on the wire, the deletion log written one line per attempt,
-// the failure contract counted per Run.
+// Package ops owns every write in the product (ADR-0011, ADR-0019). It freezes a
+// selection into a Plan, prices the confirmation friction R7 demands of that blast
+// radius, validates the operator's answer into an unforgeable Confirmed, and executes
+// it: the deletes paced by the governor's AIMD ramp on the wire, the deletion log
+// written one line per attempt, the failure contract counted per Run.
+//
+// Execute is the only call that issues a DELETE and the only call that writes the
+// deletion log, and that invariant is exact. Dispatch (dispatch.go) is the one other
+// write entry: the workflow_dispatch POST that must return the Run it created
+// (workflow-dispatch R16), which no Summary carries, and over which the canon prices no
+// graduated confirmation, so it cannot ride Execute's frozen-set-to-Summary shape and
+// sits beside it rather than distorting it. It is still ops's, still travels the one
+// governed transport, and issues a POST rather than a DELETE, so the DELETE safety is
+// untouched. ADR-0019 left dispatch's confirmation shape open for exactly this call.
 //
 // The safety properties are structural, not conventional. A caller cannot reach
 // Execute without a Confirmed, and cannot build a Confirmed without ops.Confirm

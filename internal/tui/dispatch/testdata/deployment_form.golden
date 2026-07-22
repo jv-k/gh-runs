@@ -1,0 +1,15 @@
+[1mDispatch: Deployment[m
+> [1mRef: main[m
+
+  tag_name *        [  ]  [38;2;138;138;138m(string, required)[m
+[38;2;138;138;138m    Tag name of the release to deploy[m
+  environment       ‹ production ›  [38;2;138;138;138m(environment)[m
+[38;2;138;138;138m    Target deployment environment[m
+  platforms         [ linux/amd64,linux/arm64 ]  [38;2;138;138;138m(string)[m
+[38;2;138;138;138m    Comma-separated build platforms[m
+  release           [x] true  [38;2;138;138;138m(boolean)[m
+[38;2;138;138;138m    Create a GitHub release[m
+  dry_run           [x] true  [38;2;138;138;138m(boolean)[m
+[38;2;138;138;138m    Resolve the plan without deploying[m
+
+[38;2;138;138;138m  enter edit  space toggle/cycle  x dispatch  esc close[m

@@ -1,0 +1,37 @@
+name: Deployment
+
+# A checked-in snapshot of cli/cli's deployment.yml workflow_dispatch inputs, the real example
+# the form is specified against (workflow-dispatch Constraints). It is a snapshot of a file we do
+# not own, so it lives here rather than being fetched live: upstream added dry_run after the
+# original four-input measurement, and pinning an acceptance test to a repository we do not
+# control is what falsified the earlier "exactly four controls" claim.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag name of the release to deploy"
+        required: true
+        type: string
+      environment:
+        description: "Target deployment environment"
+        type: environment
+        default: production
+      platforms:
+        description: "Comma-separated build platforms"
+        type: string
+        default: linux/amd64,linux/arm64
+      release:
+        description: "Create a GitHub release"
+        type: boolean
+        default: true
+      dry_run:
+        description: "Resolve the plan without deploying"
+        type: boolean
+        default: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo deploy

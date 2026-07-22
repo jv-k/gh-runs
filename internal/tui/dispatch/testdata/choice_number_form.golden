@@ -1,0 +1,9 @@
+[1mDispatch: Bench[m
+> [1mRef: main[m
+
+  level             ‹ info ›  [38;2;138;138;138m(choice: debug | info | warn | error)[m
+[38;2;138;138;138m    Log verbosity[m
+  iterations *      [ 100 ]  [38;2;138;138;138m(number, required)[m
+[38;2;138;138;138m    How many iterations to run[m
+
+[38;2;138;138;138m  enter edit  space toggle/cycle  x dispatch  esc close[m

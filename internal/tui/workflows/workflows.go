@@ -28,6 +28,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
 )
 
 // Toggler enables or disables one Workflow through ops's single write path (R5). *ops.Ops
@@ -49,6 +50,14 @@ type Options struct {
 	Fetch   Fetch
 	Repos   func() []domain.Repo
 	Ops     Toggler
+
+	// The dispatch pane's seams, opened over the Workflow under the cursor (workflow-dispatch R2).
+	// DispatchFetch reads the YAML at a ref and the environments, DispatchOps triggers the
+	// workflow_dispatch through the shared write engine, and DispatchStore remembers last-used
+	// inputs (R5, R7, R16, R25). All three are nil in a golden test, where the pane stays closed.
+	DispatchFetch dispatch.Fetcher
+	DispatchOps   dispatch.Dispatcher
+	DispatchStore dispatch.DocStore
 }
 
 // toggleResultMsg carries one toggle's outcome back into the message loop. On an accepted
@@ -75,6 +84,10 @@ type Model struct {
 	repos   func() []domain.Repo
 	toggler Toggler
 
+	// dispatch is the workflow_dispatch form pane, opened over the Workflow under the cursor and
+	// closed by the pane itself (workflow-dispatch R2). A tab may import a pane (ADR-0011).
+	dispatch dispatch.Model
+
 	workflows map[string][]domain.Workflow
 	complete  map[string]bool
 	errs      map[string]error
@@ -98,10 +111,16 @@ type Model struct {
 // WorkflowsFetched arrives, and paints an empty view until then.
 func New(opts Options) Model {
 	return Model{
-		profile:    opts.Profile,
-		fetch:      opts.Fetch,
-		repos:      opts.Repos,
-		toggler:    opts.Ops,
+		profile: opts.Profile,
+		fetch:   opts.Fetch,
+		repos:   opts.Repos,
+		toggler: opts.Ops,
+		dispatch: dispatch.New(dispatch.Options{
+			Profile: opts.Profile,
+			Fetch:   opts.DispatchFetch,
+			Ops:     opts.DispatchOps,
+			Store:   opts.DispatchStore,
+		}),
 		workflows:  make(map[string][]domain.Workflow),
 		complete:   make(map[string]bool),
 		errs:       make(map[string]error),
@@ -119,18 +138,25 @@ func (m Model) SetActive(active bool) Model {
 	return m
 }
 
-// CapturesInput reports whether this tab holds input focus. It never does: a reversible
-// Workflow toggle opens no modal and takes no typed input (R5), so the root's global keys are
-// always live over this tab.
-func (m Model) CapturesInput() bool { return false }
+// CapturesInput reports whether this tab holds input focus. It does while the dispatch form is
+// open, because that form has free-text fields and a submit key: a digit typed into a number
+// field, or x pressed to dispatch, must be the form's rather than a tab switch or a quit
+// (workflow-dispatch R9, R16). The reversible Workflow toggle still opens no modal, so with the
+// form closed the root's global keys are live over this tab (R5).
+func (m Model) CapturesInput() bool { return m.dispatch.IsOpen() }
 
 // Update handles one message the root routed here. Size and data broadcasts reach it whether
-// or not it is focused (ADR-0011); a key reaches it only when focused.
+// or not it is focused (ADR-0011); a key reaches it only when focused. While the dispatch form is
+// open a key is the form's, and the form's own tagged messages (the ref resolution, the YAML
+// load, the environments, the Dispatch outcome) reach the tab as broadcasts and are forwarded to
+// the pane, which discards them when closed (ADR-0015).
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		return m, nil
+		var cmd tea.Cmd
+		m.dispatch, cmd = m.dispatch.Update(msg) // keep the pane laid out even while closed
+		return m, cmd
 
 	case WorkflowsFetched:
 		m.applyFetched(RepoWorkflows(msg))
@@ -140,9 +166,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.applyToggle(msg)
 
 	case tea.KeyPressMsg:
+		if m.dispatch.IsOpen() {
+			var cmd tea.Cmd
+			m.dispatch, cmd = m.dispatch.Update(msg)
+			return m, cmd
+		}
 		return m.handleKey(msg)
 	}
-	return m, nil
+	// A message the tab does not consume is forwarded to the dispatch pane, which names its own.
+	var cmd tea.Cmd
+	m.dispatch, cmd = m.dispatch.Update(msg)
+	return m, cmd
 }
 
 // applyFetched replaces one repository's held Workflow list wholesale and records it in the
@@ -179,6 +213,8 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch {
 	case key.Matches(k, m.profile.ToggleWorkflow):
 		return m.startToggle()
+	case key.Matches(k, m.profile.Dispatch):
+		return m.openDispatch()
 	case key.Matches(k, m.profile.Refresh):
 		return m.startFetch()
 	case key.Matches(k, m.profile.RowUp):
@@ -265,6 +301,61 @@ func (m Model) startToggle() (Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		sum, err := toggler.ToggleWorkflow(context.Background(), op, wf, repos)
 		return toggleResultMsg{repo: repo, op: op, wf: wf, sum: sum, err: err}
+	}
+}
+
+// openDispatch opens the workflow_dispatch form over the Workflow under the cursor, applying the
+// gates that cost no request (workflow-dispatch R14, R15, R22, AC6). A deleted Workflow offers no
+// Dispatch, because its id 404s whatever ref it names (R15). A disabled Workflow is enabled first
+// rather than dispatched, because a Dispatch to it is rejected with 422 (R22). An archived or
+// read-only repository is ineligible under R14's push gate, determined from the discovered
+// capability with no API request. Only an eligible, active Workflow opens the form, which then
+// resolves the default branch (R23) and fetches its YAML (R5).
+func (m Model) openDispatch() (Model, tea.Cmd) {
+	row, ok := m.rowUnderCursor()
+	if !ok {
+		return m, nil
+	}
+	if row.wf.State == domain.StateDeleted {
+		m.status, m.statusErr = "cannot dispatch a deleted Workflow, its Runs are orphaned", true
+		return m, nil
+	}
+	if isDisabledState(row.wf.State) {
+		m.status, m.statusErr = "enable this Workflow first ("+m.profile.ToggleWorkflow.Help().Key+"), then dispatch", true
+		return m, nil
+	}
+	repo, known := m.capability[row.repo.String()]
+	if !known || !repo.Permissions.Push || repo.Archived {
+		m.status, m.statusErr = "dispatch unavailable: "+ineligibleReason(repo, known), true
+		return m, nil
+	}
+	m.status, m.statusErr = "", false
+	var cmd tea.Cmd
+	m.dispatch, cmd = m.dispatch.Open(dispatch.Target{
+		Repo:     row.repo,
+		Workflow: row.wf,
+		Eligible: true,
+	})
+	return m, cmd
+}
+
+// isDisabledState reports whether a Workflow is in any disabled state, which R22 requires be
+// enabled before a Dispatch rather than dispatched directly.
+func isDisabledState(s domain.State) bool {
+	return s == domain.StateDisabledManually || s == domain.StateDisabledInactivity || s == domain.StateDisabledFork
+}
+
+// ineligibleReason states why a repository is ineligible for a Dispatch under R14's push gate,
+// distinguishing archived (permanent) from read-only (might change) from not-yet-known (fail
+// closed until discovery reports).
+func ineligibleReason(repo domain.Repo, known bool) string {
+	switch {
+	case !known:
+		return "repository capability is not yet known"
+	case repo.Archived:
+		return "repository is archived"
+	default:
+		return "repository is read-only"
 	}
 }
 

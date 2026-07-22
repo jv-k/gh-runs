@@ -45,6 +45,11 @@ var (
 // column header names the Workflow's STATE and never its Status, and no Run or Job vocabulary
 // appears, because State belongs to a Workflow and Status to a Run (R4, AC6).
 func (m Model) View() string {
+	// The dispatch form takes over the tab while it is open (workflow-dispatch R2), exactly as the
+	// Feed's confirmation modal takes over the Feed. With it closed the list renders unchanged.
+	if m.dispatch.IsOpen() {
+		return m.dispatch.View()
+	}
 	if len(m.workflows) == 0 && len(m.errs) == 0 {
 		return styleDim.Render("Workflows: press r to load the Workflows across your repositories.")
 	}
@@ -230,7 +235,9 @@ func (m Model) actionCell(act rowAction) string {
 // what it matches (R7a, AC18).
 func (m Model) hintLine() string {
 	tog := m.profile.ToggleWorkflow.Help()
-	return "  " + tog.Key + " " + tog.Desc + "   " + m.profile.Refresh.Help().Key + " refresh"
+	dis := m.profile.Dispatch.Help()
+	return "  " + tog.Key + " " + tog.Desc + "   " + dis.Key + " " + dis.Desc +
+		"   " + m.profile.Refresh.Help().Key + " refresh"
 }
 
 // nameWidth is the flex NAME column: the width less the fixed columns, their separators and

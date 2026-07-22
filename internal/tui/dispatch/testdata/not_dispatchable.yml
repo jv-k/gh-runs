@@ -1,0 +1,15 @@
+name: CI
+
+# A Workflow that declares no workflow_dispatch trigger. R1 resolves dispatchability by parsing
+# the YAML, because the Workflow object carries neither the events it declares nor its inputs, so
+# nothing about the form can be inferred without this file.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo build

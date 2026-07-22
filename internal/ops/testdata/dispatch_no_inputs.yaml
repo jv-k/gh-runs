@@ -1,0 +1,18 @@
+---
+version: 2
+# An input-less Workflow dispatched at a ref. The body carries no inputs object, matching the
+# measured shape {"ref":"main","return_run_details":true} (workflow-dispatch R16, #27). The Run
+# ID still arrives on the 200. Replayed in ModeReplayOnly, so no live dispatch is issued.
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/workflows/9002/dispatches
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"workflow_run_id":29803635999,"run_url":"https://api.github.com/repos/o/r/actions/runs/29803635999","html_url":"https://github.com/o/r/actions/runs/29803635999"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4899"]
+            X-Ratelimit-Reset: ["1789000000"]

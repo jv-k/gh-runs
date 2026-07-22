@@ -1,0 +1,20 @@
+---
+version: 2
+# A Dispatch against a disabled Workflow, rejected with 422 and the API's own message naming the
+# disabled state (workflow-dispatch R22, measurement #33). Dispatch returns this as a
+# DispatchError the form surfaces, rather than swallowing it or labelling the Run as created. The
+# same shape carries a 403 (the API as final authority despite the push gate, R14). No Run is
+# created, and this is replayed in ModeReplayOnly so no live dispatch is issued.
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/workflows/9003/dispatches
+      response:
+        status: 422 Unprocessable Entity
+        code: 422
+        body: '{"message":"Cannot trigger a ''workflow_dispatch'' on a disabled workflow","documentation_url":"https://docs.github.com/rest/actions/workflows#create-a-workflow-dispatch-event","status":"422"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4898"]
+            X-Ratelimit-Reset: ["1789000000"]

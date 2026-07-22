@@ -1,0 +1,43 @@
+---
+version: 2
+# The two reads the form makes, taped with no live network (workflow-dispatch R5, R7). The Contents
+# API returns the Workflow YAML base64-encoded at the target ref, which the form decodes and parses
+# into the schema, and the environments endpoint returns the repository's environments for the
+# environment selects. Replayed in ModeReplayOnly.
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"name":"r","default_branch":"main"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4991"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/contents/.github/workflows/deploy.yml?ref=main
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"type":"file","path":".github/workflows/deploy.yml","encoding":"base64","content":"bmFtZTogRGVwbG95Cm9uOgogIHdvcmtmbG93X2Rpc3BhdGNoOgogICAgaW5wdXRzOgogICAgICB0YWdfbmFtZToKICAgICAgICB0eXBlOiBzdHJpbmcKICAgICAgICByZXF1aXJlZDogdHJ1ZQogICAgICBlbnZpcm9ubWVudDoKICAgICAgICB0eXBlOiBlbnZpcm9ubWVudAogICAgICAgIGRlZmF1bHQ6IHByb2R1Y3Rpb24K"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4990"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/environments
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"environments":[{"name":"production"},{"name":"staging"}]}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4989"]
+            X-Ratelimit-Reset: ["1789000000"]
