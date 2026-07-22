@@ -112,6 +112,7 @@ func assertShared(t *testing.T, name string, p keys.Profile) {
 	assertKeys(t, name+".ToggleSelect", p.ToggleSelect, "space") // purge R4
 	assertKeys(t, name+".Refresh", p.Refresh, "r")               // R10, R11 name this key
 	assertKeys(t, name+".OpenDetail", p.OpenDetail, "enter")     // BUILD-ORDER stage 8
+	assertKeys(t, name+".CloseDetail", p.CloseDetail, "esc")     // run-detail: close the detail pane
 	assertKeys(t, name+".Filter", p.Filter, "/")                 // R22, R23
 	assertKeys(t, name+".Help", p.Help, "?")                     // bubbles/help renders the registry
 	assertKeys(t, name+".Quit", p.Quit, "q", "ctrl+c")           // R7: ctrl+c quits and binds nothing else
