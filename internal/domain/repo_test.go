@@ -1,10 +1,54 @@
 package domain_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 )
+
+// TestNewRepoID pins the one validation home (ADR-0009, repo-discovery R18). A
+// github.com owner/name is built; a foreign host is an UnsupportedHostError; and an
+// owner or name outside GitHub's charset is an InvalidRepoError, so no path-unsafe
+// segment can be built into an identity that later reaches a request URL path or a
+// filesystem key. discovery and the CLI's -R both route here, so this is where the
+// invariant is proven.
+func TestNewRepoID(t *testing.T) {
+	t.Run("valid github.com repository is built", func(t *testing.T) {
+		id, err := domain.NewRepoID("github.com", "cli", "cli")
+		if err != nil {
+			t.Fatalf("NewRepoID returned error %v, want nil", err)
+		}
+		if id != (domain.RepoID{Host: "github.com", Owner: "cli", Name: "cli"}) {
+			t.Errorf("NewRepoID = %+v, want github.com/cli/cli", id)
+		}
+	})
+
+	t.Run("foreign host is an UnsupportedHostError", func(t *testing.T) {
+		_, err := domain.NewRepoID("ghe.corp", "o", "r")
+		var uhe *domain.UnsupportedHostError
+		if !errors.As(err, &uhe) {
+			t.Fatalf("NewRepoID error = %v, want an UnsupportedHostError", err)
+		}
+	})
+
+	t.Run("path-unsafe owner and name are an InvalidRepoError", func(t *testing.T) {
+		for _, c := range []struct{ owner, name string }{
+			{"foo", "bar?actor=x"},  // a query in the name
+			{"foo", ".."},           // parent-directory traversal
+			{"foo", "bar%2F..%2Fx"}, // encoded slash
+			{"foo/bar", "baz"},      // a slash smuggled into the owner
+			{"", "repo"},            // empty owner
+			{"owner", ""},           // empty name
+		} {
+			_, err := domain.NewRepoID("github.com", c.owner, c.name)
+			var ire *domain.InvalidRepoError
+			if !errors.As(err, &ire) {
+				t.Errorf("NewRepoID(%q, %q) error = %v, want an InvalidRepoError", c.owner, c.name, err)
+			}
+		}
+	})
+}
 
 // TestRepoCapability pins live-run-feed R17's gate: a Repo is Permitted only with
 // push and not archived, and Refused otherwise. The gate fails closed, so every

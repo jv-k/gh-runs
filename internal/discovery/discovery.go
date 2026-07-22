@@ -35,8 +35,9 @@ import (
 
 // githubHost is the one host 2.0.0 discovers (ADR-0009). Every enumerated
 // repository is qualified with it, and a repository resolving to any other host
-// is rejected explicitly rather than silently attributed to it (R18, AC14).
-const githubHost = "github.com"
+// is rejected explicitly rather than silently attributed to it (R18, AC14). It
+// reads from domain.HostGitHub so the host string has one home.
+const githubHost = domain.HostGitHub
 
 // docName is the store document holding discovery's persisted results (the
 // classification and the recorded capability, local-store R2). One document holds
@@ -280,89 +281,28 @@ func (d *Discovery) putProbed(r Record, now time.Time, hasETag bool) {
 	d.etagged[key] = hasETag
 }
 
-// newRepoID host-qualifies a repository, rejects any host but github.com (R18,
-// AC14), and rejects an owner or name outside GitHub's identifier charset. No
-// RepoID can be built without a host, and a repository resolving elsewhere or
-// carrying a path-unsafe owner or name contributes no entry and returns an error,
-// rather than being silently attributed to github.com or interpolated raw into a
-// request URL path (classify.go, fastpath.go) or a future filesystem key.
+// newRepoID host-qualifies a repository and rejects a foreign host or a path-unsafe
+// owner or name, so a repository resolving elsewhere or carrying an unsafe segment
+// contributes no entry and returns an error rather than being silently attributed to
+// github.com or interpolated raw into a request URL path (classify.go, fastpath.go)
+// or a filesystem key. The host-check and the charset validation live in one place,
+// domain.NewRepoID, which the CLI's -R also routes through (security consolidation).
+// This wrapper only adds discovery's own leniency: a host-less persisted record
+// defaults to github.com before validation, because an older record may carry no
+// host and must not be dropped for it.
 func newRepoID(host, owner, name string) (domain.RepoID, error) {
-	host = strings.TrimSpace(host)
-	if host == "" {
+	if strings.TrimSpace(host) == "" {
 		host = githubHost
 	}
-	if !strings.EqualFold(host, githubHost) {
-		return domain.RepoID{}, &UnsupportedHostError{Host: host}
-	}
-	if !validOwner(owner) || !validRepoName(name) {
-		return domain.RepoID{}, &InvalidRepoError{Owner: owner, Name: name}
-	}
-	return domain.RepoID{Host: githubHost, Owner: owner, Name: name}, nil
+	return domain.NewRepoID(host, owner, name)
 }
 
-// validOwner reports whether owner is a syntactically valid GitHub account name:
-// non-empty and composed of ASCII letters, digits and hyphens. GitHub's own rule is
-// stricter (no leading or trailing hyphen, at most 39 characters), but the charset is
-// what closes the finding: an owner reaches request URL paths (classify.go,
-// fastpath.go) and any future filesystem key, and a value outside this set is neither
-// a real GitHub account nor safe to interpolate. newRepoID is the one place every
-// identity is built, so validating here has no hole (R18).
-func validOwner(owner string) bool {
-	if owner == "" {
-		return false
-	}
-	for _, r := range owner {
-		if !isAlnum(r) && r != '-' {
-			return false
-		}
-	}
-	return true
-}
-
-// validRepoName reports whether name is a syntactically valid GitHub repository
-// name: non-empty, neither "." nor "..", and composed of ASCII letters, digits,
-// hyphen, underscore and dot. Rejecting the dot-dot component and any separator keeps
-// the name safe as a URL path segment and as a future filesystem key, the same reason
-// the store hashes its own keys (store.go).
-func validRepoName(name string) bool {
-	if name == "" || name == "." || name == ".." {
-		return false
-	}
-	for _, r := range name {
-		if !isAlnum(r) && r != '-' && r != '_' && r != '.' {
-			return false
-		}
-	}
-	return true
-}
-
-// isAlnum reports whether r is an ASCII letter or digit.
-func isAlnum(r rune) bool {
-	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
-}
-
-// UnsupportedHostError reports a repository resolving to a host 2.0.0 does not
-// serve (R18, AC14). It names the host and claims nothing about what the host is,
-// the neutral rejection ADR-0009 settled on: a message that makes no class claim
-// cannot make a false one.
-type UnsupportedHostError struct {
-	Host string
-}
-
-func (e *UnsupportedHostError) Error() string {
-	return "repository host " + e.Host + " is not supported; gh-runs 2.0.0 serves github.com only"
-}
-
-// InvalidRepoError reports a repository whose owner or name is outside GitHub's
-// identifier charset, so it never reaches a request URL path or a filesystem key
-// (security hardening). Like UnsupportedHostError it names what it rejected and
-// claims nothing more.
-type InvalidRepoError struct {
-	Owner string
-	Name  string
-}
-
-func (e *InvalidRepoError) Error() string {
-	return "repository " + e.Owner + "/" + e.Name +
-		" has an unsupported owner or name; gh-runs accepts GitHub owner and repository names only"
-}
+// UnsupportedHostError and InvalidRepoError are the domain's identity errors,
+// re-exported here as aliases so discovery's callers and tests keep the names they
+// already use while the one validation home moved to domain (security consolidation).
+// An alias is the identical type, so errors.As over *discovery.UnsupportedHostError
+// still matches the *domain.UnsupportedHostError that domain.NewRepoID returns.
+type (
+	UnsupportedHostError = domain.UnsupportedHostError
+	InvalidRepoError     = domain.InvalidRepoError
+)

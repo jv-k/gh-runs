@@ -1,0 +1,21 @@
+---
+version: 2
+interactions:
+    # A single-repository list of cli/cli. Both -R cli/cli and the explicit
+    # -R github.com/cli/cli resolve to the same host-qualified identity and issue
+    # this same request, which is what AC7's equivalence asserts.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/cli/cli/actions/runs?per_page=20
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":1,"workflow_runs":[{"id":301,"status":"completed","conclusion":"success","name":"CI","display_title":"Release","event":"push","head_branch":"trunk","created_at":"2026-07-18T12:00:00Z"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"cli-cli-runs-v1"'
+            X-Ratelimit-Remaining:
+                - "4990"

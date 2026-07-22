@@ -1,0 +1,25 @@
+---
+version: 2
+interactions:
+    # A single page that fills the requested limit of 2 and still carries a rel="next"
+    # Link, so the per-repository listing is capped: more matching Runs remain on the
+    # wire than were returned. The command stops here because the limit is met, so the
+    # next page is never fetched, and R16's affirmative label fires on stderr
+    # (cli-surface R16, ADR-0022).
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/octo/hello/actions/runs?per_page=2
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":9999,"workflow_runs":[{"id":501,"status":"completed","conclusion":"success","name":"CI","display_title":"newest","event":"push","head_branch":"main","created_at":"2026-07-20T05:00:00Z"},{"id":502,"status":"completed","conclusion":"success","name":"CI","display_title":"older","event":"push","head_branch":"main","created_at":"2026-07-20T04:00:00Z"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"capped-p1-v1"'
+            Link:
+                - '<https://api.github.com/repos/octo/hello/actions/runs?per_page=2&page=2>; rel="next"'
+            X-Ratelimit-Remaining:
+                - "4990"
