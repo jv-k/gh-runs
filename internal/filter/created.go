@@ -15,6 +15,14 @@ import (
 // zero bound is unbounded on that side. That single shape expresses every gh
 // form, because "after the whole day" and "on or before the whole day" are just
 // which day-edge each operator picks.
+//
+// The boundary atom is provisional and unmeasured. The canon pins the field
+// (created_at), the zone (UTC), and gh's syntax, not the atom itself: the
+// half-open shape, a bare date spanning the whole UTC day, and a datetime
+// spanning one second are our reading of gh, not a measurement of it. A
+// flag-then-verify against gh settles it when --created becomes a flag at stage
+// 6 (cli-list), and the gap is recorded here so it is a known unknown rather
+// than a surprise.
 type DateRange struct {
 	raw string    // verbatim, exactly as accepted, for the created query parameter
 	lo  time.Time // inclusive lower bound; the zero time is unbounded below
