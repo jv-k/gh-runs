@@ -8,18 +8,24 @@
 //
 // The two profiles differ on motion and nowhere else (R7a): Vim moves the cursor
 // with k/j and Standard with the arrow keys, and every binding that is not a
-// motion is identical in both. Every binding the product matches on is drawn from
-// here, and no view may match a key literal of its own (R7a); a binding that
-// lives anywhere else is outside AC18's reach, which is the only thing the
-// requirement protects.
+// motion is identical in both. That sameness is a single source in code too: the
+// shared bindings are built once by shared() and each profile sets only its six
+// motion bindings on top, so a fork is impossible rather than merely discouraged.
+//
+// Every binding the product matches on is drawn from here, and no view may match
+// a key literal of its own (R7a); a binding that lives anywhere else is outside
+// AC18's reach, which is the only thing the requirement protects. Feature-local
+// bindings a later stage owns (log deletion, a Purge-summary retry, the log
+// view's fold and timestamp toggles) join this registry when their features name
+// them (R7a); the canon names no key literal for them yet, so none is invented
+// here.
 package keys
 
 import "charm.land/bubbles/v2/key"
 
 // Profile is one complete set of bindings the user can select (R7: exactly two,
-// Vim and Standard, and no others). Its fields are the actions the canon names.
-// The motion fields differ between the two profiles; every other field is
-// identical in both (R7a).
+// Vim and Standard, and no others). The motion fields differ between the two
+// profiles; every other field is identical in both (R7a).
 type Profile struct {
 	// Name identifies the profile a user selects. It is Vim or Standard, the
 	// only two R7 permits.
@@ -32,28 +38,66 @@ type Profile struct {
 	PageDown key.Binding // Vim ctrl+f, Standard pgdown
 	FirstRow key.Binding // Vim g, Standard home
 	LastRow  key.Binding // Vim G, Standard end
+
+	// Navigation and actions. Identical in both profiles (R7a's "Everything
+	// else" table).
+	NextTab      key.Binding // tab: next tab (R2)
+	PrevTab      key.Binding // shift+tab: previous tab (R2)
+	SelectTab    key.Binding // 1/2/3: jump to a tab by position (R2)
+	Settings     key.Binding // ,: settings, reachable from any tab (R2)
+	ToggleSelect key.Binding // space: toggle row selection (purge R4)
+	Refresh      key.Binding // r: apply deferred changes, refresh (R10, R11)
+	OpenDetail   key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
+	Filter       key.Binding // /: filter (R22, R23)
+	Help         key.Binding // ?: help (bubbles/help renders the registry)
+	Quit         key.Binding // q, ctrl+c: quit, and ctrl+c binds nothing else (R7)
+}
+
+// shared returns a Profile carrying every binding that is identical in both
+// profiles (R7a). Vim and Standard each start from this and set only their six
+// motion bindings, so "differ on motion, and nowhere else" holds by construction.
+func shared(name string) Profile {
+	return Profile{
+		Name:         name,
+		NextTab:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next tab")),
+		PrevTab:      key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous tab")),
+		SelectTab:    key.NewBinding(key.WithKeys("1", "2", "3"), key.WithHelp("1/2/3", "jump to tab")),
+		Settings:     key.NewBinding(key.WithKeys(","), key.WithHelp(",", "settings")),
+		ToggleSelect: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select")),
+		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		OpenDetail:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
+		Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Quit:         key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+	}
 }
 
 // Vim is the Vim-motion profile: k/j to move a row, ctrl+b/ctrl+f to page,
 // g/G to reach the first and last row (R7a).
-var Vim = Profile{
-	Name:     "Vim",
-	RowUp:    key.NewBinding(key.WithKeys("k"), key.WithHelp("k", "up")),
-	RowDown:  key.NewBinding(key.WithKeys("j"), key.WithHelp("j", "down")),
-	PageUp:   key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("ctrl+b", "page up")),
-	PageDown: key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "page down")),
-	FirstRow: key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "first row")),
-	LastRow:  key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "last row")),
-}
+var Vim = vimProfile()
 
 // Standard is the arrow-key profile: up/down to move a row, pgup/pgdown to page,
 // home/end to reach the first and last row (R7a).
-var Standard = Profile{
-	Name:     "Standard",
-	RowUp:    key.NewBinding(key.WithKeys("up"), key.WithHelp("↑", "up")),
-	RowDown:  key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "down")),
-	PageUp:   key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "page up")),
-	PageDown: key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "page down")),
-	FirstRow: key.NewBinding(key.WithKeys("home"), key.WithHelp("home", "first row")),
-	LastRow:  key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "last row")),
+var Standard = standardProfile()
+
+func vimProfile() Profile {
+	p := shared("Vim")
+	p.RowUp = key.NewBinding(key.WithKeys("k"), key.WithHelp("k", "up"))
+	p.RowDown = key.NewBinding(key.WithKeys("j"), key.WithHelp("j", "down"))
+	p.PageUp = key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("ctrl+b", "page up"))
+	p.PageDown = key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "page down"))
+	p.FirstRow = key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "first row"))
+	p.LastRow = key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "last row"))
+	return p
+}
+
+func standardProfile() Profile {
+	p := shared("Standard")
+	p.RowUp = key.NewBinding(key.WithKeys("up"), key.WithHelp("↑", "up"))
+	p.RowDown = key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "down"))
+	p.PageUp = key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "page up"))
+	p.PageDown = key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "page down"))
+	p.FirstRow = key.NewBinding(key.WithKeys("home"), key.WithHelp("home", "first row"))
+	p.LastRow = key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "last row"))
+	return p
 }
