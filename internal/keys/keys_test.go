@@ -70,3 +70,24 @@ func TestSharedBindings(t *testing.T) {
 	assertShared(t, "Vim", keys.Vim)
 	assertShared(t, "Standard", keys.Standard)
 }
+
+// assertConfirm pins R7a's "Confirm modal" table, also identical in both
+// profiles. y accepts below the threshold, n/esc abort, and enter aborts on the
+// default (the default is no), so enter opens Run detail in the Feed and cancels
+// in the modal, two surfaces, one key. v inspects the frozen set, which purge
+// R30 requires the modal to name on its face. There is deliberately no binding
+// for the typed count at or above the threshold: it is numeric input, not a
+// keystroke, and purge R7 forbids y from starting it.
+func assertConfirm(t *testing.T, name string, p keys.Profile) {
+	t.Helper()
+	assertKeys(t, name+".ConfirmAccept", p.ConfirmAccept, "y")                 // purge R7, AC6
+	assertKeys(t, name+".ConfirmAbort", p.ConfirmAbort, "n", "esc")            // purge AC6
+	assertKeys(t, name+".ConfirmAbortDefault", p.ConfirmAbortDefault, "enter") // purge AC6, default is no
+	assertKeys(t, name+".ConfirmInspect", p.ConfirmInspect, "v")               // purge R30, named on the modal
+}
+
+// TestConfirmBindings pins R7a's confirm-modal table over both profiles.
+func TestConfirmBindings(t *testing.T) {
+	assertConfirm(t, "Vim", keys.Vim)
+	assertConfirm(t, "Standard", keys.Standard)
+}

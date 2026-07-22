@@ -51,6 +51,14 @@ type Profile struct {
 	Filter       key.Binding // /: filter (R22, R23)
 	Help         key.Binding // ?: help (bubbles/help renders the registry)
 	Quit         key.Binding // q, ctrl+c: quit, and ctrl+c binds nothing else (R7)
+
+	// Confirm modal. Identical in both profiles (R7a's "Confirm modal" table).
+	// The count typed at or above the threshold (purge R7) is numeric input, not
+	// a keystroke, so it has no binding here.
+	ConfirmAccept       key.Binding // y: confirm below the threshold (purge R7, AC6)
+	ConfirmAbort        key.Binding // n, esc: abort (purge AC6)
+	ConfirmAbortDefault key.Binding // enter: abort on the default, which is no (purge AC6)
+	ConfirmInspect      key.Binding // v: inspect the frozen set (purge R30)
 }
 
 // shared returns a Profile carrying every binding that is identical in both
@@ -69,6 +77,11 @@ func shared(name string) Profile {
 		Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:         key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+
+		ConfirmAccept:       key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "confirm")),
+		ConfirmAbort:        key.NewBinding(key.WithKeys("n", "esc"), key.WithHelp("n/esc", "cancel")),
+		ConfirmAbortDefault: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "cancel (default)")),
+		ConfirmInspect:      key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "inspect")),
 	}
 }
 
