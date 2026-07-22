@@ -101,7 +101,7 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 **AC7: Poll set changes live.** A repository added by a discovery re-probe begins polling at the slow tier with no restart, and one removed stops being polled within one interval.
 
-**AC8: Budget maths.** With a poll set of 26 at 5s, projected consumption is 312 points/min. With a poll set of 100, no schedule is produced that polls all of them at 5s, because 1,200 points/min exceeds the ~900 ceiling. The interval auto-scales instead.
+**AC8: Budget maths.** With a poll set of 26 at 5s, projected consumption is 312 points/min. With a poll set of 100, no schedule is produced that polls all of them at 5s, because 1,200 points/min exceeds the ~900 ceiling. The viewport cap prevents that: only repositories with a row on screen are medium-tier (5s), a set bounded by terminal height rather than by poll-set size ([ADR-0021](../../adr/0021-the-scheduler-cadence-policy.md)). The whole set's ambient interval auto-scales as the background guard, holding the 30s slow target at reference scale and stretching only at a scale the reference account never reaches.
 
 **AC9: No interval knob.** No flag, config key or keybinding sets a poll interval. Setting the intent-level Budget share changes observed request rate. Nothing sets seconds.
 
