@@ -161,9 +161,18 @@ type Record struct {
 	Adopted bool `json:"adopted"`
 }
 
-// ID is the record's host-qualified identity (R18).
+// ID is the record's host-qualified identity (R18). It routes through discovery's one
+// validated constructor, newRepoID, rather than assembling a RepoID by hand, so identity
+// has no second construction door (security consolidation): the host check, the charset
+// validation and the host-less default all live in newRepoID and domain.NewRepoID beneath
+// it. Every record in the store reached it through an admission path that already validated
+// and canonicalised these fields (Reload, enumerate, fastpath, all via newRepoID), so the
+// construction here cannot fail for a stored record; the error is discarded because it is
+// unreachable there, and a hand-built Record carrying a foreign host reads as the zero
+// identity rather than smuggling that host past the one door.
 func (r Record) ID() domain.RepoID {
-	return domain.RepoID{Host: r.Host, Owner: r.Owner, Name: r.Name}
+	id, _ := newRepoID(r.Host, r.Owner, r.Name)
+	return id
 }
 
 // Repo reconstructs the domain repository the capability is derived from, so a

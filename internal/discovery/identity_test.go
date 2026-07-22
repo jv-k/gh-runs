@@ -68,6 +68,23 @@ func TestReloadRejectsInvalidRepoName(t *testing.T) {
 	}
 }
 
+// TestRecordIDRoutesThroughTheValidatedConstructor pins the identity consolidation: a
+// Record's ID() is built through newRepoID, discovery's one validated construction door,
+// rather than a hand-assembled struct literal (security review). A canonical record
+// round-trips unchanged, and a host-less record (an older persisted entry) defaults to
+// github.com exactly as newRepoID defaults it, so it keys canonically rather than under an
+// empty host.
+func TestRecordIDRoutesThroughTheValidatedConstructor(t *testing.T) {
+	full := discovery.Record{Host: "github.com", Owner: "jv-k", Name: "gh-runs"}
+	if got := full.ID().String(); got != "github.com/jv-k/gh-runs" {
+		t.Errorf("ID() = %q, want github.com/jv-k/gh-runs", got)
+	}
+	hostless := discovery.Record{Owner: "jv-k", Name: "gh-runs"}
+	if got := hostless.ID().String(); got != "github.com/jv-k/gh-runs" {
+		t.Errorf("host-less ID() = %q, want github.com/jv-k/gh-runs (newRepoID's host default)", got)
+	}
+}
+
 // TestFastPathRejectsNonGitHubHost is R18 at the fast path. A resolver that yields
 // a host other than github.com is rejected explicitly, with the neutral message
 // ADR-0009 settled on, rather than probed as though it were github.com.
