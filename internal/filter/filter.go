@@ -30,6 +30,8 @@ type Filter struct {
 	Event    string
 	Workflow string // the raw selector: a name, a filename, or a numeric ID
 
+	Created DateRange
+
 	// The permissive pair. One -s input parses into exactly one of these two
 	// sets (ParseStatus), and a Run matches the pair when its Status is in
 	// Statuses or its Conclusion is in Conclusions.
@@ -55,6 +57,12 @@ func (f Filter) Match(r domain.Run) bool {
 		return false
 	}
 	if f.Event != "" && r.Event != f.Event {
+		return false
+	}
+	// Created compares against created_at, in UTC, because that is the field the
+	// server's created parameter filters on (ADR-0016). Reading run_started_at
+	// here would evict a re-run the server admitted.
+	if !f.Created.empty() && !f.Created.contains(r.CreatedAt) {
 		return false
 	}
 	// The permissive pair, ADR-0016's one disjunction: when either set is
