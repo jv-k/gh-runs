@@ -57,6 +57,12 @@ type Profile struct {
 	Help         key.Binding // ?: help (bubbles/help renders the registry)
 	Quit         key.Binding // q, ctrl+c: quit, and ctrl+c binds nothing else (R7)
 
+	// Filter input. The Feed's filter is a text input (R22, R23), and its accept and
+	// cancel keys are declared here so the Feed matches them with key.Matches rather than
+	// naming a key literal of its own (R7a, AC18). Identical in both profiles.
+	FilterAccept key.Binding // enter: accept the typed filter and return to the list (R23)
+	FilterCancel key.Binding // esc: cancel the filter and restore the unfiltered view (R23)
+
 	// Confirm modal. Identical in both profiles (R7a's "Confirm modal" table).
 	// The count typed at or above the threshold (purge R7) is numeric input, not
 	// a keystroke, so it has no binding here.
@@ -82,6 +88,9 @@ func shared(name string) Profile {
 		Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:         key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+
+		FilterAccept: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "accept filter")),
+		FilterCancel: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel filter")),
 
 		ConfirmAccept:       key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "confirm")),
 		ConfirmAbort:        key.NewBinding(key.WithKeys("n", "esc"), key.WithHelp("n/esc", "cancel")),
@@ -176,6 +185,7 @@ func (p Profile) Bindings() []key.Binding {
 		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
 		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect,
 		p.Refresh, p.OpenDetail, p.Filter, p.Help, p.Quit,
+		p.FilterAccept, p.FilterCancel,
 		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,
 	}
 	for i := range bindings {

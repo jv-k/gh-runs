@@ -1,0 +1,5 @@
+[1mREPOSITORY           WORKFLOW           STATUS      CONCLUSION      RUN ID      STARTED             [m
+acme/api             CI                 [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m 100         2026-07-15T16:39:00Z
+[7macme/api            [m [7mCI                [m [7;38;2;138;138;138mcompleted  [m [7;38;2;95;175;95msuccess        [m [7m101        [m [7m2026-07-15T15:39:00Z[m
+[38;2;0;175;255m3 new runs (press r to apply)[m
+[38;2;138;138;138m↓/↑ move  space select  / filter  r refresh  ? help  q quit[m  [38;2;138;138;138mStandard[m

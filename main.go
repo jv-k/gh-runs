@@ -13,11 +13,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/cli/go-gh/v2/pkg/term"
 
 	"github.com/jv-k/gh-runs/v2/internal/cli"
 	"github.com/jv-k/gh-runs/v2/internal/clock"
@@ -26,9 +30,26 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
+	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/limiter"
+	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/store"
+	"github.com/jv-k/gh-runs/v2/internal/tui"
 )
+
+// responseHeaderTimeout bounds how long any single request waits for its response
+// headers. It is the stage-7 carry-forward the scheduler's Requester deferred (ADR-0015):
+// ghclient.Request takes no context, so scheduler.Stop cannot cancel an in-flight poll,
+// and without a bound a hung connection could delay quit indefinitely. Bounding the
+// header wait here, on the base transport, closes that without a signature change across
+// the merged packages. It is generous, because it applies to every request and a slow
+// GitHub response must not be aborted as if it were hung; quit's worst case is this.
+const responseHeaderTimeout = 30 * time.Second
+
+// shutdownGrace bounds how long the process waits for the engine to unwind on quit, so
+// the UI closing feels immediate. A poll still in flight past it is left to the
+// response-header timeout above and reaped by process exit; nothing it does is a write.
+const shutdownGrace = 2 * time.Second
 
 func main() {
 	os.Exit(run())
@@ -63,7 +84,7 @@ func run() int {
 	// http.DefaultTransport is the base in production; a cassette is the base in a
 	// test, injected through this same parameter one layer below the limiter
 	// (local-store R19a, ADR-0018 Consequences).
-	base := http.DefaultTransport
+	base := baseTransport()
 	gov := governor.New(limiter.New(base, limiter.Bound), clk)
 	transport := store.NewTransport(gov, storeDir(), clk)
 
@@ -92,6 +113,13 @@ func run() int {
 		Refresh: time.Duration(cfg.DiscoveryRefreshMinutes) * time.Minute,
 		Current: ghclient.CurrentRepo,
 	})
+
+	// main.go picks the surface (ADR-0011, cli-surface R1): bare `gh runs` opens the
+	// TUI, and any subcommand or argument runs the CLI. The composition root already
+	// knows both, and that is where the choice belongs.
+	if len(os.Args[1:]) == 0 {
+		return runTUI(cfg, clk, client, gov, transport, disc)
+	}
 
 	// The read half's dependencies. The discovered set is a function so cli stays
 	// clear of discovery in its import graph (ADR-0011): a fan-out paints from the
@@ -125,6 +153,141 @@ func run() int {
 	}
 
 	return cli.Execute(deps, os.Args[1:])
+}
+
+// runTUI opens the live Feed (live-run-feed R1). It refuses when standard output is not
+// a terminal, rather than emit control sequences into a pipe (cli-surface R1). It stands
+// the scheduler on the chain, discovery's poll set and the governor's Budget Readout,
+// hands the root the engine channel and the pulls it broadcasts, runs the program, and
+// stops the engine cleanly, bounded so quit stays snappy (ADR-0015).
+func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *governor.Governor, transport *store.Transport, disc *discovery.Discovery) int {
+	if !term.FromEnv().IsTerminalOutput() {
+		fmt.Fprintln(os.Stderr, "gh-runs: standard output is not a terminal; refusing to open the dashboard. Run `gh runs list` for non-interactive output.")
+		return 1
+	}
+
+	// Reject a non-github.com remote explicitly rather than silently attributing its Runs to
+	// github.com (R35, AC17). Being outside a git repository, or an unresolvable remote, is
+	// not a rejection: the Feed falls back to progressive reveal across the discovered
+	// account (R34).
+	if err := currentHostSupported(ghclient.CurrentRepo); err != nil {
+		fmt.Fprintln(os.Stderr, "gh-runs:", err)
+		return 1
+	}
+
+	// The keybinding profile is the resolved setting (live-run-feed R7, settings R5).
+	profile := keys.Standard
+	if p, ok := keys.ForName(string(cfg.KeybindingProfile)); ok {
+		profile = p
+	}
+
+	// Seed discovery so the poll set is not empty on a warm cache; a cold cache spends
+	// one pass and the Feed reveals repositories as they arrive (R32, R33). A discovery
+	// failure is not fatal to the dashboard: the Feed still paints what it can.
+	if disc.Reload() == 0 {
+		_ = disc.Pass(context.Background(), nil)
+	}
+
+	sched := scheduler.New(scheduler.Options{
+		Client:  client,
+		PollSet: disc,
+		Budget:  gov,
+		Clock:   clk,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sched.Start(ctx)
+
+	root := tui.New(tui.Options{
+		Updates:     sched.Updates(),
+		Readout:     gov.Readout,
+		Repos:       func() []domain.Repo { return knownRepos(disc) },
+		Revalidated: func() time.Time { return newestRevalidated(transport, disc.PollSet()) },
+		SetViewport: sched.SetViewport,
+		Profile:     profile,
+	})
+
+	// tea.WithContext ties the program to the same context the engine runs under, so a
+	// signal that cancels one cancels both.
+	_, err := tea.NewProgram(root, tea.WithContext(ctx)).Run()
+
+	// Stop the engine, bounded: the UI is already gone, so quit must not wait on a hung
+	// poll. The response-header timeout bounds any in-flight read, and process exit reaps
+	// a straggler (ADR-0015's carry-forward).
+	stopped := make(chan struct{})
+	go func() {
+		sched.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(shutdownGrace):
+	}
+
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gh-runs:", err)
+		return 1
+	}
+	return 0
+}
+
+// currentHostSupported reports an error only when the repository the tool was launched
+// inside resolves to a host gh-runs does not serve, so runTUI rejects it explicitly rather
+// than attributing its Runs to the wrong host (live-run-feed R35, AC17). Resolution routes
+// through the same host-qualifying resolver the rest of the tool uses, and only its typed
+// UnsupportedHostError is a rejection: being outside a git repository, or an unresolvable
+// remote, returns nil so the Feed falls back to progressive reveal across the account (R34).
+// errors.As unwraps, so a wrapped rejection is caught too, and the check reuses the one host
+// validation domain.NewRepoID and discovery already raise.
+func currentHostSupported(current func() (domain.RepoID, error)) error {
+	_, err := current()
+	var unsupported *domain.UnsupportedHostError
+	if errors.As(err, &unsupported) {
+		return unsupported
+	}
+	return nil
+}
+
+// baseTransport is the base RoundTripper the chain dials through, a clone of
+// http.DefaultTransport carrying a response-header timeout so a hung poll cannot delay
+// quit (ADR-0015's carry-forward). It replaces http.DefaultTransport at the foot of the
+// chain the governor and store nest above (ADR-0012, ADR-0018).
+func baseTransport() http.RoundTripper {
+	if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+		t := dt.Clone()
+		t.ResponseHeaderTimeout = responseHeaderTimeout
+		return t
+	}
+	return http.DefaultTransport
+}
+
+// knownRepos is the capability snapshot the root broadcasts to the Feed's gate. Only a
+// repository whose capability enumeration or adoption has recorded is included, so a
+// fast-path repository whose Runs are showing but whose permissions have not arrived
+// stays absent and reads not-yet-known (live-run-feed R18), never inferred from the fact
+// that its Runs listed.
+func knownRepos(disc *discovery.Discovery) []domain.Repo {
+	records := disc.Records()
+	out := make([]domain.Repo, 0, len(records))
+	for _, r := range records {
+		if r.Known {
+			out = append(out, r.Repo())
+		}
+	}
+	return out
+}
+
+// newestRevalidated is the freshest instant anything in the poll set was seen live, which
+// a paused Feed states as what it is showing and as of when (local-store R7,
+// live-run-feed R30). Zero when nothing has revalidated yet.
+func newestRevalidated(transport *store.Transport, ids []domain.RepoID) time.Time {
+	var newest time.Time
+	for _, id := range ids {
+		if t, ok := transport.LastRevalidated(id); ok && t.After(newest) {
+			newest = t
+		}
+	}
+	return newest
 }
 
 // storeDir returns the local store's directory under the XDG cache home

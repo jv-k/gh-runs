@@ -33,8 +33,11 @@ func CurrentRepo() (domain.RepoID, error) {
 // resolveCurrent is CurrentRepo's pure core: it translates go-gh's result into a
 // host-qualified RepoID or an actionable error, so the translation is testable
 // without a git remote. A KnownHosts failure becomes the GH_TOKEN instruction
-// (R14), and a host other than github.com is rejected with the neutral message
-// ADR-0009 settled on, which names the host and claims nothing about its class.
+// (R14), and a host other than github.com is rejected with the domain's
+// UnsupportedHostError, which names the host and claims nothing about its class
+// (ADR-0009). Returning that typed error rather than a bespoke string is what lets
+// the TUI reject a foreign host explicitly through errors.As (live-run-feed R35),
+// the same value discovery and the CLI already raise from domain.NewRepoID.
 func resolveCurrent(repo repository.Repository, err error) (domain.RepoID, error) {
 	if err != nil {
 		if strings.Contains(err.Error(), "known GitHub host") {
@@ -45,8 +48,7 @@ func resolveCurrent(repo repository.Repository, err error) (domain.RepoID, error
 		return domain.RepoID{}, fmt.Errorf("not launched inside a github.com repository: %w", err)
 	}
 	if !strings.EqualFold(repo.Host, hostGitHub) {
-		return domain.RepoID{}, fmt.Errorf(
-			"current repository host %q is not supported; gh-runs 2.0.0 serves github.com only", repo.Host)
+		return domain.RepoID{}, &domain.UnsupportedHostError{Host: repo.Host}
 	}
 	return domain.RepoID{Host: hostGitHub, Owner: repo.Owner, Name: repo.Name}, nil
 }

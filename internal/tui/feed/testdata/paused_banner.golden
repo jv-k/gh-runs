@@ -1,0 +1,5 @@
+[1;38;2;255;95;95mUpdates paused: rate limit reached. Resumes 14:32. Showing data as of 14:01.[m
+[1mREPOSITORY           WORKFLOW           STATUS      CONCLUSION      RUN ID      STARTED             [m
+[7macme/api            [m [7mCI                [m [7;38;2;0;175;255min_progress[m [7m               [m [7m1          [m [7m2026-07-15T16:39:00Z[m
+acme/api             CI                 [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m 2           2026-07-15T15:39:00Z
+[38;2;138;138;138m↓/↑ move  space select  / filter  r refresh  ? help  q quit[m  [38;2;138;138;138mStandard[m

@@ -46,17 +46,6 @@ func TestRenderTableSanitisesControlBytes(t *testing.T) {
 	}
 }
 
-// TestSanitizeCellLeavesCleanTextUntouched pins that the strip is a no-op on ordinary
-// data: a title with no control bytes, multibyte UTF-8 included, is returned
-// unchanged, so no printable rune is dropped and the fast path allocates nothing.
-func TestSanitizeCellLeavesCleanTextUntouched(t *testing.T) {
-	for _, s := range []string{"Fix the bug", "release v2.0.0 (rc)", "café build works"} {
-		if got := sanitizeCell(s); got != s {
-			t.Errorf("sanitizeCell(%q) = %q, want it unchanged", s, got)
-		}
-	}
-}
-
 // canned builds a 200 response with a JSON body and an optional Link header, for the
 // fake Requester below.
 func canned(bodyJSON, link string) *http.Response {

@@ -375,6 +375,46 @@ func (t *Transport) path(key string) string {
 	return filepath.Join(t.dir, key+".json")
 }
 
+// LastRevalidated reports the most recent last-revalidated time recorded for repo, and
+// whether any entry for it exists (local-store R7). It exposes R3's per-entry timestamp
+// to the store's consumers, so a Feed whose revalidation has paused can say what it is
+// showing and as of when rather than presenting cached rows as live (live-run-feed R30).
+// It reads the persisted entries the repository owns, the same repo tag invalidation
+// keys on (R14), and takes the newest across them, so the answer is the freshest instant
+// anything the Feed shows for that repository was seen live. A degraded reader answers
+// too, from the writer's files: reads are always allowed (R21, R23). It scans the store,
+// so a consumer reads it at a coarse cadence, never on every frame.
+func (t *Transport) LastRevalidated(repo domain.RepoID) (time.Time, bool) {
+	if t.dir == "" {
+		return time.Time{}, false
+	}
+	files, err := filepath.Glob(filepath.Join(t.dir, "*.json"))
+	if err != nil {
+		return time.Time{}, false
+	}
+	want := repo.String()
+	var newest time.Time
+	found := false
+	for _, f := range files {
+		data, err := readFile(f)
+		if err != nil {
+			continue
+		}
+		var e entry
+		if err := json.Unmarshal(data, &e); err != nil {
+			continue
+		}
+		if e.Schema != schemaVersion || e.Repo != want {
+			continue
+		}
+		if !found || e.LastRevalidated.After(newest) {
+			newest = e.LastRevalidated
+			found = true
+		}
+	}
+	return newest, found
+}
+
 // load reads a persisted entry. A missing, unreadable or corrupt entry is not an
 // error and never fails a request: the store is derived state and always safe to
 // rebuild (local-store R11, R13).
