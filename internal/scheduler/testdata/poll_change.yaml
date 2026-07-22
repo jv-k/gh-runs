@@ -1,0 +1,46 @@
+---
+version: 2
+interactions:
+    # One repository holding an in_progress Run, so it is fast-tier. Its cold-start
+    # poll is a 200 that reveals the live Run; its steady-state poll is a conditional
+    # request the server answers 304, which must cost zero primary allowance and do no
+    # re-render work (R19, AC16, R22: a 200-with-ETag followed by a 304).
+    # Interaction 0: the cold-start poll, unconditional, a 200 with a live Run.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/live/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":1,"workflow_runs":[{"id":42,"status":"in_progress","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"live-v1"'
+            X-Ratelimit-Remaining:
+                - "5000"
+    # Interaction 1: the steady-state poll, conditional. Nothing changed, so a 304.
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/live/actions/runs
+        headers:
+            If-None-Match:
+                - '"live-v1"'
+      response:
+        status: 304 Not Modified
+        code: 304
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: ''
+        headers:
+            Etag:
+                - '"live-v1"'
+            X-Ratelimit-Remaining:
+                - "5000"
