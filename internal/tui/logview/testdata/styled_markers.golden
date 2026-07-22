@@ -1,0 +1,11 @@
+[1mcli/cli · CI · Job: build[m
+
+[38;2;95;175;95;48;2;48;48;48mCOMMAND /usr/bin/go test ./...[m
+ok  github.com/example/pkg0.42s
+[38;2;255;135;95mWARNING this package is deprecated[m
+[1;38;2;255;95;95mERROR   FAIL github.com/example/broken[m
+[38;2;0;215;175mNOTICE  coverage is 87 percent[m
+[38;2;138;138;138mDEBUG   cache key resolved to abc123[m
+##[set-output]name=result::ok
+
+[38;2;138;138;138mt timestamps · space fold · / search · D delete logs · e export · r refetch · esc close[m

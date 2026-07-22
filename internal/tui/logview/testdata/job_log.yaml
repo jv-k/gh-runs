@@ -1,0 +1,31 @@
+---
+version: 2
+# The per-Job log fetch (log-viewer R1): a GET on the Job's logs endpoint answered with a
+# 302 to a short-lived signed blob URL, which the client follows to a 200 text/plain body
+# (R13: each fetch re-requests the endpoint and follows the redirect it returns, reusing no
+# signed URL). Two taped interactions, one logical fetch: the endpoint, then the blob. No
+# interaction taped for the run-level archive, so a render path that reached it would fail
+# under ModeReplayOnly (R2, AC1, AC5).
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/jobs/123456789/logs
+      response:
+        status: 302 Found
+        code: 302
+        body: ""
+        headers:
+            Location: ["https://pipelines.blob.example/signed-log?sig=abc123"]
+            X-Ratelimit-Remaining: ["4999"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 1
+      request:
+        method: GET
+        url: https://pipelines.blob.example/signed-log?sig=abc123
+      response:
+        status: 200 OK
+        code: 200
+        headers:
+            Content-Type: ["text/plain; charset=utf-8"]
+        body: "2026-07-15T03:11:52.0835958Z ##[group]Run echo hello\n2026-07-15T03:11:52.0835958Z hello from the job\n2026-07-15T03:11:52.0835958Z ##[endgroup]\n2026-07-15T03:11:52.0835958Z ##[warning]this step is deprecated\n"

@@ -1,0 +1,18 @@
+[1mcli/cli · CI · Job: build[m
+
+[1;38;2;0;175;255;48;2;48;48;48m▸ Set up job[m
+[1;38;2;0;175;255m▸ Run actions/checkout@v4[m
+[1;38;2;0;175;255m▸ Set up Go[m
+[1;38;2;0;175;255m▸ Restore cache[m
+[38;2;255;135;95mWARNING node 16 is deprecated, upgrade to node 20[m
+[1;38;2;0;175;255m▸ Download dependencies[m
+[1;38;2;0;175;255m▸ Build[m
+[1;38;2;0;175;255m▸ Run tests[m
+[1;38;2;0;175;255m▸ Run go vet[m
+[38;2;255;135;95mWARNING set-output is deprecated, use $GITHUB_OUTPUT[m
+[1;38;2;0;175;255m▸ Upload coverage[m
+[1;38;2;0;175;255m▸ Save cache[m
+[1;38;2;0;175;255m▸ Post Run actions/checkout@v4[m
+[1;38;2;0;175;255m▸ Complete job[m
+
+[38;2;138;138;138mt timestamps · space fold · / search · D delete logs · e export · r refetch · esc close[m
