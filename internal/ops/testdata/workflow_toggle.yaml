@@ -1,0 +1,31 @@
+---
+version: 2
+# Two reversible Workflow toggles, each a PUT that the API accepts with 204 No Content
+# (workflow-management R5). Enabling a disabled Workflow and disabling an active one are the
+# two writes rate-governor R2 names among its ten, priced as PUTs. The 204 is the request
+# accepted; R8 re-reads the list to learn the new State rather than inferring it, so the tape
+# carries no State of its own. The matcher tells the two apart by URL, so one cassette serves
+# both. No deletion log line is written for either, because a toggle deletes nothing (R24).
+interactions:
+    - id: 0
+      request:
+        method: PUT
+        url: https://api.github.com/repos/o/r/actions/workflows/9001/enable
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 1
+      request:
+        method: PUT
+        url: https://api.github.com/repos/o/r/actions/workflows/9002/disable
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4899"]
+            X-Ratelimit-Reset: ["1789000000"]

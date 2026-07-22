@@ -168,7 +168,7 @@ func TestNoDuplicateListKey(t *testing.T) {
 			{"NextTab", p.NextTab}, {"PrevTab", p.PrevTab}, {"SelectTab", p.SelectTab}, {"Settings", p.Settings},
 			{"ToggleSelect", p.ToggleSelect}, {"Delete", p.Delete},
 			{"Cancel", p.Cancel}, {"ForceCancel", p.ForceCancel}, {"Rerun", p.Rerun}, {"RerunFailed", p.RerunFailed},
-			{"ArtifactsOnly", p.ArtifactsOnly},
+			{"ArtifactsOnly", p.ArtifactsOnly}, {"ToggleWorkflow", p.ToggleWorkflow},
 			{"Refresh", p.Refresh}, {"OpenDetail", p.OpenDetail}, {"Filter", p.Filter}, {"Help", p.Help}, {"Quit", p.Quit},
 		}
 		seen := map[string]string{}
@@ -202,6 +202,25 @@ func assertReclamation(t *testing.T, name string, p keys.Profile) {
 func TestReclamationBindings(t *testing.T) {
 	assertReclamation(t, "Vim", keys.Vim)
 	assertReclamation(t, "Standard", keys.Standard)
+}
+
+// assertWorkflow pins the Workflows-tab action key (BUILD-ORDER stage 11,
+// workflow-management), identical in both profiles like Delete. The canon names no literal
+// for enabling or disabling a Workflow (R5), so this is the chosen unclaimed key the package
+// documents: s toggles a Workflow's State, enabling a disabled one and disabling an active
+// one. Transcribed from the package doc, not read back off the binding, so a drift from the
+// documented choice fails here.
+func assertWorkflow(t *testing.T, name string, p keys.Profile) {
+	t.Helper()
+	assertKeys(t, name+".ToggleWorkflow", p.ToggleWorkflow, "s") // workflow-management R5
+}
+
+// TestWorkflowBindings pins the stage-11 Workflows key over both profiles, and its sameness:
+// a forked binding fails one of the two runs. It is distinct from every other list binding,
+// which TestNoDuplicateListKey guards.
+func TestWorkflowBindings(t *testing.T) {
+	assertWorkflow(t, "Vim", keys.Vim)
+	assertWorkflow(t, "Standard", keys.Standard)
 }
 
 // assertLogView pins the five log-viewer action keys (BUILD-ORDER stage 12), identical

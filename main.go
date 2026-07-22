@@ -39,6 +39,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
+	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
 )
 
 // responseHeaderTimeout bounds how long any single request waits for its response
@@ -259,6 +260,12 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		// engine, so its DELETE travels the one mutation entry a Purge does (R17).
 		StorageFetch: storage.ClientFetch(client),
 		StorageOps:   purge,
+		// The Workflows tab reads each repository's Workflow list over the same client, so the
+		// store revalidates and the governor accounts each request (workflow-management R1), and
+		// it enables or disables one Workflow through the same ops engine, so a toggle is paced
+		// and travels the one write path every other write does (R5).
+		WorkflowFetch: workflows.ClientFetch(client),
+		WorkflowOps:   purge,
 		// The log view fetches a Job's plain text and, on request, downloads the whole-Run
 		// archive to the working directory, both over the same client (log-viewer R1, R11). Its
 		// deletion reuses purge, the one mutation entry, so a log DELETE is paced and logged like
