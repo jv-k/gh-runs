@@ -1,0 +1,20 @@
+---
+version: 2
+interactions:
+    # A repository with no Runs. The command prints a note to stderr and exits 0,
+    # leaving stdout empty so a pipeline reads no spurious rows.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/octo/empty/actions/runs?per_page=20
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":0,"workflow_runs":[]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"octo-empty-v1"'
+            X-Ratelimit-Remaining:
+                - "4950"

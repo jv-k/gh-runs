@@ -1,0 +1,55 @@
+---
+version: 2
+interactions:
+    # Three repositories, nine Runs between them, listed under fan-out with -L 5.
+    # Each per-repository request carries per_page=5, so no request asks for more
+    # than the merged limit, and the merge takes the newest five across all three
+    # (cli-surface R23, AC16). Timestamps interleave across repositories so the
+    # correct answer requires a real cross-repository sort, not a per-repository
+    # one: newest five are 11 (07-10), 21 (07-09), 31 (07-08), 12 (07-07), 22
+    # (07-06).
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/alpha/actions/runs?per_page=5
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":3,"workflow_runs":[{"id":11,"status":"completed","conclusion":"success","name":"CI","display_title":"a1","event":"push","head_branch":"main","created_at":"2026-07-10T00:00:00Z"},{"id":12,"status":"completed","conclusion":"success","name":"CI","display_title":"a2","event":"push","head_branch":"main","created_at":"2026-07-07T00:00:00Z"},{"id":13,"status":"completed","conclusion":"success","name":"CI","display_title":"a3","event":"push","head_branch":"main","created_at":"2026-07-04T00:00:00Z"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"ml-alpha-v1"'
+            X-Ratelimit-Remaining:
+                - "4970"
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/beta/actions/runs?per_page=5
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":3,"workflow_runs":[{"id":21,"status":"completed","conclusion":"success","name":"CI","display_title":"b1","event":"push","head_branch":"main","created_at":"2026-07-09T00:00:00Z"},{"id":22,"status":"completed","conclusion":"success","name":"CI","display_title":"b2","event":"push","head_branch":"main","created_at":"2026-07-06T00:00:00Z"},{"id":23,"status":"completed","conclusion":"success","name":"CI","display_title":"b3","event":"push","head_branch":"main","created_at":"2026-07-03T00:00:00Z"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"ml-beta-v1"'
+            X-Ratelimit-Remaining:
+                - "4969"
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/gamma/actions/runs?per_page=5
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":3,"workflow_runs":[{"id":31,"status":"completed","conclusion":"success","name":"CI","display_title":"g1","event":"push","head_branch":"main","created_at":"2026-07-08T00:00:00Z"},{"id":32,"status":"completed","conclusion":"success","name":"CI","display_title":"g2","event":"push","head_branch":"main","created_at":"2026-07-05T00:00:00Z"},{"id":33,"status":"completed","conclusion":"success","name":"CI","display_title":"g3","event":"push","head_branch":"main","created_at":"2026-07-02T00:00:00Z"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"ml-gamma-v1"'
+            X-Ratelimit-Remaining:
+                - "4968"

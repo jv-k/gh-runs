@@ -6,21 +6,24 @@
 // It is the only place that knows both store and ghclient exist. store exports an
 // http.RoundTripper, ghclient takes one, and neither imports the other; wiring
 // them here is the single most load-bearing decision in the tree (ADR-0011). It
-// also nests the governor inside the store's transport (ADR-0012). This floor
-// build resolves settings, assembles the chain and exits, which is enough to
-// prove the wiring compiles and composes.
+// also nests the governor inside the store's transport (ADR-0012). It resolves
+// settings, assembles the chain, and hands the whole thing to the CLI, whose read
+// half (the list command) is the first runnable surface (BUILD-ORDER stage 6).
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/jv-k/gh-runs/v2/internal/cli"
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/discovery"
+	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/limiter"
@@ -28,13 +31,14 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "gh-runs:", err)
-		os.Exit(1)
-	}
+	os.Exit(run())
 }
 
-func run() error {
+// run assembles the transport chain and discovery, wires them into the CLI's
+// dependencies, and executes the command, returning gh's exit code (cli-surface
+// R17). A setup failure before the command runs is a plain exit 1: nothing has
+// been issued yet, so there is no auth or cancellation state to report.
+func run() int {
 	clk := clock.Real()
 
 	// Settings resolve first. The governor takes its Budget share from them at
@@ -67,7 +71,8 @@ func run() error {
 	// (CacheTTL: 0). ghclient exposes Request, never Get or Do.
 	client, err := ghclient.New(ghclient.Options{Transport: transport})
 	if err != nil {
-		return err
+		fmt.Fprintln(os.Stderr, "gh-runs:", err)
+		return 1
 	}
 
 	// Discovery stands on the whole chain: it issues its enumeration and probes
@@ -88,16 +93,38 @@ func run() error {
 		Current: ghclient.CurrentRepo,
 	})
 
-	// A cold start paints from the persisted results before any request goes out
-	// (local-store R5, repo-discovery R19). Running the live discovery pass belongs
-	// to the surface that displays it (cli-surface, stage 6, exercises stages 1 to
-	// 3), so this floor reloads and reports, proving the composition rather than
-	// issuing a burst with nothing yet to render it.
-	loaded := disc.Reload()
+	// The read half's dependencies. The discovered set is a function so cli stays
+	// clear of discovery in its import graph (ADR-0011): a fan-out paints from the
+	// persisted results first (local-store R5, repo-discovery R19), and only when
+	// the cache is cold does it spend a live pass to learn the account. That policy
+	// is main.go's, kept out of the surface, which the Feed will refine at stage 7.
+	deps := cli.Deps{
+		Client:  client,
+		Current: ghclient.CurrentRepo,
+		Getenv:  os.LookupEnv,
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
+		Clock:   clk,
+		Discovered: func() ([]domain.RepoID, error) {
+			if disc.Reload() == 0 {
+				if err := disc.Pass(context.Background(), nil); err != nil {
+					return nil, err
+				}
+			}
+			// R22 says list fans out across "every discovered repository." This wires the
+			// fan-out to discovery's poll set (~26, the repositories with Runs), not every
+			// discovered Record (~163), for Budget parity with the Feed, which polls exactly
+			// this set (ADR-0022's one-request-per-repository cost). An empty repository lists
+			// nothing, so the only visible delta is a repository whose persisted
+			// classification is stale on a warm cache (HasRuns=false but since acquired Runs),
+			// which a cold-cache disc.Pass reclassifies. The Feed refines this "discovered"
+			// scope at stage 7; the narrowing is provisional policy here, kept out of the cli
+			// surface (ADR-0011).
+			return disc.PollSet(), nil
+		},
+	}
 
-	fmt.Printf("gh-runs: transport chain and discovery wired, budget tier %q, "+
-		"%d repositories reloaded from the local store\n", cfg.Budget, loaded)
-	return nil
+	return cli.Execute(deps, os.Args[1:])
 }
 
 // storeDir returns the local store's directory under the XDG cache home
