@@ -168,6 +168,7 @@ func TestNoDuplicateListKey(t *testing.T) {
 			{"NextTab", p.NextTab}, {"PrevTab", p.PrevTab}, {"SelectTab", p.SelectTab}, {"Settings", p.Settings},
 			{"ToggleSelect", p.ToggleSelect}, {"Delete", p.Delete},
 			{"Cancel", p.Cancel}, {"ForceCancel", p.ForceCancel}, {"Rerun", p.Rerun}, {"RerunFailed", p.RerunFailed},
+			{"ArtifactsOnly", p.ArtifactsOnly},
 			{"Refresh", p.Refresh}, {"OpenDetail", p.OpenDetail}, {"Filter", p.Filter}, {"Help", p.Help}, {"Quit", p.Quit},
 		}
 		seen := map[string]string{}
@@ -180,6 +181,27 @@ func TestNoDuplicateListKey(t *testing.T) {
 			}
 		}
 	}
+}
+
+// assertReclamation pins the storage-reclamation action key (BUILD-ORDER stage 11),
+// identical in both profiles like Delete. The canon names no literal for the
+// Artifacts-only filter (storage-reclamation R8), so this is the chosen unclaimed
+// key the package documents: a filters the merged list to Artifacts alone.
+// Transcribed from the package doc, not read back off the binding, so a drift from
+// the documented choice fails here. Deletion in the Storage tab reuses Delete (d),
+// selection reuses ToggleSelect (space) and refresh reuses Refresh (r), so no new
+// binding is minted for them (storage-reclamation R15, R17).
+func assertReclamation(t *testing.T, name string, p keys.Profile) {
+	t.Helper()
+	assertKeys(t, name+".ArtifactsOnly", p.ArtifactsOnly, "a") // storage-reclamation R8
+}
+
+// TestReclamationBindings pins the stage-11 storage key over both profiles, and its
+// sameness: a forked binding fails one of the two runs. It is distinct from every
+// other list binding, which TestNoDuplicateListKey guards.
+func TestReclamationBindings(t *testing.T) {
+	assertReclamation(t, "Vim", keys.Vim)
+	assertReclamation(t, "Standard", keys.Standard)
 }
 
 // assertConfirm pins R7a's "Confirm modal" table, also identical in both
