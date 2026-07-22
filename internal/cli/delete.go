@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
 
 // deleteFlags holds the delete command's flags. It embeds listFlags so the filter
@@ -169,7 +170,12 @@ func printSummary(deps Deps, sum ops.Summary) {
 	groups := append([]ops.FailureGroup(nil), sum.Failures...)
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Reason < groups[j].Reason })
 	for _, g := range groups {
-		_, _ = fmt.Fprintf(deps.Stdout, "  %d x %s\n", g.Count, g.Reason)
+		// A failure reason carries the API's error message verbatim (ops.failureReason),
+		// which a hostile third-party repository controls, so it is sanitised here at the
+		// terminal boundary exactly as the list table sanitises a Run's own fields
+		// (security review, textsan). The R29 deletion log records the reason raw and
+		// write-only, so only this render is stripped, never what ops writes.
+		_, _ = fmt.Fprintf(deps.Stdout, "  %d x %s\n", g.Count, textsan.Sanitize(g.Reason))
 	}
 	if sum.Reason != "" {
 		_, _ = fmt.Fprintln(deps.Stdout, sum.Reason)
