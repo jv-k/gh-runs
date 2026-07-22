@@ -16,9 +16,9 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 )
 
-// AIMD limits from rate-governor R10 and R11. The floor build carries the state
-// but the ramp is exercised by the governor's own cassette suite at stage 2; the
-// read path this file proves does not pace writes.
+// AIMD limits from rate-governor R10 and R11. The ramp starts at the
+// documented-safe rate, adds a step per clean streak, halves on a rate-limit
+// response, and is held between the floor and the dynamic ceiling's cap.
 const (
 	documentedSafeRate = 1.0 // R10: writes start at the documented-safe 1.0/sec.
 	rampCeiling        = 2.5 // R11: cap on the dynamic ceiling.
@@ -54,9 +54,10 @@ type Readout struct {
 	// Also true through a secondary-limit backoff (ADR-0018)
 }
 
-// Governor observes the primary Budget and paces writes. This build implements
-// the observation and accounting the floor test exercises; the ramp state is
-// present and minimal.
+// Governor is the single authority for Budget accounting and write throughput
+// (R1, R2). It observes every response's rate-limit headers, paces writes on the
+// injected clock against an AIMD ramp under a dynamic ceiling, classifies rate
+// limits, and publishes the Budget Readout with R8a's pressure projection.
 type Governor struct {
 	base http.RoundTripper
 	clk  clock.Clock
