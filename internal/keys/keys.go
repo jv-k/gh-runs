@@ -22,6 +22,7 @@
 package keys
 
 import (
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -90,11 +91,14 @@ func shared(name string) Profile {
 }
 
 // Vim is the Vim-motion profile: k/j to move a row, ctrl+b/ctrl+f to page,
-// g/G to reach the first and last row (R7a).
+// g/G to reach the first and last row (R7a). It is read-only registry data,
+// exported so a surface can name a profile (BUILD-ORDER stage 7), not so it can
+// rewrite one. A caller that needs a profile it may modify takes one from
+// Profiles or ForName, which return independent copies.
 var Vim = vimProfile()
 
 // Standard is the arrow-key profile: up/down to move a row, pgup/pgdown to page,
-// home/end to reach the first and last row (R7a).
+// home/end to reach the first and last row (R7a). It is read-only, like Vim.
 var Standard = standardProfile()
 
 func vimProfile() Profile {
@@ -119,18 +123,36 @@ func standardProfile() Profile {
 	return p
 }
 
+// cloneBinding returns a key.Binding equal to b that shares none of its backing
+// storage. key.Binding.Keys() returns the binding's own slice, so copying a
+// Profile by value leaves each binding's keys aliased to the registry. Rebuilding
+// through NewBinding gives the copy an independent slice, which is what lets the
+// accessors below make "a caller cannot alter the registry" real rather than
+// theoretical.
+func cloneBinding(b key.Binding) key.Binding {
+	nb := key.NewBinding(
+		key.WithKeys(slices.Clone(b.Keys())...),
+		key.WithHelp(b.Help().Key, b.Help().Desc),
+	)
+	nb.SetEnabled(b.Enabled())
+	return nb
+}
+
 // Profiles returns the two selectable profiles, Vim then Standard. R7 permits
 // exactly these two and no others, so AC18's "exactly two profiles are
-// selectable" is asserted over this. It returns a fresh slice so a caller cannot
-// alter the registry.
+// selectable" is asserted over this. Each call builds the pair afresh through
+// the same constructors as Vim and Standard, so the returned profiles share no
+// key slice with the registry: a caller may keep or mutate them without reaching
+// it.
 func Profiles() []Profile {
-	return []Profile{Vim, Standard}
+	return []Profile{vimProfile(), standardProfile()}
 }
 
 // ForName returns the profile a stored settings value selects, matching Name
 // without regard to case, and reports whether one was found. A name that is
 // neither Vim nor Standard resolves to nothing, because R7 permits no third
-// profile.
+// profile. The profile it returns is drawn from Profiles, so it is an
+// independent copy the caller owns.
 func ForName(name string) (Profile, bool) {
 	for _, p := range Profiles() {
 		if strings.EqualFold(p.Name, name) {
@@ -146,12 +168,18 @@ func ForName(name string) (Profile, bool) {
 // "No binding in either profile carries a key naming Cmd" is a claim about the
 // whole registry, and a binding this method omitted would escape that check,
 // which is the scattered-binding gap R7a's single registry exists to close. It
-// returns a fresh slice.
+// returns a fresh slice of copies, each with its own key slice, so a caller may
+// mutate the result without reaching the registry even when the receiver is the
+// exported Vim or Standard.
 func (p Profile) Bindings() []key.Binding {
-	return []key.Binding{
+	bindings := []key.Binding{
 		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
 		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect,
 		p.Refresh, p.OpenDetail, p.Filter, p.Help, p.Quit,
 		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,
 	}
+	for i := range bindings {
+		bindings[i] = cloneBinding(bindings[i])
+	}
+	return bindings
 }

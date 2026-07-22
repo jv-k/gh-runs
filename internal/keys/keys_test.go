@@ -228,3 +228,41 @@ func TestCtrlCBoundToQuitOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestAccessorsReturnCallerOwnedCopies pins the read-only contract the package
+// documents: a Profile taken from ForName or Profiles, and a slice taken from
+// Bindings, is the caller's own copy, and mutating it cannot reach the registry.
+// key.Binding.Keys() hands out its internal slice, so a shallow struct copy still
+// shares that backing array and "a caller cannot alter the registry" would be
+// only theoretical; these accessors deep-copy the key slices so it is real.
+func TestAccessorsReturnCallerOwnedCopies(t *testing.T) {
+	const sentinel = "MUTATED-BY-TEST"
+
+	// A profile from ForName is independent of keys.Vim.
+	p, ok := keys.ForName("Vim")
+	if !ok {
+		t.Fatal(`ForName("Vim") not found`)
+	}
+	if ks := p.RowUp.Keys(); len(ks) > 0 {
+		ks[0] = sentinel
+	}
+	if containsKey(keys.Vim.RowUp, sentinel) {
+		t.Errorf("mutating a ForName profile reached keys.Vim.RowUp: %v", keys.Vim.RowUp.Keys())
+	}
+
+	// A profile from Profiles is independent of keys.Vim.
+	if ks := keys.Profiles()[0].Quit.Keys(); len(ks) > 0 {
+		ks[0] = sentinel
+	}
+	if containsKey(keys.Vim.Quit, sentinel) {
+		t.Errorf("mutating a Profiles profile reached keys.Vim.Quit: %v", keys.Vim.Quit.Keys())
+	}
+
+	// A slice from Bindings is independent of the profile it came from.
+	if ks := keys.Vim.Bindings()[0].Keys(); len(ks) > 0 {
+		ks[0] = sentinel
+	}
+	if containsKey(keys.Vim.Bindings()[0], sentinel) {
+		t.Error("mutating a Bindings slice reached the registry")
+	}
+}
