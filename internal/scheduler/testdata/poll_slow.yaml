@@ -1,0 +1,85 @@
+---
+version: 2
+interactions:
+    # Two repositories in the poll set, both with only completed Runs, so both are
+    # slow-tier. Each is polled unconditionally on the cold start, then conditionally
+    # in the steady state, where the store's persisted ETag makes it a free 304.
+    # Interaction 0: alpha's cold-start poll, unconditional (no If-None-Match).
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/alpha/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":1,"workflow_runs":[{"id":1,"status":"completed","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"alpha-v1"'
+            X-Ratelimit-Remaining:
+                - "5000"
+    # Interaction 1: alpha's steady-state poll, conditional. Nothing changed, so a
+    # 304 the store reconstitutes to a 200 carrying the same ETag.
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/alpha/actions/runs
+        headers:
+            If-None-Match:
+                - '"alpha-v1"'
+      response:
+        status: 304 Not Modified
+        code: 304
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: ''
+        headers:
+            Etag:
+                - '"alpha-v1"'
+            X-Ratelimit-Remaining:
+                - "5000"
+    # Interaction 2: beta's cold-start poll, unconditional.
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/beta/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":1,"workflow_runs":[{"id":2,"status":"completed","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"beta-v1"'
+            X-Ratelimit-Remaining:
+                - "4999"
+    # Interaction 3: beta's steady-state poll, conditional. A free 304.
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/beta/actions/runs
+        headers:
+            If-None-Match:
+                - '"beta-v1"'
+      response:
+        status: 304 Not Modified
+        code: 304
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: ''
+        headers:
+            Etag:
+                - '"beta-v1"'
+            X-Ratelimit-Remaining:
+                - "4999"
