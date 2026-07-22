@@ -13,6 +13,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -21,6 +22,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -141,6 +143,49 @@ func profileList() string {
 	return strings.Join(names, ", ")
 }
 
+// Scope is the per-tab repository scope: the Workflows and Storage tabs each carry
+// one independently, settable to all-repos or this-repo and defaulting to all-repos
+// (settings R19). The Feed has no scope key: it expresses the same choice through the
+// launch filter (R19's note), and this-repo's working-directory resolution and its
+// fall-back-and-say-so are the consuming tab's, not this setting's.
+type Scope string
+
+const (
+	ScopeAllRepos Scope = "all-repos"
+	ScopeThisRepo Scope = "this-repo"
+)
+
+// scopes is the valid scope set, the single source for validation and the diagnostic
+// that lists the valid values (R19).
+var scopes = []Scope{ScopeAllRepos, ScopeThisRepo}
+
+// valid reports whether s is one of the two recognised scopes.
+func (s Scope) valid() bool {
+	for _, v := range scopes {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// scopeList renders the valid scopes for a diagnostic (R19).
+func scopeList() string {
+	names := make([]string, len(scopes))
+	for i, s := range scopes {
+		names[i] = string(s)
+	}
+	return strings.Join(names, ", ")
+}
+
+// Tiers, KeybindingProfiles and Scopes return the valid values of each selector
+// setting in the order the diagnostics list them, exported so the Settings view offers
+// exactly the set Load validates against and cycles it in a documented order. Each
+// returns a copy, so a caller cannot reorder or extend the registry the loader reads.
+func Tiers() []Tier                           { return append([]Tier(nil), tiers...) }
+func KeybindingProfiles() []KeybindingProfile { return append([]KeybindingProfile(nil), profiles...) }
+func Scopes() []Scope                         { return append([]Scope(nil), scopes...) }
+
 // Config is the resolved settings the rest of the tool reads.
 type Config struct {
 	Budget Tier
@@ -160,6 +205,12 @@ type Config struct {
 	// KeybindingProfile selects the motion set, Standard or Vim (settings R5). An
 	// unrecognised profile is rejected and the default stands.
 	KeybindingProfile KeybindingProfile
+	// WorkflowsScope and StorageScope are the two tabs' independent repository scopes
+	// (settings R19). Each is all-repos or this-repo, defaults to all-repos, and is
+	// settable without disturbing the other. An unrecognised value is rejected and the
+	// default stands.
+	WorkflowsScope Scope
+	StorageScope   Scope
 }
 
 // Diagnostic is a non-fatal message about the configuration: an unknown key, a
@@ -182,6 +233,8 @@ func Load(env Env, flags Flags) (Config, []Diagnostic) {
 		BreakerFailures:         breakerFailuresDefault,
 		DiscoveryRefreshMinutes: discoveryRefreshDefault,
 		KeybindingProfile:       KeybindingStandard,
+		WorkflowsScope:          ScopeAllRepos,
+		StorageScope:            ScopeAllRepos,
 	}
 	var diags []Diagnostic
 
@@ -289,6 +342,10 @@ func resolveFile(cfg Config, data []byte, diags []Diagnostic) (Config, []Diagnos
 					"keybinding_profile: %q is not a valid profile; using %q. Valid profiles: %s",
 					string(p), KeybindingStandard, profileList())})
 			}
+		case "workflows_scope":
+			cfg.WorkflowsScope, diags = resolveScope(key, node, cfg.WorkflowsScope, diags)
+		case "storage_scope":
+			cfg.StorageScope, diags = resolveScope(key, node, cfg.StorageScope, diags)
 		default:
 			// Not a key this version applies. A key R13 refuses gets its specific
 			// reason; anything else gets the generic unknown-key message (R14).
@@ -339,6 +396,44 @@ func clampInt(key string, v, min, max int, diags []Diagnostic) (int, []Diagnosti
 	}
 }
 
+// resolveScope decodes a scope key, keeping the current value when the node is the
+// wrong type or names a scope that does not exist (R19). It mirrors the profile's
+// resolution: a value that is neither all-repos nor this-repo is rejected with a
+// diagnostic listing both, and the default (the passed-in current value) stands.
+func resolveScope(key string, node yaml.Node, current Scope, diags []Diagnostic) (Scope, []Diagnostic) {
+	var s Scope
+	if node.Decode(&s) != nil {
+		return current, append(diags, typeErr(key, "one of "+scopeList(), node))
+	}
+	if s.valid() {
+		return s, diags
+	}
+	return current, append(diags, Diagnostic{Message: fmt.Sprintf(
+		"%s: %q is not a valid scope; using %q. Valid scopes: %s",
+		key, string(s), current, scopeList())})
+}
+
+// ClampConfirmThreshold, ClampBreakerFailures and ClampDiscoveryRefresh apply the same
+// bounds Load applies (R12, R21, R20), exported so the Settings view enforces them as it
+// edits a running instance rather than deferring the clamp to the next Load. The view is
+// the authority for the running instance (R17), so a value it holds must already be inside
+// the bound the file would clamp it to.
+func ClampConfirmThreshold(v int) int { return clampValue(v, noLowerBound, confirmThresholdMax) }
+func ClampBreakerFailures(v int) int  { return clampValue(v, breakerFailuresMin, breakerFailuresMax) }
+func ClampDiscoveryRefresh(v int) int { return clampValue(v, discoveryRefreshMin, noUpperBound) }
+
+// clampValue is the bound arithmetic clampInt performs, without the diagnostic, for the
+// exported view-facing clamps above.
+func clampValue(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
 // configDir resolves the directory holding config.yml, following gh's verified
 // precedence (settings R1, Constraints): $XDG_CONFIG_HOME if set on any platform,
 // else $AppData on Windows, else $HOME/.config. goos is the target OS, injected so
@@ -382,4 +477,194 @@ func readConfigFile(env Env) (data []byte, present bool, diags []Diagnostic) {
 		return nil, false, []Diagnostic{{Message: fmt.Sprintf(
 			"config.yml could not be read, using defaults: %v", err)}}
 	}
+}
+
+// Save persists the settings the running Settings view changed back to config.yml,
+// writing only the keys that differ between prev and next and leaving everything else in
+// the file untouched: comments, key order and keys this version does not recognise all
+// survive (settings R17, AC11). prev is what the view opened with, so a field the operator
+// never touched is not written, and a file that carried no such key stays without one. A
+// Save that changes nothing writes nothing, so opening and closing the view creates no file
+// (AC2's spirit). The write is atomic: the new content lands in a temporary file in the same
+// directory and is renamed over config.yml, so a failed write never leaves a half-written or
+// truncated config in its place (R17: the view must not corrupt the file).
+//
+// No secret is ever written here. The Config it marshals carries only display and behaviour
+// choices; tokens live in the environment and the keyring and never enter this file (R2,
+// ADR-0002).
+func Save(env Env, prev, next Config) error {
+	changes := changedKeys(prev, next)
+	if len(changes) == 0 {
+		return nil
+	}
+	dir := configDir(env, runtime.GOOS)
+	if dir == "" {
+		return errors.New("no config directory resolves; set $XDG_CONFIG_HOME or $HOME to persist settings")
+	}
+	path := filepath.Join(dir, "config.yml")
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+
+	updated, err := applyChanges(existing, changes)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(dir, path, updated)
+}
+
+// change is one key to write and the value to write under it. The slice changedKeys
+// returns is ordered, so the keys a Save appends to a fresh file land in a stable order.
+type change struct {
+	key   string
+	value any
+}
+
+// changedKeys returns the config.yml keys whose value differs between prev and next, in a
+// fixed order. Each Config field maps to exactly one key, the same spelling resolveFile
+// reads, so a value written here is read back by the next Load (R17). A string is written
+// for the enum-typed settings and a bare int for the numeric ones, matching how the file
+// spells each. Nothing here maps a rejected setting (R13): those have no field to change.
+func changedKeys(prev, next Config) []change {
+	var changes []change
+	add := func(differs bool, key string, value any) {
+		if differs {
+			changes = append(changes, change{key: key, value: value})
+		}
+	}
+	add(prev.Budget != next.Budget, "budget", string(next.Budget))
+	add(prev.ConfirmThreshold != next.ConfirmThreshold, "confirm_threshold", next.ConfirmThreshold)
+	add(prev.BreakerFailures != next.BreakerFailures, "purge_breaker_failures", next.BreakerFailures)
+	add(prev.DiscoveryRefreshMinutes != next.DiscoveryRefreshMinutes, "discovery_refresh_minutes", next.DiscoveryRefreshMinutes)
+	add(prev.KeybindingProfile != next.KeybindingProfile, "keybinding_profile", string(next.KeybindingProfile))
+	add(prev.WorkflowsScope != next.WorkflowsScope, "workflows_scope", string(next.WorkflowsScope))
+	add(prev.StorageScope != next.StorageScope, "storage_scope", string(next.StorageScope))
+	return changes
+}
+
+// applyChanges edits the config document in place, rewriting each changed key's value node
+// and appending a node pair for a key the file does not yet carry. It round-trips through a
+// yaml.Node so comments, key order and unrecognised keys survive the edit (R17): only the
+// value nodes the change set names are touched, and each keeps the comments that sat on it.
+func applyChanges(existing []byte, changes []change) ([]byte, error) {
+	var doc yaml.Node
+	if len(strings.TrimSpace(string(existing))) > 0 {
+		if err := yaml.Unmarshal(existing, &doc); err != nil {
+			return nil, fmt.Errorf("config.yml is not valid YAML, refusing to overwrite it: %w", err)
+		}
+	}
+	mapping := documentMapping(&doc)
+	if mapping == nil {
+		return nil, errors.New("config.yml is not a settings mapping, refusing to overwrite it")
+	}
+	for _, c := range changes {
+		setMappingKey(mapping, c.key, c.value)
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// documentMapping returns the root mapping node to edit, building an empty document and
+// mapping when the file was absent or blank. It returns nil when a present root is not a
+// mapping (a list, a scalar), which Save refuses rather than clobber.
+func documentMapping(doc *yaml.Node) *yaml.Node {
+	if doc.Kind == 0 {
+		mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		doc.Kind = yaml.DocumentNode
+		doc.Content = []*yaml.Node{mapping}
+		return mapping
+	}
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) == 1 && doc.Content[0].Kind == yaml.MappingNode {
+		return doc.Content[0]
+	}
+	return nil
+}
+
+// setMappingKey sets key to value in the mapping, rewriting the existing value node in
+// place so its comments and position are kept, or appending a new key/value pair when the
+// key is absent. A mapping node's Content is the flat [k0, v0, k1, v1, ...] sequence yaml.v3
+// uses, so the value of a key is the node right after it.
+func setMappingKey(mapping *yaml.Node, key string, value any) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			setScalar(mapping.Content[i+1], value)
+			return
+		}
+	}
+	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
+	valueNode := &yaml.Node{}
+	setScalar(valueNode, value)
+	mapping.Content = append(mapping.Content, keyNode, valueNode)
+}
+
+// setScalar writes value into node as a plain scalar, preserving any comments the node
+// carried so an inline note on the edited line survives the change (R17). Every settings
+// value is a plain string or a whole number, so the node needs no quoting style.
+func setScalar(node *yaml.Node, value any) {
+	head, line, foot := node.HeadComment, node.LineComment, node.FootComment
+	node.Kind = yaml.ScalarNode
+	node.Style = 0
+	node.Content = nil
+	switch v := value.(type) {
+	case string:
+		node.Tag = "!!str"
+		node.Value = v
+	case int:
+		node.Tag = "!!int"
+		node.Value = strconv.Itoa(v)
+	default:
+		node.Tag = "!!str"
+		node.Value = fmt.Sprint(v)
+	}
+	node.HeadComment, node.LineComment, node.FootComment = head, line, foot
+}
+
+// writeFileAtomic writes data to path by way of a temporary file in the same directory,
+// renamed into place, so a reader never sees a partial config and a failed write never
+// truncates the existing one (R17). The directory is created if absent (R1's default
+// location), the file is left mode 0600, and the temporary is removed on any error before
+// the rename.
+func writeFileAtomic(dir, path string, data []byte) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "config-*.yml.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
