@@ -93,6 +93,12 @@ type Options struct {
 	// ops engine, so the Storage tab's DELETE travels the one mutation entry a Purge does.
 	StorageFetch storage.Fetch
 	StorageOps   storage.Planner
+	// WorkflowFetch reads one repository's Workflow list for the Workflows tab, and WorkflowOps
+	// enables or disables one Workflow through the shared ops engine (workflow-management R1,
+	// R5). main.go wires both over the same client and ops, so a toggle is paced by the
+	// governor and travels the one write path exactly as every other write does.
+	WorkflowFetch workflows.Fetch
+	WorkflowOps   workflows.Toggler
 	// LogFetch reads one Job's log and LogExport downloads the whole-Run archive, both for the
 	// log view the Feed's detail pane opens over a Job (log-viewer R1, R11). main.go wires them
 	// over the shared client; the log-deletion planner reuses Ops, the one mutation entry.
@@ -118,9 +124,10 @@ type Model struct {
 	haveReadout bool
 }
 
-// New returns the root over opts. The Feed occupies Runs and starts focused (R2);
-// Storage is the real Reclamation tab (stage 11) and Workflows is its stage-11 placeholder,
-// present so the three-tab routing is real and the finished tab slots in without a rewrite.
+// New returns the root over opts. The Feed occupies Runs and starts focused (R2); Storage and
+// Workflows are the real Reclamation and Workflow-management tabs (stage 11), each fanning one
+// request out over the account's discovered repositories and gating its mutation on the same
+// capability data the Feed's gate reads.
 func New(opts Options) Model {
 	f := feed.New(feed.Options{
 		Profile:     opts.Profile,
@@ -141,10 +148,20 @@ func New(opts Options) Model {
 		Repos:   opts.Repos,
 		Ops:     opts.StorageOps,
 	})
+	// The Workflows tab reads the same discovered repositories: it fans one Workflow-list
+	// request out over them (R0) and reads their permissions and archived flags to gate enable
+	// and disable (R6). A toggle travels the shared ops engine, so it is paced and travels the
+	// one write path exactly as the Feed's and Storage's mutations do (R5).
+	wf := workflows.New(workflows.Options{
+		Profile: opts.Profile,
+		Fetch:   opts.WorkflowFetch,
+		Repos:   opts.Repos,
+		Ops:     opts.WorkflowOps,
+	})
 	return Model{
 		tabs: []tab{
 			feedTab{m: f.SetActive(true)},
-			workflowsTab{m: workflows.New()},
+			workflowsTab{m: wf},
 			storageTab{m: st},
 		},
 		active:      0,
@@ -418,18 +435,20 @@ func (t feedTab) SetActive(a bool) tab { return feedTab{t.m.SetActive(a)} }
 func (t feedTab) Title() string        { return "Runs" }
 func (t feedTab) CapturesInput() bool  { return t.m.CapturesInput() }
 
-// workflowsTab lifts the Workflows placeholder into the tab interface. It defers nothing,
-// so SetActive is a no-op until stage 11 builds the real tab.
+// workflowsTab lifts the Workflows tab into the tab interface (ADR-0011). It lists the
+// Workflows across the discovered repositories and enables or disables one from the cursor
+// (workflow-management R1, R5). A reversible toggle opens no modal, so it never captures
+// input, and the root's global keys stay live over it.
 type workflowsTab struct{ m workflows.Model }
 
 func (t workflowsTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 	nm, cmd := t.m.Update(msg)
 	return workflowsTab{nm}, cmd
 }
-func (t workflowsTab) View() string        { return t.m.View() }
-func (t workflowsTab) SetActive(bool) tab  { return t }
-func (t workflowsTab) Title() string       { return "Workflows" }
-func (t workflowsTab) CapturesInput() bool { return false }
+func (t workflowsTab) View() string         { return t.m.View() }
+func (t workflowsTab) SetActive(a bool) tab { return workflowsTab{t.m.SetActive(a)} }
+func (t workflowsTab) Title() string        { return "Workflows" }
+func (t workflowsTab) CapturesInput() bool  { return t.m.CapturesInput() }
 
 // storageTab lifts the Storage tab into the tab interface (ADR-0011). It is the Reclamation
 // surface: a per-repository rollup and a merged Cache-and-Artifact list, from which a
