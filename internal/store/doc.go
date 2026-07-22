@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -28,6 +30,19 @@ const docsSubdir = "docs"
 type docEnvelope struct {
 	Schema  int             `json:"schema"`
 	Payload json.RawMessage `json:"payload"`
+}
+
+// docFileName maps a document name to its on-disk basename, hashing the name to hex
+// exactly as the entry key does (store.go's key). This is what keeps a document name
+// from traversing: a hex string is a single path component with no separator and no
+// dot-dot, so filepath.Join with it can never escape the docs subdirectory, whatever
+// the caller passed. The name is caller-supplied (repo-discovery's docName today, a
+// per-repository key tomorrow), so it is disciplined at the primitive rather than at
+// every future caller. Hashing keeps the store's on-disk filenames uniformly safe,
+// the same reason the entry cache hashes its keys.
+func docFileName(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return hex.EncodeToString(sum[:]) + ".json"
 }
 
 // SaveDoc persists v as a named JSON document under the store's docs
@@ -60,7 +75,7 @@ func (t *Transport) SaveDoc(name string, v any) {
 	// process or another never sees a half-written document (AC18).
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()
-	_ = writeFileAtomic(dir, filepath.Join(dir, name+".json"), data)
+	_ = writeFileAtomic(dir, filepath.Join(dir, docFileName(name)), data)
 }
 
 // LoadDoc reads the named document into v and reports whether a usable one was
@@ -73,7 +88,7 @@ func (t *Transport) LoadDoc(name string, v any) bool {
 	if t.dir == "" {
 		return false
 	}
-	data, err := readFile(filepath.Join(t.dir, docsSubdir, name+".json"))
+	data, err := readFile(filepath.Join(t.dir, docsSubdir, docFileName(name)))
 	if err != nil {
 		return false
 	}

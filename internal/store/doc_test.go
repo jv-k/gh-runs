@@ -1,6 +1,8 @@
 package store_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,6 +19,15 @@ import (
 type doc struct {
 	Key     string `json:"key"`
 	HasRuns bool   `json:"has_runs"`
+}
+
+// docFile returns the on-disk path SaveDoc writes name to, replicating the store's
+// name hashing so a test that seeds a corrupt or wrong-schema file writes it where
+// LoadDoc looks. It pins the traversal-safe on-disk layout: a document's filename is
+// the hash of its name, so no name can carry a path separator onto disk.
+func docFile(dir, name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return filepath.Join(dir, "docs", hex.EncodeToString(sum[:])+".json")
 }
 
 // TestDocPersistsAcrossInstances proves the named-document primitive local-store
@@ -74,8 +85,9 @@ func TestLoadDocAbsentCorruptAndWrongSchema(t *testing.T) {
 		t.Error("LoadDoc reported a document that was never written")
 	}
 
-	// A corrupt file reads as absent.
-	docPath := filepath.Join(dir, "docs", "corrupt.json")
+	// A corrupt file reads as absent. Its on-disk name is the hash of the document
+	// name (the traversal-safe layout), so the test seeds it at that hashed path.
+	docPath := docFile(dir, "corrupt")
 	if err := os.MkdirAll(filepath.Dir(docPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -88,12 +100,56 @@ func TestLoadDocAbsentCorruptAndWrongSchema(t *testing.T) {
 
 	// A document whose envelope schema the binary does not recognise reads as
 	// absent, so it is discarded rather than migrated in place (R12).
-	wrongSchema := filepath.Join(dir, "docs", "future.json")
+	wrongSchema := docFile(dir, "future")
 	if err := os.WriteFile(wrongSchema, []byte(`{"schema":999,"payload":[{"key":"x"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if tr.LoadDoc("future", &got) {
 		t.Error("LoadDoc read a document with an unrecognised schema version (R12)")
+	}
+}
+
+// TestSaveDocNameCannotTraverse pins the document primitive's traversal safety. A
+// document name carrying ".." and path separators must not escape the docs
+// subdirectory, matching store.go's entry-key discipline where a key is hashed to
+// hex so a filename can never traverse (store.go's key). The name is hashed to a
+// safe basename, so the escape is impossible by construction rather than caught by
+// a check, and the document still round-trips by the same name.
+func TestSaveDocNameCannotTraverse(t *testing.T) {
+	root := t.TempDir()
+	storeDir := filepath.Join(root, "store")
+	clk := clockwork.NewFakeClock()
+	tr := store.NewTransport(nil, storeDir, clk)
+
+	// A name climbing out of docs/ and the store dir. From storeDir/docs, "../../escape"
+	// would clean to root/escape.json, the sentinel a traversal creates.
+	evil := "../../escape"
+	tr.SaveDoc(evil, []doc{{Key: "pwned"}})
+
+	sentinel := filepath.Join(root, "escape.json")
+	if _, err := os.Stat(sentinel); err == nil {
+		t.Fatalf("SaveDoc wrote outside the store dir to %s; a traversal name escaped docs/", sentinel)
+	}
+
+	// The document still round-trips by the same name, hashed to a safe basename, so
+	// the fix closes the escape without dropping the primitive's function.
+	var got []doc
+	if !tr.LoadDoc(evil, &got) {
+		t.Fatal("a traversal-shaped name did not round-trip through SaveDoc/LoadDoc")
+	}
+	if len(got) != 1 || got[0].Key != "pwned" {
+		t.Errorf("round-tripped %v, want the saved document back", got)
+	}
+
+	// Nothing landed outside docs/: the only document file is a hashed child of docs/,
+	// and no stray file appeared at the store root.
+	inDocs, _ := filepath.Glob(filepath.Join(storeDir, "docs", "*.json"))
+	if len(inDocs) != 1 {
+		t.Fatalf("docs/ holds %d document files, want exactly one hashed document", len(inDocs))
+	}
+	stray, _ := filepath.Glob(filepath.Join(storeDir, "*.json"))
+	if len(stray) != 0 {
+		t.Errorf("store root holds %d stray files, want none (documents live only under docs/)", len(stray))
 	}
 }
 
