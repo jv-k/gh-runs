@@ -10,30 +10,29 @@ import (
 )
 
 // fakeTransport is the base of the chain a test injects in place of the network.
-// It records the request it was handed and returns a canned response, so a test
-// can assert both that Request routed through the injected transport and that the
-// response survives back to the caller.
+// It records the request URL it was handed and returns a canned response built
+// from its own fields, so a test can assert both that Request routed through the
+// injected transport and that the response survives back to the caller. The
+// response is a composite literal built here rather than by a helper, so bodyclose
+// has no *http.Response-returning call to flag but the one it should: Request's.
 type fakeTransport struct {
-	gotURL string
-	resp   *http.Response
+	gotURL  string
+	status  int
+	headers map[string]string
+	body    string
 }
 
 func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	f.gotURL = req.URL.String()
-	return f.resp, nil
-}
-
-// response builds a minimal *http.Response with canonical headers and a body.
-func response(status int, headers map[string]string, body string) *http.Response {
 	h := http.Header{}
-	for k, v := range headers {
+	for k, v := range f.headers {
 		h.Set(k, v)
 	}
 	return &http.Response{
-		StatusCode: status,
+		StatusCode: f.status,
 		Header:     h,
-		Body:       io.NopCloser(strings.NewReader(body)),
-	}
+		Body:       io.NopCloser(strings.NewReader(f.body)),
+	}, nil
 }
 
 // TestRequestReturnsResponseThroughTransport pins ghclient's load-bearing
@@ -45,8 +44,11 @@ func response(status int, headers map[string]string, body string) *http.Response
 // ADR-0005 reads Link from exactly this response.
 func TestRequestReturnsResponseThroughTransport(t *testing.T) {
 	body := `[{"id":29516338954,"status":"completed"}]`
-	ft := &fakeTransport{resp: response(http.StatusOK,
-		map[string]string{"X-RateLimit-Remaining": "42"}, body)}
+	ft := &fakeTransport{
+		status:  http.StatusOK,
+		headers: map[string]string{"X-RateLimit-Remaining": "42"},
+		body:    body,
+	}
 
 	client, err := ghclient.New(ghclient.Options{
 		Host:      "github.com",
@@ -61,7 +63,7 @@ func TestRequestReturnsResponseThroughTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// The request routed through the injected transport to the right endpoint.
 	if !strings.Contains(ft.gotURL, "api.github.com/repos/cli/cli/actions/runs") {
