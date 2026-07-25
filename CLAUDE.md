@@ -83,6 +83,12 @@ Amending an ADR to close a risk is established practice here. R1, R2 and R3 were
 - The commit body says why, not what. The diff says what.
 - Branch from `main`. `main` is the default branch, `master` has never existed.
 
+## Working alongside other agents
+
+This clone is often driven by more than one agent session at once, for example a feature session and a GitHub-issue triage session, all sharing one working tree and one HEAD. `checkout`, `commit`, `reset` and `pull` mutate the whole tree, so one session's branch switch or a broad `git add` can sweep another session's in-flight files into the wrong commit. That has happened, and it put a mislabeled commit on `main`.
+
+Work in your own git worktree. Isolate at the start of substantive work, with `EnterWorktree`, or `git worktree add .claude/worktrees/<task> <branch>` and then enter it. Do every edit, commit and branch switch there, and leave the top-level checkout on `main` as the clean integration point no session commits to directly. Before any git operation, re-read `git rev-parse origin/main`, because HEAD may have moved between commands. Stage explicit paths only, never `git add -A`, `git add .` or `git commit -am`.
+
 ## Ground truth beats recall
 
 Every number in the PRD's constraints table was measured, and several contradict what the API's documentation implies. Where a doc here disagrees with the GitHub API, **the API is right and the doc is a bug worth reporting**. Where a doc disagrees with another doc, say so rather than picking one. That has happened, and it is how the Budget contradiction survived as long as it did.
