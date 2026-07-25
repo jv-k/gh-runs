@@ -139,6 +139,35 @@ func TestRateLimitBoundThenSkip(t *testing.T) {
 	}
 }
 
+// TestConsecutiveRateLimitSkipsDoNotBreakTheCircuit pins R13 and R21 where they are
+// easiest to break by accident: back-to-back R19a reclassifications. A skip is neither a
+// success nor a failure, so it must leave the breaker's streak exactly as it found it. The
+// breaker threshold is 1 here, the sharpest setting there is: if a skip advanced the
+// streak at all, the Purge would stop after the first Run and never reach the third. A
+// fine-grained PAT on a repository it cannot write is this case for every Run in the set,
+// so the Purge stalling on Run 1 would be the common outcome, not a corner.
+func TestConsecutiveRateLimitSkipsDoNotBreakTheCircuit(t *testing.T) {
+	h := newHarness(t, "delete_ratelimit_consecutive", 50, 1) // breaker threshold 1
+	c := h.confirmed(t, ops.OpDelete, items("o", "r", 1, 2, 3), snapshot(writableRepo("o", "r")))
+	sum := runPurge(t, h, c)
+
+	if sum.CircuitBroke {
+		t.Errorf("two consecutive R19a skips tripped a breaker set to 1; a skip is not a failure (R13, R21, AC14a). Reason: %s", sum.Reason)
+	}
+	if sum.Skipped != 2 || sum.Deleted != 1 || sum.FailedCount() != 0 {
+		t.Errorf("summary = skipped %d, deleted %d, failed %d; want 2/1/0 (R19a, AC14a)", sum.Skipped, sum.Deleted, sum.FailedCount())
+	}
+	// Three attempts each for Runs 1 and 2, one for Run 3: the bound holds per Run and the
+	// Purge walked the whole set.
+	if h.counting.deletes() != 7 {
+		t.Errorf("issued %d DELETEs, want 7 (Runs 1 and 2 x3 bounded, Run 3 x1) (R19a)", h.counting.deletes())
+	}
+	// Both skips carry the same reason, so R22's grouping counts them as one group of two.
+	if len(sum.Skips) != 1 || sum.Skips[0].Count != 2 {
+		t.Errorf("skip groups = %+v, want one group counting both (R22, AC18)", sum.Skips)
+	}
+}
+
 // TestCircuitBreakerStops pins R21 and AC13: with the breaker threshold at 3, three
 // consecutive failures stop the Purge, no fourth DELETE is issued, and the summary
 // names the circuit-break. The failures group by their distinct reasons (R22, AC18).

@@ -108,13 +108,15 @@ func isAuthorizationShape(req *http.Request, resp *http.Response) bool {
 
 // docURLPointsAtEndpoint reports whether docURL is the docs.github.com REST
 // reference page for the resource endpoint targets. The measured authorization
-// documentation_url points at the endpoint's own reference page, so its path
-// carries the endpoint's resource noun (permissions, runs, caches), which is what
-// terminalResource resolves, stepping over a trailing sub-action to reach it. A
-// secondary-limit doc URL points at the rate-limits page, which carries none of
-// them, so it fails this test and defaults to rate limiting. The check is a
-// positive match on purpose: anything short of a confident correspondence is
-// treated as a limit, which is the safe direction.
+// documentation_url points at the endpoint's own reference page, so its path carries
+// the endpoint's resource noun (permissions, runs, artifacts), which is what
+// terminalResource resolves, stepping over the trailing segments GitHub documents on
+// a parent's page. Two of GitHub's pages name the resource in the singular while the
+// endpoint says the plural (a Cache is documented at /rest/actions/cache), so the
+// singular is tried as well. A secondary-limit doc URL points at the rate-limits page,
+// which carries no resource noun of ours in either number, so it fails this test and
+// defaults to rate limiting. The check is a positive match on purpose: anything short
+// of a confident correspondence is treated as a limit, which is the safe direction.
 func docURLPointsAtEndpoint(docURL string, endpoint *url.URL) bool {
 	if docURL == "" || endpoint == nil {
 		return false
@@ -136,40 +138,63 @@ func docURLPointsAtEndpoint(docURL string, endpoint *url.URL) bool {
 	if resource == "" {
 		return false
 	}
-	return strings.Contains(docPath, resource)
+	if strings.Contains(docPath, resource) {
+		return true
+	}
+	// The page may name the resource in the singular (cache, not caches). This only
+	// ever widens the match, so nothing that corresponded before stops corresponding.
+	return strings.Contains(docPath, singular(resource))
 }
 
-// subActions are the Actions endpoint segments that name an action rather than the
-// resource it acts on. GitHub documents every one of them on the parent resource's
-// reference page (cancel and re-run on workflow-runs, enable and disable on
-// workflows), so an authorization documentation_url carries the parent's noun and
-// never the segment the request path ends in. Stepping over them is what lets the
-// correspondence be tested against the noun behind the action.
-//
-// Without this, a fine-grained PAT's 403 on any of them cannot match the
-// authorization shape and falls to the rate-limit direction: safe, and bounded by
-// purge R19a, but it spends three backoffs and their waits before the reclassification
-// (run-lifecycle R3, workflow-management R7, purge R13).
-//
-// The list is the sub-actions this product writes to, and a segment missing from it
-// fails the safe way: it stays the terminal resource, matches nothing, and defaults to
-// rate limiting exactly as before.
-var subActions = map[string]bool{
-	"cancel":            true, // POST .../runs/{id}/cancel (run-lifecycle R4)
-	"force-cancel":      true, // POST .../runs/{id}/force-cancel (R6)
-	"rerun":             true, // POST .../runs/{id}/rerun (R8)
-	"rerun-failed-jobs": true, // POST .../runs/{id}/rerun-failed-jobs (R13)
-	"approve":           true, // POST .../runs/{id}/approve
-	"enable":            true, // PUT .../workflows/{id}/enable (workflow-management R5)
-	"disable":           true, // PUT .../workflows/{id}/disable (R5)
-	"dispatches":        true, // POST .../workflows/{id}/dispatches (workflow-dispatch R16)
+// singular drops one trailing s, for the pages that name a resource in the singular
+// while its endpoint says the plural. It is a spelling adjustment and not a
+// pluraliser: nothing here needs one, and a real one would invent correspondences
+// this discriminator has no measurement for. The stem never falls below the four
+// characters terminalResource requires of a resource noun, so shortening never
+// produces a fragment loose enough to match a page by accident.
+func singular(noun string) string {
+	if len(noun) > 4 && strings.HasSuffix(noun, "s") {
+		return noun[:len(noun)-1]
+	}
+	return noun
 }
 
-// terminalResource is the endpoint's last significant path segment, lowercased:
-// the resource being acted on, skipping numeric IDs and the sub-action segments that
-// name an action instead of a resource. It is what a reference page's path echoes
-// (runs -> workflow-runs, permissions -> permissions, runs/{id}/cancel ->
-// workflow-runs). Segments shorter than four characters are dropped so a positional
+// parentDocumented are the trailing Actions path segments that GitHub documents on the
+// PARENT resource's reference page rather than on one of their own. Two kinds sit here:
+// a segment naming an action (cancel, enable) and a sub-resource of a Run, a Job or the
+// Cache (logs, usage, pending_deployments). Either way an authorization
+// documentation_url carries the parent's noun and never the segment the request path
+// ends in, so stepping over them is what lets the correspondence be tested against the
+// noun behind them.
+//
+// Without this, a fine-grained PAT's 403 on any of them cannot match the authorization
+// shape and falls to the rate-limit direction: safe, and bounded by purge R19a, but it
+// spends three backoffs and their waits before the reclassification, halving the write
+// ramp toward its floor on each one (run-lifecycle R3, workflow-management R7, purge R13).
+//
+// This is every trailing segment this product's own requests carry, checked against the
+// endpoints in ops, discovery, scheduler, cli and the tabs, and it is not a claim about
+// GitHub's whole API. A segment missing from it fails the safe way: it stays the
+// terminal resource, matches nothing, and defaults to rate limiting exactly as before.
+var parentDocumented = map[string]bool{
+	"cancel":              true, // POST .../runs/{id}/cancel (run-lifecycle R4)
+	"force-cancel":        true, // POST .../runs/{id}/force-cancel (run-lifecycle R6)
+	"rerun":               true, // POST .../runs/{id}/rerun (run-lifecycle R8)
+	"rerun-failed-jobs":   true, // POST .../runs/{id}/rerun-failed-jobs (run-lifecycle R13)
+	"approve":             true, // POST .../runs/{id}/approve (approvals R11)
+	"pending_deployments": true, // GET and POST .../runs/{id}/pending_deployments (approvals R12)
+	"logs":                true, // DELETE .../runs/{id}/logs (log-viewer R17), GET .../jobs/{id}/logs
+	"enable":              true, // PUT .../workflows/{id}/enable (workflow-management R5)
+	"disable":             true, // PUT .../workflows/{id}/disable (workflow-management R5)
+	"dispatches":          true, // POST .../workflows/{id}/dispatches (workflow-dispatch R14)
+	"usage":               true, // GET .../cache/usage (storage-reclamation R2)
+}
+
+// terminalResource is the endpoint's last significant path segment, lowercased: the
+// resource being acted on, skipping numeric IDs and the segments GitHub documents on a
+// parent's page. It is what a reference page's path echoes (runs -> workflow-runs,
+// permissions -> permissions, runs/{id}/cancel -> workflow-runs, jobs/{id}/logs ->
+// workflow-jobs). Segments shorter than four characters are dropped so a positional
 // owner or repo (o, r, cli) can never stand in for a resource; the shortest real
 // Actions resource nouns (runs, jobs, logs) are four characters.
 func terminalResource(path string) string {
@@ -179,8 +204,8 @@ func terminalResource(path string) string {
 		if len(s) < 4 {
 			continue
 		}
-		if subActions[s] {
-			continue // the action, not the resource: the doc URL names the resource behind it
+		if parentDocumented[s] {
+			continue // documented on the parent's page: the noun behind it is the resource
 		}
 		if _, err := strconv.Atoi(s); err == nil {
 			continue // a numeric ID is never the resource noun

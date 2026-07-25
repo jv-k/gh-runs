@@ -282,7 +282,7 @@ func TestBoundedRetrySkipSurfacesTheAPIReason(t *testing.T) {
 	tog := &stubToggler{result: ops.Summary{
 		Skipped: 1,
 		Skips: []ops.FailureGroup{{
-			Reason: "rate limit persisted after 3 attempts; skipped as an authorization failure: HTTP 403: Resource not accessible by personal access token",
+			Reason: "still rejected after 3 attempts, so the backoff was abandoned and the Run skipped (R19a). The API said: HTTP 403: Resource not accessible by personal access token",
 			Count:  1,
 		}},
 	}}

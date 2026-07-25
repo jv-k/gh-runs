@@ -1,0 +1,87 @@
+---
+version: 2
+# Runs 1 and 2 both answer a 403 whose documentation_url points at the fine-grained-PAT
+# permissions page rather than at this endpoint's reference, so the governor classifies
+# both as rate limiting, the safe default (rate-governor open question 1). Each is taped
+# exactly three times, which drives R19a's bound and proves it: a fourth DELETE to either
+# has no tape and would fail the replay. Both are then reclassified and skipped, back to
+# back, and Run 3 still deletes cleanly at the end. Run against a breaker threshold of 1,
+# so a skip that advanced the breaker would stop the Purge before Run 3 (R13, R21, AC14a).
+interactions:
+    - id: 0
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4321"]
+    - id: 1
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4320"]
+    - id: 2
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4319"]
+    - id: 3
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/2
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4318"]
+    - id: 4
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/2
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4317"]
+    - id: 5
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/2
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4316"]
+    - id: 6
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/3
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4315"]
+            X-Ratelimit-Reset: ["1789000000"]

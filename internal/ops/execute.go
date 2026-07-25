@@ -73,7 +73,7 @@ func (s Summary) StoppedEarly() bool { return s.CircuitBroke || s.LogFailed || s
 // addFailure records a failure under its reason, keeping first-seen group order.
 func (s *Summary) addFailure(item Item, reason string) {
 	s.failed = append(s.failed, item)
-	s.Failures = group(s.Failures, reason)
+	s.Failures = groupByReason(s.Failures, reason)
 }
 
 // addSkip records a skip under its reason, keeping first-seen group order. It records
@@ -83,12 +83,12 @@ func (s *Summary) addSkip(reason string) {
 	if reason == "" {
 		return
 	}
-	s.Skips = group(s.Skips, reason)
+	s.Skips = groupByReason(s.Skips, reason)
 }
 
-// group adds one reason to a group list, incrementing an existing group or appending a
-// new one, so first-seen order is the order a surface renders (R22, AC18).
-func group(groups []FailureGroup, reason string) []FailureGroup {
+// groupByReason adds one reason to a group list, incrementing an existing group or
+// appending a new one, so first-seen order is the order a surface renders (R22, AC18).
+func groupByReason(groups []FailureGroup, reason string) []FailureGroup {
 	for i := range groups {
 		if groups[i].Reason == reason {
 			groups[i].Count++
@@ -302,7 +302,7 @@ func (o *Ops) deleteItem(ctx context.Context, log logSink, item Item) (itemResul
 				// Run, reclassify as an authorization failure and skip under R20. It is a
 				// skip, not a failure, so it does not advance the breaker (AC14a). The
 				// reason is this last response's, the freshest words the API gave.
-				skip := boundedSkipReason(reason)
+				skip := retryBoundSkipReason(reason)
 				return itemResult{disp: dispSkipped, reason: skip}, log.write(skipLine(item, skip))
 			}
 			continue
@@ -360,18 +360,25 @@ func failureReason(resp *http.Response) string {
 	return fmt.Sprintf("HTTP %d", resp.StatusCode)
 }
 
-// boundedSkipReason is the reason R19a's reclassification records, carrying the API's own
-// words from the last rate-limit-classified response. AC14a records the skip "with its
-// reason", and the reason a reader needs is what the API said, not that we stopped
-// retrying: on the expected case, a fine-grained PAT's 403, those words name the missing
-// permission. Without them a surface has a count and no explanation (workflow-management
-// R7, AC3). apiReason is empty only if the response carried nothing to quote.
-func boundedSkipReason(apiReason string) string {
-	base := fmt.Sprintf("rate limit persisted after %d attempts; skipped as an authorization failure", maxRateLimitRetries)
+// retryBoundSkipReason is the reason R19a's reclassification records once the bounded
+// re-attempts are spent, carrying the API's own words from the last one. AC14a records
+// the skip "with its reason", and the reason a reader needs is what the API said, not
+// that we stopped retrying: on the expected case, a fine-grained PAT's 403, those words
+// name the missing permission. Without them a surface has a count and no explanation
+// (workflow-management R7, AC3).
+//
+// It states what was done rather than what was wrong, because R19a's reclassification is
+// a decision under uncertainty and the two candidate causes stay indistinguishable. A
+// genuine secondary limit that outlasted the backoffs is recorded here too, and calling
+// that an authorization failure outright would assert the one thing this classification
+// cannot know. Quoting the API is what lets the reader tell them apart.
+// apiReason is empty only if the response carried nothing to quote.
+func retryBoundSkipReason(apiReason string) string {
+	base := fmt.Sprintf("still rejected after %d attempts, so the backoff was abandoned and the Run skipped (R19a)", maxRateLimitRetries)
 	if apiReason == "" {
 		return base
 	}
-	return base + ": " + apiReason
+	return base + ". The API said: " + apiReason
 }
 
 // notCancelableReason is the recorded reason for a 409 from cancel. It names force-cancel
@@ -413,7 +420,7 @@ func (o *Ops) mutateItem(ctx context.Context, op Operation, debug bool, item Ite
 			rateLimitStreak++
 			if rateLimitStreak >= maxRateLimitRetries {
 				// The reason is this last response's, the freshest words the API gave.
-				return itemResult{disp: dispSkipped, reason: boundedSkipReason(reason)}, nil
+				return itemResult{disp: dispSkipped, reason: retryBoundSkipReason(reason)}, nil
 			}
 			continue
 		}

@@ -92,6 +92,31 @@ func TestDeletePartialFailureExitsOne(t *testing.T) {
 	}
 }
 
+// TestDeleteSummaryStatesWhyARunWasSkipped pins purge AC14a at the CLI's terminal
+// account: a Run reclassified as an authorization skip after R19a's three attempts is
+// reported with its reason, not as a bare count. Without it a non-interactive Purge
+// prints "skipped 1" and nothing that explains which permission was missing, while the
+// same skip reaches the Workflows tab with the API's words. The Purge failed nothing, so
+// it still exits 0 (cli-surface R17).
+func TestDeleteSummaryStatesWhyARunWasSkipped(t *testing.T) {
+	h := newHarness(t, "delete_skipped").withCurrent(gh("o", "r"))
+	code := h.runDriven("delete", "--all", "--yes")
+	if code != 0 {
+		t.Errorf("a Purge whose only casualty was a skip exited %d, want 0 (cli-surface R17). stderr: %s", code, h.stderr.String())
+	}
+	// Run 1 is attempted three times and then skipped (R19a), Run 2 once and deleted.
+	if h.counting.deletes() != 4 {
+		t.Errorf("issued %d DELETEs, want 4 (Run 1 x3 bounded, Run 2 x1) (R19a)", h.counting.deletes())
+	}
+	out := h.stdout.String()
+	if !strings.Contains(out, "skipped 1") {
+		t.Errorf("summary did not count the skip (R22):\n%s", out)
+	}
+	if !strings.Contains(out, "Resource not accessible by personal access token") {
+		t.Errorf("summary did not state why the Run was skipped; AC14a records the skip with its reason:\n%s", out)
+	}
+}
+
 // TestDryRunAndRealAgree pins AC9's equivalence: --dry-run reports N Runs, and the real
 // delete over the same cassette deletes exactly N and writes N log lines. Two harnesses
 // over one cassette, because the two paths issue different requests.

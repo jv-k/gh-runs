@@ -167,18 +167,29 @@ func printDryRun(deps Deps, plan ops.Plan) error {
 func printSummary(deps Deps, sum ops.Summary) {
 	_, _ = fmt.Fprintf(deps.Stdout, "Deleted %d, gone %d, skipped %d, failed %d of %d Runs.\n",
 		sum.Deleted, sum.Gone, sum.Skipped, sum.FailedCount(), sum.Total)
-	groups := append([]ops.FailureGroup(nil), sum.Failures...)
-	sort.Slice(groups, func(i, j int) bool { return groups[i].Reason < groups[j].Reason })
-	for _, g := range groups {
-		// A failure reason carries the API's error message verbatim (ops.failureReason),
-		// which a hostile third-party repository controls, so it is sanitised here at the
-		// terminal boundary exactly as the list table sanitises a Run's own fields
-		// (security review, textsan). The R29 deletion log records the reason raw and
-		// write-only, so only this render is stripped, never what ops writes.
-		_, _ = fmt.Fprintf(deps.Stdout, "  %d x %s\n", g.Count, textsan.Sanitize(g.Reason))
-	}
+	printGroups(deps, sum.Failures, "")
+	// A skip is not a failure and changes no exit code, but a count with no words leaves
+	// the operator of a non-interactive Purge with nothing to act on: purge AC14a records
+	// the skip with its reason, and on R19a's path that reason carries the API's own 403.
+	// The label keeps the two apart in one flat list.
+	printGroups(deps, sum.Skips, "skipped: ")
 	if sum.Reason != "" {
 		_, _ = fmt.Fprintln(deps.Stdout, sum.Reason)
+	}
+}
+
+// printGroups renders one grouped-reason list under label, sorted by reason so the
+// output is stable (R22, AC18).
+func printGroups(deps Deps, groups []ops.FailureGroup, label string) {
+	sorted := append([]ops.FailureGroup(nil), groups...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Reason < sorted[j].Reason })
+	for _, g := range sorted {
+		// A reason carries the API's error message verbatim (ops.failureReason), which a
+		// hostile third-party repository controls, so it is sanitised here at the terminal
+		// boundary exactly as the list table sanitises a Run's own fields (security review,
+		// textsan). The R29 deletion log records the reason raw and write-only, so only
+		// this render is stripped, never what ops writes.
+		_, _ = fmt.Fprintf(deps.Stdout, "  %d x %s%s\n", g.Count, label, textsan.Sanitize(g.Reason))
 	}
 }
 

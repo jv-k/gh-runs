@@ -55,18 +55,20 @@ func TestClassification(t *testing.T) {
 	}
 }
 
-// TestSubActionEndpointClassification pins open question 1's discriminator on the
-// Actions sub-action endpoints, whose path ends in the action rather than in the
-// resource it acts on (cancel, rerun, enable, disable). GitHub documents each of
-// them on the parent resource's reference page, so the measured authorization
-// documentation_url carries workflow-runs or workflows and never the segment the
-// request path ends in. A fine-grained PAT's 403 on these is the expected case
-// (purge R13, run-lifecycle R3, workflow-management R7), and reading it as a rate
-// limit spends three bounded backoffs before purge R19a reclassifies it. The safe
-// direction is untouched: the rate-limits page, or a Retry-After, is still rate
-// limiting (R12).
-func TestSubActionEndpointClassification(t *testing.T) {
-	rec := openCassette(t, "testdata/verb_endpoints")
+// TestParentDocumentedEndpointClassification pins open question 1's discriminator on
+// the endpoints whose reference page's path does not carry their last segment. Two
+// shapes produce that. A segment naming an action (cancel, enable) or a sub-resource
+// (logs, usage, pending_deployments) is documented on the parent resource's page, so
+// the doc URL carries workflow-runs, workflows or cache instead. And a Cache is
+// documented at /rest/actions/cache while its endpoint says caches.
+//
+// A fine-grained PAT's 403 on these is the expected case (purge R13, run-lifecycle R3,
+// workflow-management R7), and reading it as a rate limit spends three bounded backoffs,
+// and their waits, before purge R19a reclassifies it, halving the write ramp on each one.
+// The safe direction is untouched: the rate-limits page, a Retry-After, and a trailing
+// segment the classifier does not know are all still rate limiting (R12).
+func TestParentDocumentedEndpointClassification(t *testing.T) {
+	rec := openCassette(t, "testdata/parent_documented")
 
 	cases := []struct {
 		method      string
@@ -74,15 +76,22 @@ func TestSubActionEndpointClassification(t *testing.T) {
 		wantLimited bool
 		why         string
 	}{
-		{http.MethodPost, "repos/o/r/actions/runs/1/cancel", false, "cancel is documented on the workflow-runs page, so the doc URL names the Run, not the verb"},
+		{http.MethodPost, "repos/o/r/actions/runs/1/cancel", false, "cancel is documented on the workflow-runs page, so the doc URL names the Run, not the action"},
 		{http.MethodPost, "repos/o/r/actions/runs/2/force-cancel", false, "force-cancel is documented on the workflow-runs page (run-lifecycle R6)"},
 		{http.MethodPost, "repos/o/r/actions/runs/3/rerun", false, "re-run is documented on the workflow-runs page (run-lifecycle R8)"},
 		{http.MethodPost, "repos/o/r/actions/runs/4/rerun-failed-jobs", false, "re-run-failed-jobs is documented on the workflow-runs page (run-lifecycle R13)"},
-		{http.MethodPost, "repos/o/r/actions/runs/5/approve", false, "approve is documented on the workflow-runs page"},
+		{http.MethodPost, "repos/o/r/actions/runs/5/approve", false, "approve is documented on the workflow-runs page (approvals R11)"},
 		{http.MethodPut, "repos/o/r/actions/workflows/9001/enable", false, "enable is documented on the workflows page (workflow-management R5, R7)"},
 		{http.MethodPut, "repos/o/r/actions/workflows/9002/disable", false, "disable is documented on the workflows page (workflow-management R5, R7)"},
 		{http.MethodPost, "repos/o/r/actions/workflows/9003/dispatches", false, "a Dispatch is documented on the workflows page (workflow-dispatch R14)"},
-		{http.MethodPost, "repos/o/r/actions/runs/6/cancel", true, "a verb endpoint answering with the rate-limits page is still rate limiting (open question 1)"},
+		{http.MethodDelete, "repos/o/r/actions/caches/123", false, "a Cache is documented at the singular /rest/actions/cache (storage-reclamation, R2's Cache deletion)"},
+		{http.MethodDelete, "repos/o/r/actions/artifacts/77", false, "an Artifact's page is the plural it already matched (R2's Artifact deletion)"},
+		{http.MethodDelete, "repos/o/r/actions/runs/8/logs", false, "log deletion is documented on the workflow-runs page (R2, log-viewer R17)"},
+		{http.MethodGet, "repos/o/r/actions/jobs/55/logs", false, "a Job's logs are documented on the workflow-jobs page, the same segment under a different parent"},
+		{http.MethodGet, "repos/o/r/actions/cache/usage", false, "cache usage is a sub-resource of the singular cache page"},
+		{http.MethodPost, "repos/o/r/actions/runs/9/pending_deployments", false, "a pending-deployment review is documented on the workflow-runs page (approvals R12)"},
+		{http.MethodGet, "repos/o/r/actions/runs/10/timing", true, "a trailing segment the classifier does not know stays the terminal resource, matches nothing, and defaults to rate limiting"},
+		{http.MethodPost, "repos/o/r/actions/runs/6/cancel", true, "a parent-documented endpoint answering with the rate-limits page is still rate limiting (open question 1)"},
 		{http.MethodPost, "repos/o/r/actions/runs/7/cancel", true, "a Retry-After means rate limiting outright, whatever the body says (R12)"},
 	}
 	for _, tc := range cases {
