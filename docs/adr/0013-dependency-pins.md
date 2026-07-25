@@ -61,7 +61,7 @@ The suffixed GitHub path is safe precisely because it breaks. The unsuffixed one
 
 ## colorprofile is already here, and we promote it rather than adopt it
 
-**`github.com/charmbracelet/colorprofile v0.4.3` is what `charm.land/bubbletea/v2 v2.0.8` resolves today**, verified against the module graph, where it sits `// indirect`. It becomes a direct require for one reason: [settings](../features/settings/requirements.md) R15a resolves `NO_COLOR` **itself** and hands the answer to `tea.WithColorProfile`, rather than letting this library detect it. The version does not move. The line moves from indirect to direct, which is a `go.mod` line and therefore this ADR's business.
+**`github.com/charmbracelet/colorprofile v0.4.3` is what `charm.land/bubbletea/v2 v2.0.8` resolves today**, verified against the module graph, where it arrived `// indirect`. It is a direct require for one reason: [settings](../features/settings/requirements.md) R15a resolves `NO_COLOR` **itself** and hands the answer to `tea.WithColorProfile`, rather than letting this library detect it. The promotion landed with R15a's resolver, `config.ColorProfile`, and `main.go` passes its answer to `tea.WithColorProfile`. The version did not move. The line moved from indirect to direct, which is a `go.mod` line and therefore this ADR's business.
 
 **The reason we override its detection is measured, and it is an accessibility defect rather than a preference.** At v0.4.3, `Detect` resolves `NO_COLOR` through `strconv.ParseBool` and gates the result on `isatty`, while leaving `CLICOLOR_FORCE` ungated. On a real PTY:
 

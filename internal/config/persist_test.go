@@ -19,6 +19,7 @@ func baseConfig() config.Config {
 		BreakerFailures:         50,
 		DiscoveryRefreshMinutes: 5,
 		KeybindingProfile:       config.KeybindingStandard,
+		Theme:                   config.ThemeAuto,
 		WorkflowsScope:          config.ScopeAllRepos,
 		StorageScope:            config.ScopeAllRepos,
 	}
@@ -148,6 +149,55 @@ func TestSaveChangesOnlyEditedKey(t *testing.T) {
 	}
 	if idx := strings.Index(got, "budget"); idx > strings.Index(got, "confirm_threshold") {
 		t.Errorf("Save reordered the keys; budget must stay first:\n%s", got)
+	}
+}
+
+// TestSaveThemeChangesOnlyThatKey pins settings R17 and AC11 for the theme: changing it
+// in the running view writes theme and nothing else, leaving the file's comments, key
+// order and the keys this version does not recognise exactly as they were.
+func TestSaveThemeChangesOnlyThatKey(t *testing.T) {
+	dir := t.TempDir()
+	original := "# My gh-runs config\n" +
+		"theme: auto # follow the terminal\n" +
+		"budget: greedy\n" +
+		"\n" +
+		"# something a newer version might know\n" +
+		"future_thing: 42\n" +
+		"keybinding_profile: vim\n"
+	writeConfig(t, dir, original)
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	prev := baseConfig()
+	prev.Budget = config.TierGreedy
+	prev.KeybindingProfile = config.KeybindingVim
+	next := prev
+	next.Theme = config.ThemeDark
+
+	if err := config.Save(env, prev, next); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got := readSaved(t, dir)
+	if !strings.Contains(got, "theme: dark") {
+		t.Errorf("saved config did not change the theme to dark:\n%s", got)
+	}
+	for _, want := range []string{
+		"# My gh-runs config",
+		"follow the terminal",
+		"budget: greedy",
+		"# something a newer version might know",
+		"future_thing: 42",
+		"keybinding_profile: vim",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Save discarded %q (R17: comments, order and unknown keys must survive):\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "theme") > strings.Index(got, "budget") {
+		t.Errorf("Save reordered the keys; theme must stay first:\n%s", got)
+	}
+	if cfg, _ := config.Load(env, config.Flags{}); cfg.Theme != config.ThemeDark {
+		t.Errorf("Theme after round-trip = %q, want %q", cfg.Theme, config.ThemeDark)
 	}
 }
 

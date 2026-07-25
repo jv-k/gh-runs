@@ -21,6 +21,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/cli/go-gh/v2/pkg/auth"
 	"github.com/cli/go-gh/v2/pkg/term"
 
@@ -238,6 +239,13 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 		profile = p
 	}
 
+	// The colour profile is resolved here and handed to Bubble Tea explicitly, rather than
+	// left to colorprofile.Detect, which resolves NO_COLOR through strconv.ParseBool and so
+	// resolves it against R15 (settings R15a, ADR-0013). Detection supplies what the output
+	// stream can carry; config.ColorProfile applies the environment over it, and NO_COLOR
+	// caps the answer whatever the theme setting says (R6, R15, AC9).
+	colorProfile := config.ColorProfile(os.LookupEnv, cfg.Theme, colorprofile.Detect(os.Stdout, os.Environ()))
+
 	// Seed discovery so the poll set is not empty on a warm cache; a cold cache spends
 	// one pass and the Feed reveals repositories as they arrive (R32, R33). A discovery
 	// failure is not fatal to the dashboard: the Feed still paints what it can.
@@ -268,8 +276,9 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 	}))
 
 	// tea.WithContext ties the program to the same context the engine runs under, so a
-	// signal that cancels one cancels both.
-	_, err := tea.NewProgram(root, tea.WithContext(ctx)).Run()
+	// signal that cancels one cancels both. tea.WithColorProfile is R15a's requirement in
+	// one call: the program renders at the profile resolved above and never detects its own.
+	_, err := tea.NewProgram(root, tea.WithContext(ctx), tea.WithColorProfile(colorProfile)).Run()
 
 	// Stop the engine, bounded: the UI is already gone, so quit must not wait on a hung
 	// poll. The response-header timeout bounds any in-flight read, and process exit reaps

@@ -98,6 +98,8 @@ func (m Model) rawValue(r row) string {
 		return string(m.cfg.Budget)
 	case rowProfile:
 		return string(m.cfg.KeybindingProfile)
+	case rowTheme:
+		return string(m.cfg.Theme)
 	case rowWorkflowsScope:
 		return string(m.cfg.WorkflowsScope)
 	case rowStorageScope:
@@ -121,6 +123,8 @@ func (m Model) label(r row) string {
 		return "Budget"
 	case rowProfile:
 		return "Keybinding profile"
+	case rowTheme:
+		return "Theme"
 	case rowWorkflowsScope:
 		return "Workflows scope"
 	case rowStorageScope:
@@ -145,6 +149,8 @@ func (m Model) description(r row) string {
 		return "Share of your API allowance the background refresh may spend."
 	case rowProfile:
 		return "Motion keys: Vim (k/j) or Standard (arrows)."
+	case rowTheme:
+		return "Palette: auto follows your terminal background. NO_COLOR overrides all three."
 	case rowWorkflowsScope:
 		return "Which repositories the Workflows tab covers."
 	case rowStorageScope:
@@ -168,6 +174,8 @@ func (m Model) optionsHint(r row) string {
 		return joinTiers(config.Tiers())
 	case rowProfile:
 		return joinProfiles(config.KeybindingProfiles())
+	case rowTheme:
+		return joinThemes(config.Themes())
 	case rowWorkflowsScope, rowStorageScope:
 		return joinScopes(config.Scopes())
 	default:
@@ -223,6 +231,14 @@ func joinProfiles(ps []config.KeybindingProfile) string {
 	out := make([]string, len(ps))
 	for i, p := range ps {
 		out[i] = string(p)
+	}
+	return strings.Join(out, " / ")
+}
+
+func joinThemes(ts []config.Theme) string {
+	out := make([]string, len(ts))
+	for i, t := range ts {
+		out[i] = string(t)
 	}
 	return strings.Join(out, " / ")
 }

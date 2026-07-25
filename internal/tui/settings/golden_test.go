@@ -26,14 +26,26 @@ func TestGoldenDefaultView(t *testing.T) {
 	goldie.New(t).Assert(t, "default_view", []byte(m.View()))
 }
 
+// TestGoldenThemeFocused fixes the theme row under the cursor: the member in force, the
+// three the set offers, and the intent-level description, which is what makes AC12's
+// "renders a theme row" byte-exact rather than a claim (settings R6, R18).
+func TestGoldenThemeFocused(t *testing.T) {
+	m := settings.New(keys.Standard, defaultConfig(), nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focusWith(t, m, "down", "theme")
+	goldie.New(t).Assert(t, "theme_focused", []byte(m.View()))
+}
+
 // TestGoldenEditingNumber fixes the numeric editor mid-entry: the discovery refresh row is
-// being typed, showing the buffer and caret, with the two scopes flipped to this-repo and
-// the profile on Vim, so the frame also proves the non-default values render (R12, R19, R20).
+// being typed, showing the buffer and caret, with the two scopes flipped to this-repo, the
+// profile on Vim and the theme on dark, so the frame also proves the non-default values
+// render (R6, R12, R19, R20).
 func TestGoldenEditingNumber(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.WorkflowsScope = config.ScopeThisRepo
 	cfg.StorageScope = config.ScopeThisRepo
 	cfg.KeybindingProfile = config.KeybindingVim
+	cfg.Theme = config.ThemeDark
 	m := settings.New(keys.Vim, cfg, nil).Open()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = focusWith(t, m, "j", "discovery_refresh_minutes")
