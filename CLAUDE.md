@@ -11,7 +11,7 @@ v2 is a ground-up Go rewrite. **The stage 0 floor and the transport chain are bu
 | [docs/PRD.md](docs/PRD.md) | What we are building, who for, and the measured constraints that shaped it. The constraints table is the most valuable thing in the repo. |
 | [docs/CONTEXT.md](docs/CONTEXT.md) | The glossary. It is binding, see below. |
 | [docs/BUILD-ORDER.md](docs/BUILD-ORDER.md) | What to build first. **Not** the PRD's feature grouping, which is a taxonomy and points roughly backwards. |
-| [docs/adr/](docs/adr/) | Fourteen decisions and the options they beat. |
+| [docs/adr/](docs/adr/) | Twenty-three decisions and the options they beat. |
 | [docs/features/](docs/features/) | Sixteen requirement sets, one per capability. Fifteen are 2.0.0 scope, and notifications is deferred to 2.1 ([ADR-0013](docs/adr/0013-dependency-pins.md)). Numbered `R*` requirements and `AC*` acceptance criteria. |
 
 ## The glossary is binding
