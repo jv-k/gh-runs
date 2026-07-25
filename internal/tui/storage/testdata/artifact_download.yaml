@@ -1,0 +1,30 @@
+---
+version: 2
+# An Artifact download (storage-reclamation R13): a GET on the Artifact's zip endpoint
+# answered with a 302 to a short-lived signed blob URL, which the client follows to a 200
+# application/zip body. Two taped interactions, one logical download: the endpoint, then the
+# blob. The archive is streamed to disk as received and never unpacked.
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/artifacts/12345/zip
+      response:
+        status: 302 Found
+        code: 302
+        body: ""
+        headers:
+            Location: ["https://pipelines.blob.example/signed-artifact?sig=abc123"]
+            X-Ratelimit-Remaining: ["4999"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 1
+      request:
+        method: GET
+        url: https://pipelines.blob.example/signed-artifact?sig=abc123
+      response:
+        status: 200 OK
+        code: 200
+        headers:
+            Content-Type: ["application/zip"]
+            Content-Length: ["24"]
+        body: "PK-artifact-zip-payload\n"

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/cli/go-gh/v2/pkg/auth"
 	"github.com/cli/go-gh/v2/pkg/term"
 
 	"github.com/jv-k/gh-runs/v2/internal/cli"
@@ -97,11 +98,25 @@ func run() int {
 
 	// go-gh installs our transport as opts.Transport with its own cache off
 	// (CacheTTL: 0). ghclient exposes Request, never Get or Do.
-	client, err := ghclient.New(ghclient.Options{Transport: transport})
+	//
+	// The token is resolved once, here, and handed to both surfaces. go-gh resolves an empty
+	// AuthToken itself, but it does so per RESTClient and per HTTPClient, and two surfaces
+	// means four resolutions. Each one can shell out to the gh binary to reach the keyring
+	// (ADR-0002), so leaving them to resolve costs a keyring-backed user three extra
+	// subprocess spawns at every launch. An empty result is passed through rather than
+	// reported here, so go-gh raises its own "authentication token not found" message and the
+	// failure a user sees is unchanged. The host is resolved the way go-gh resolves it and is
+	// used only to select the token: it is deliberately not passed as an option, because
+	// ghclient derives its REST prefix from that field and 2.0.0 serves github.com alone
+	// (ADR-0009).
+	authHost, _ := auth.DefaultHost()
+	token, _ := auth.TokenForHost(authHost)
+	cl, err := newClients(transport, gov, token)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gh-runs:", err)
 		return 1
 	}
+	client := cl.shared
 
 	// Discovery stands on the whole chain: it issues its enumeration and probes
 	// through the client (so the governor accounts them and the store revalidates
@@ -139,7 +154,7 @@ func run() int {
 	// operation; any subcommand carrying flags or arguments runs the CLI. The composition
 	// root already knows both, and that is where the choice belongs.
 	if opensTUI(os.Args[1:]) {
-		return runTUI(cfg, clk, client, gov, transport, disc, purge)
+		return runTUI(cfg, clk, cl, gov, transport, disc, purge)
 	}
 
 	// The read half's dependencies. The discovered set is a function so cli stays
@@ -201,7 +216,8 @@ func run() int {
 // the scheduler on the chain, discovery's poll set and the governor's Budget Readout,
 // hands the root the engine channel and the pulls it broadcasts, runs the program, and
 // stops the engine cleanly, bounded so quit stays snappy (ADR-0015).
-func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *governor.Governor, transport *store.Transport, disc *discovery.Discovery, purge *ops.Ops) int {
+func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Governor, transport *store.Transport, disc *discovery.Discovery, purge *ops.Ops) int {
+	client := cl.shared
 	if !term.FromEnv().IsTerminalOutput() {
 		fmt.Fprintln(os.Stderr, "gh-runs: standard output is not a terminal; refusing to open the dashboard. Run `gh runs list` for non-interactive output.")
 		return 1
@@ -239,64 +255,17 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 	defer cancel()
 	sched.Start(ctx)
 
-	root := tui.New(tui.Options{
-		Updates:     sched.Updates(),
-		Readout:     gov.Readout,
-		Repos:       func() []domain.Repo { return knownRepos(disc) },
-		Revalidated: func() time.Time { return newestRevalidated(transport, disc.PollSet()) },
-		SetViewport: sched.SetViewport,
-		SetFilter:   sched.SetFilter,
-		Profile:     profile,
-		// The Settings pane opens over the resolved config and writes changed keys back through
-		// config.Save, preserving comments, key order and keys this version does not recognise
-		// (settings R17, AC11). os.LookupEnv locates the same config.yml Load read at startup, so
-		// the pane's only write is that one local file and never the API.
-		Config:       cfg,
-		SaveSettings: func(prev, next config.Config) error { return config.Save(os.LookupEnv, prev, next) },
-		// The detail pane fetches its Run's Jobs over the same client the whole tool shares,
-		// so the store revalidates and the governor accounts each request (ADR-0015). The
-		// clock is the tool's, so the pane's timing column reads the same wall clock as
-		// everything else.
-		DetailFetch: rundetail.ClientFetch(client),
-		Clock:       clk,
-		// The Feed's delete key freezes the selection into a Plan through this engine and
-		// opens the confirmation over it (purge R4 to R9). It is the same ops the CLI's
-		// delete command uses, so both surfaces run one confirmation and one DELETE path.
-		Ops: purge,
-		// The Storage tab reads Cache and Artifact usage over the same client, so the store
-		// revalidates and the governor accounts each request (storage-reclamation R1), and it
-		// freezes a Cache and Artifact selection into a reclamation Plan through the same ops
-		// engine, so its DELETE travels the one mutation entry a Purge does (R17).
-		StorageFetch: storage.ClientFetch(client),
-		StorageOps:   purge,
-		// The Workflows tab reads each repository's Workflow list over the same client, so the
-		// store revalidates and the governor accounts each request (workflow-management R1), and
-		// it enables or disables one Workflow through the same ops engine, so a toggle is paced
-		// and travels the one write path every other write does (R5).
-		WorkflowFetch: workflows.ClientFetch(client),
-		WorkflowOps:   purge,
-		// The dispatch form the Workflows tab opens reads the Workflow YAML at a ref and the
-		// repository's environments over the same client (workflow-dispatch R5, R7), triggers the
-		// workflow_dispatch through the same ops engine so it is paced and travels ops's write path
-		// (R16), and remembers last-used inputs in the same local-store the discovery results live
-		// in (R25). One client, one ops, one store, exactly as every other surface.
-		DispatchFetch: dispatch.NewClientFetch(client),
-		DispatchOps:   purge,
-		DispatchStore: transport,
-		// The log view fetches a Job's plain text and, on request, downloads the whole-Run
-		// archive to the working directory, both over the same client (log-viewer R1, R11). Its
-		// deletion reuses purge, the one mutation entry, so a log DELETE is paced and logged like
-		// every other (R17).
-		LogFetch:  logview.ClientFetch(client),
-		LogExport: logview.ClientExport(client, exportDir()),
-		// The approvals decision pane approves a fork-PR Run or reviews a Run's pending deployments
-		// through the same ops engine every other write uses, so an approve and a review are paced
-		// and travel ops's write path (approvals R11, R12), and it reads the pending deployments
-		// over the same client the whole tool shares (R12). An approve and a review are single POSTs
-		// beside Execute, so the sole-DELETE and sole-deletion-log invariant is untouched.
-		Approver:      purge,
-		ApprovalFetch: approval.NewClientFetch(client),
-	})
+	root := tui.New(cl.tuiOptions(tuiDeps{
+		Config:    cfg,
+		Profile:   profile,
+		Clock:     clk,
+		Scheduler: sched,
+		Governor:  gov,
+		Store:     transport,
+		Discovery: disc,
+		Ops:       purge,
+		Downloads: downloadDir(),
+	}))
 
 	// tea.WithContext ties the program to the same context the engine runs under, so a
 	// signal that cancels one cancels both.
@@ -337,6 +306,149 @@ func currentHostSupported(current func() (domain.RepoID, error)) error {
 		return unsupported
 	}
 	return nil
+}
+
+// clients is the pair of request surfaces the tool dials one assembled chain with.
+//
+// shared is everything's client: it enters at the store, so a read revalidates and costs
+// nothing when nothing changed (local-store R8, ADR-0012). blob enters one layer lower, at
+// the governor, so it is still paced and still bounded by the limiter, and the store is not
+// in its path.
+//
+// The distinction exists because the store persists any 200 GET carrying an ETag: it reads
+// the whole body into memory and writes it base64-in-JSON to disk (local-store R19). For an
+// API resource that is the point. For an Artifact archive it is a defect with teeth: the
+// archive is an arbitrarily large one-shot binary served from a signed, single-use blob URL,
+// so caching it spends memory and disk proportional to the download and caches something no
+// later request can revalidate or even address. The blob URL carries no /repos/ path either,
+// so repoOf yields "" and no repository invalidation could ever reclaim the entry. A tool
+// whose subject is reclaiming storage must not consume multiples of an Artifact in hidden
+// storage to hand the user a copy of it.
+//
+// Only the Artifact download is routed this way. The whole-Run log export has the same shape
+// and the same problem, and is tracked separately at
+// https://github.com/jv-k/gh-runs/issues/89 rather than changed under a storage-reclamation
+// commit.
+type clients struct {
+	shared *ghclient.Client
+	blob   *ghclient.Client
+}
+
+// newClients builds both surfaces over one chain. token is resolved once by the caller and
+// passed to both, so neither reaches the gh keyring again (ADR-0002); an empty one is passed
+// through, leaving go-gh to raise its own not-authenticated error. A test injects a fixed one.
+func newClients(chain, gov http.RoundTripper, token string) (clients, error) {
+	shared, err := ghclient.New(ghclient.Options{AuthToken: token, Transport: chain})
+	if err != nil {
+		return clients{}, err
+	}
+	blob, err := ghclient.New(ghclient.Options{AuthToken: token, Transport: gov})
+	if err != nil {
+		return clients{}, err
+	}
+	return clients{shared: shared, blob: blob}, nil
+}
+
+// storageDownload is the Storage tab's download seam (storage-reclamation R13). It is a named
+// function rather than an inline expression because which of the two surfaces it dials is the
+// whole decision: blob, never shared, so an Artifact archive does not travel the store.
+func (c clients) storageDownload(dir string) storage.Downloader {
+	return storage.ClientDownload(c.blob, dir)
+}
+
+// tuiDeps is everything the root's dependency set needs that is not a request surface: the
+// resolved settings, the engines, and the directory a download lands in. It is a struct rather
+// than nine parameters because the composition root's dependency list is exactly the kind of
+// thing that grows, and a positional list of that length is a swap waiting to happen.
+type tuiDeps struct {
+	Config    config.Config
+	Profile   keys.Profile
+	Clock     clock.Clock
+	Scheduler *scheduler.Scheduler
+	Governor  *governor.Governor
+	Store     *store.Transport
+	Discovery *discovery.Discovery
+	Ops       *ops.Ops
+	Downloads string
+}
+
+// tuiOptions assembles the root's dependency set. It is extracted from runTUI so a test can
+// assert over the value the root is actually handed rather than over the functions that
+// produce it: pinning storageDownload's body alone left this literal uncovered, and the
+// pre-fix expression could be pasted back into it with the whole suite staying green. That is
+// the difference between guarding a decision and guarding the place it is taken.
+//
+// Every field naming a client names shared, the surface that enters at the store, except the
+// Artifact download, which names blob (see the clients doc above). The whole-Run log export
+// still names shared and should not, which is issue #89.
+func (c clients) tuiOptions(d tuiDeps) tui.Options {
+	client := c.shared
+	return tui.Options{
+		Updates:     d.Scheduler.Updates(),
+		Readout:     d.Governor.Readout,
+		Repos:       func() []domain.Repo { return knownRepos(d.Discovery) },
+		Revalidated: func() time.Time { return newestRevalidated(d.Store, d.Discovery.PollSet()) },
+		SetViewport: d.Scheduler.SetViewport,
+		SetFilter:   d.Scheduler.SetFilter,
+		Profile:     d.Profile,
+		// The Settings pane opens over the resolved config and writes changed keys back through
+		// config.Save, preserving comments, key order and keys this version does not recognise
+		// (settings R17, AC11). os.LookupEnv locates the same config.yml Load read at startup, so
+		// the pane's only write is that one local file and never the API.
+		Config:       d.Config,
+		SaveSettings: func(prev, next config.Config) error { return config.Save(os.LookupEnv, prev, next) },
+		// The detail pane fetches its Run's Jobs over the same client the whole tool shares,
+		// so the store revalidates and the governor accounts each request (ADR-0015). The
+		// clock is the tool's, so the pane's timing column reads the same wall clock as
+		// everything else.
+		DetailFetch: rundetail.ClientFetch(client),
+		Clock:       d.Clock,
+		// The Feed's delete key freezes the selection into a Plan through this engine and
+		// opens the confirmation over it (purge R4 to R9). It is the same ops the CLI's
+		// delete command uses, so both surfaces run one confirmation and one DELETE path.
+		Ops: d.Ops,
+		// The Storage tab reads Cache and Artifact usage over the same client, so the store
+		// revalidates and the governor accounts each request (storage-reclamation R1), and it
+		// freezes a Cache and Artifact selection into a reclamation Plan through the same ops
+		// engine, so its DELETE travels the one mutation entry a Purge does (R17).
+		// A download is the one Storage action that destroys nothing, so it takes its own seam
+		// and lands in the working directory beside a log export (storage-reclamation R13). It
+		// dials the blob client, which shares the governor and the limiter but not the store:
+		// an Artifact archive is a one-shot binary behind a signed URL, and caching it would
+		// spend memory and disk proportional to the download for an entry nothing can ever
+		// revalidate (see the clients doc). An expired Artifact is refused before any request,
+		// and a 410 arriving anyway reads as the bytes being gone (R14).
+		StorageFetch:    storage.ClientFetch(client),
+		StorageOps:      d.Ops,
+		StorageDownload: c.storageDownload(d.Downloads),
+		// The Workflows tab reads each repository's Workflow list over the same client, so the
+		// store revalidates and the governor accounts each request (workflow-management R1), and
+		// it enables or disables one Workflow through the same ops engine, so a toggle is paced
+		// and travels the one write path every other write does (R5).
+		WorkflowFetch: workflows.ClientFetch(client),
+		WorkflowOps:   d.Ops,
+		// The dispatch form the Workflows tab opens reads the Workflow YAML at a ref and the
+		// repository's environments over the same client (workflow-dispatch R5, R7), triggers the
+		// workflow_dispatch through the same ops engine so it is paced and travels ops's write path
+		// (R16), and remembers last-used inputs in the same local-store the discovery results live
+		// in (R25). One client, one ops, one store, exactly as every other surface.
+		DispatchFetch: dispatch.NewClientFetch(client),
+		DispatchOps:   d.Ops,
+		DispatchStore: d.Store,
+		// The log view fetches a Job's plain text and, on request, downloads the whole-Run
+		// archive to the working directory, both over the same client (log-viewer R1, R11). Its
+		// deletion reuses purge, the one mutation entry, so a log DELETE is paced and logged like
+		// every other (R17).
+		LogFetch:  logview.ClientFetch(client),
+		LogExport: logview.ClientExport(client, d.Downloads),
+		// The approvals decision pane approves a fork-PR Run or reviews a Run's pending deployments
+		// through the same ops engine every other write uses, so an approve and a review are paced
+		// and travel ops's write path (approvals R11, R12), and it reads the pending deployments
+		// over the same client the whole tool shares (R12). An approve and a review are single POSTs
+		// beside Execute, so the sole-DELETE and sole-deletion-log invariant is untouched.
+		Approver:      d.Ops,
+		ApprovalFetch: approval.NewClientFetch(client),
+	}
 }
 
 // baseTransport is the base RoundTripper the chain dials through, a clone of
@@ -397,11 +509,14 @@ func storeDir() string {
 	return filepath.Join(home, ".cache", "gh-runs")
 }
 
-// exportDir is where a whole-Run log archive is written on export: the current working
-// directory, where a user expects a download to land (log-viewer R11). It is not state and
-// not cache: it is a file the user asked for, so it goes where they are, not under XDG. A
+// downloadDir is where a file the user asked for is written: a whole-Run log archive on
+// export (log-viewer R11) and an Artifact's archive on download (storage-reclamation R13).
+// It is the current working directory, where a person expects a download to land. It is not
+// state and not cache, so it does not go under XDG the way the local-store and the deletion
+// log do: those are the tool's own derivations, while these two are the user's files. One
+// directory serves both, because "where did my download go" should have one answer. A
 // working directory that cannot be resolved falls back to ".", the same directory by name.
-func exportDir() string {
+func downloadDir() string {
 	if dir, err := os.Getwd(); err == nil {
 		return dir
 	}

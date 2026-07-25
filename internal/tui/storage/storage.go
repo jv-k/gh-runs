@@ -18,9 +18,16 @@
 // result (R19). Reclamation destroys irreversibly, so a deletion travels the single
 // mutation entry ops.Execute over the store-governor-limiter chain, paced and logged, and
 // the confirmation is reused unchanged (R15, R17, R23).
+//
+// Downloading an Artifact is the exception to all of that, and takes its own seam for exactly
+// that reason (R13). It is a GET that destroys nothing, so it routes through no confirmation,
+// writes no deletion-log line and touches no eligibility gate. It is offered on no expired
+// Artifact, whose download answers 410 Gone, and a 410 arriving anyway reads as the bytes
+// being gone rather than as a transient failure a retry might fix (R14, AC9).
 package storage
 
 import (
+	"errors"
 	"sort"
 
 	"charm.land/bubbles/v2/key"
@@ -136,13 +143,26 @@ func (r storeRow) item() ops.Item {
 // Options carries the tab's construction seams. main.go fills them: the profile is the
 // resolved keybinding set (R7a), Fetch reads one repository's storage over the shared
 // client, Repos is the discovered capability data the gate reads (R20) and the fan-out
-// covers (R0), and Ops freezes a selection into a Plan (R17). A golden test leaves Fetch,
-// Repos and Ops nil, where the tab renders held state and the delete key is inert.
+// covers (R0), Ops freezes a selection into a Plan (R17), and Download writes an Artifact's
+// archive to disk (R13). A test may leave any of them nil, where the tab renders held state
+// alone: the delete key opens nothing, and the download key neither requests nor advertises
+// itself, though it still refuses a Tombstone out loud, because that refusal is a fact about
+// the row rather than about the seam (R14).
 type Options struct {
-	Profile keys.Profile
-	Fetch   Fetch
-	Repos   func() []domain.Repo
-	Ops     Planner
+	Profile  keys.Profile
+	Fetch    Fetch
+	Repos    func() []domain.Repo
+	Ops      Planner
+	Download Downloader
+}
+
+// downloadDoneMsg carries a download's result: the Artifact's name, the path written, or the
+// error (R13, R14). It is tagged with the name rather than the id because the line it feeds
+// is read by a person, and the name is what they pressed the key over.
+type downloadDoneMsg struct {
+	name string
+	path string
+	err  error
 }
 
 // Model is the Storage tab's state. The storage map is the truth per repository, keyed by
@@ -154,10 +174,11 @@ type Model struct {
 	width, height int
 	active        bool
 
-	profile keys.Profile
-	fetch   Fetch
-	repos   func() []domain.Repo
-	planner Planner
+	profile  keys.Profile
+	fetch    Fetch
+	repos    func() []domain.Repo
+	planner  Planner
+	download Downloader
 
 	storage map[string]RepoStorage
 	order   []domain.RepoID
@@ -187,6 +208,12 @@ type Model struct {
 	confirm        confirm.Model
 	confirmOpen    bool
 	pendingReclaim int64
+
+	// status is a transient line reporting the last download's outcome: the path written
+	// (R13), or that the Artifact's bytes are gone (R14, AC9). It is display state alone and
+	// nothing reads it back, which keeps a download outside ADR-0006's statelessness rule as
+	// well as outside the deletion log, because a download destroys nothing.
+	status string
 }
 
 // New returns a Storage tab over opts. It holds no storage until the first StorageFetched
@@ -197,6 +224,7 @@ func New(opts Options) Model {
 		fetch:      opts.Fetch,
 		repos:      opts.Repos,
 		planner:    opts.Ops,
+		download:   opts.Download,
 		storage:    make(map[string]RepoStorage),
 		capability: make(map[string]domain.Repo),
 		selected:   make(map[selKey]bool),
@@ -210,7 +238,14 @@ func New(opts Options) Model {
 // presses the refresh key to load, which the empty view names. That keeps a tab switch from
 // spending a burst of Budget the operator did not ask for, and keeps SetActive a pure state
 // change matching the other tabs (ADR-0011).
+// A download's outcome describes a row on this tab, so it does not survive a change of focus
+// in either direction (R13): leaving retires it, and arriving does not inherit one. A result
+// still in flight when focus changes still lands and still shows, which is deliberate, because
+// the alternative is discarding the answer to something the operator asked for. It names the
+// Artifact it reports on, so it identifies itself rather than attaching to whatever row the
+// cursor now sits on.
 func (m Model) SetActive(active bool) Model {
+	m.status = ""
 	m.active = active
 	return m
 }
@@ -233,10 +268,30 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.applyFetched(RepoStorage(msg))
 		return m, nil
 
+	case downloadDoneMsg:
+		m.status = downloadOutcome(msg)
+		return m, nil
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
 	return m, nil
+}
+
+// downloadOutcome words a download's result (R13, R14, AC9). A 410 is not a failure: the
+// Artifact expired, the archive was destroyed by the retention policy, and no retry brings it
+// back, so it is worded as the bytes being gone. Anything else is a failure, worded as one,
+// because conflating the two would tell an operator to retry what can never succeed or to
+// give up on what a second attempt would fix.
+func downloadOutcome(msg downloadDoneMsg) string {
+	switch {
+	case errors.Is(msg.err, ErrArtifactGone):
+		return msg.name + " expired: its bytes are gone, and no download can bring them back"
+	case msg.err != nil:
+		return "Download of " + msg.name + " failed: " + msg.err.Error()
+	default:
+		return "Downloaded " + msg.name + " to " + msg.path
+	}
 }
 
 // applyFetched replaces one repository's held storage wholesale and records it in the
@@ -255,12 +310,22 @@ func (m *Model) applyFetched(rs RepoStorage) {
 // literal of its own (R7a, AC18). While the confirmation modal is open, every key reaches
 // it.
 func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
+	// A download's outcome reports on the row it was pressed over, so the next keystroke
+	// retires it (R13). Left standing it would sit under unrelated rows for the rest of the
+	// session and cost the list a row to do it. This precedes the modal branch, so an
+	// open-then-abort confirmation does not carry a stale outcome back to the list.
+	// startDownload sets it again below, and a result still in flight sets it when it lands,
+	// which is the one case where an outcome legitimately outlives the keystroke that asked
+	// for it.
+	m.status = ""
 	if m.confirmOpen {
 		return m.handleConfirmKey(k)
 	}
 	switch {
 	case key.Matches(k, m.profile.Delete):
 		return m.openConfirm(), nil
+	case key.Matches(k, m.profile.ArtifactDownload):
+		return m.startDownload() // R13, R14
 	case key.Matches(k, m.profile.ArtifactsOnly):
 		m.artifactsOnly = !m.artifactsOnly // R8
 		m.cursor, m.top = 0, 0
@@ -313,6 +378,42 @@ func (m Model) startFetch() (Model, tea.Cmd) {
 		cmds = append(cmds, func() tea.Msg { return StorageFetched(fetch(id)) })
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// startDownload downloads the Artifact under the cursor to disk (R13). Downloading is a
+// genuine non-storage use case, independent of whether the Artifact is worth deleting, so the
+// key acts on the row alone and nothing about the reclaimable figures gates it. It runs off
+// the Update loop.
+//
+// The three refusals are ordered deliberately. A Cache row has no archive at all, so the key
+// does nothing and says nothing. A Tombstone is refused before the Downloader is consulted,
+// and it does say something: its download would answer 410 Gone, so the tab reports the bytes
+// as gone rather than issuing a request to be told (R14, AC9). That refusal holds whether or
+// not a Downloader is wired, which is why a golden with no seam can still show it. Only a live
+// Artifact reaches the nil check, so an unwired tab is inert there and nowhere else.
+func (m Model) startDownload() (Model, tea.Cmd) {
+	rows := m.displayRows()
+	if m.cursor < 0 || m.cursor >= len(rows) {
+		return m, nil
+	}
+	row := rows[m.cursor]
+	if row.kind != ops.KindArtifact {
+		return m, nil // only an Artifact has an archive to download (R13)
+	}
+	a := row.artifact
+	a.Repo = row.repo // the merged list is grouped by repository, which is authoritative (R4)
+	if a.Tombstone() {
+		m.status = downloadOutcome(downloadDoneMsg{name: a.Name, err: ErrArtifactGone}) // R14, AC9
+		return m, nil
+	}
+	if m.download == nil {
+		return m, nil
+	}
+	dl := m.download
+	return m, func() tea.Msg {
+		path, err := dl(a)
+		return downloadDoneMsg{name: a.Name, path: path, err: err}
+	}
 }
 
 // scopeRepos is the set the fan-out covers: the discovered repositories under all-repos

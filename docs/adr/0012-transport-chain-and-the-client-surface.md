@@ -79,6 +79,14 @@ This is what makes rate-governor R5 possible at all. **The governor observes at 
 
 Neither package imports the other. `store` takes an `http.RoundTripper`, `governor.New` returns one, and `http.RoundTripper` belongs to the standard library rather than to us. **main.go stays the only place that knows both exist**, which is the composition-root argument [ADR-0011](./0011-package-layout-and-dependency-direction.md) already makes for `store` and `ghclient`, applied to the same seam one layer down.
 
+### One chain, two entry points
+
+**The chain is entered at two depths, and the caller picks which.** main.go wires two `ghclient` surfaces over the one nesting above. The shared client enters at the store, and that is what every read goes through. A second client enters one layer lower, at the governor, so it is still paced and still bounded by the limiter while the store stays out of its path.
+
+The reason is that the store persists any 200 GET carrying an ETag. It reads the whole body into memory and writes it to disk ([local-store](../features/local-store/requirements.md) R19). For an API resource that is the point: small, revalidatable, and worth not fetching twice. For a large binary served from a signed single-use URL it is a defect. Caching one costs memory and disk proportional to the download, and buys an entry no later request can revalidate or even address, because the URL is spent. The blob host carries no `/repos/` path either, so the store's `repoOf` yields the empty string and no repository invalidation can ever reclaim the entry.
+
+The rule is therefore about the response's shape rather than about the feature asking for it. **A request whose response is an API resource enters at the store. A request whose response is a binary download enters at the governor.** The Artifact download ([storage-reclamation](../features/storage-reclamation/requirements.md) R13) is the first caller of the second kind. The whole-Run log archive export ([log-viewer](../features/log-viewer/requirements.md) R11) is the second, and it still enters at the store, which is a defect tracked at [issue 89](https://github.com/jv-k/gh-runs/issues/89) rather than a decision anyone took.
+
 ## Considered Options
 
 **The store imports a `governor.Observer`.** The store sees every response and hands each to an interface the governor implements. It works, and it draws an arrow ADR-0011's table does not have: `store` would import `governor`. The moment the governor needs anything back from the store, the arrow reverses and the cycle arrives.

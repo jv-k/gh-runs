@@ -89,3 +89,38 @@ func TestGoldenReclaimConfirmTombstone(t *testing.T) {
 	m = send(m, "d")     // open the confirmation
 	goldie.New(t).Assert(t, "reclaim_confirm_tombstone", []byte(m.View()))
 }
+
+// TestGoldenDownloadOfferedFromTheArtifactRow fixes R13: download is offered from an
+// Artifact's row, and from that row alone. With the cursor on the Cache the frame names no
+// download; moved down onto the live Artifact it names the key. The Artifact here is 145 KB
+// against a 302 MB Cache, which is the point: downloading is a genuine non-storage use case
+// and is offered whether or not the Artifact is worth deleting.
+func TestGoldenDownloadOfferedFromTheArtifactRow(t *testing.T) {
+	m := newStorage(t, 100, 12, writable("cli", "cli"))
+	m = fetched(m, storage.RepoStorage{
+		Repo:                    rid("cli", "cli"),
+		ActiveCachesSizeInBytes: 302460229,
+		ActiveCachesCount:       1,
+		Caches: []domain.Cache{
+			{ID: 1, Key: "setup-go-macOS-arm64-go-1.26.5-06fc251f3", SizeInBytes: 302460229, LastAccessedAt: gDay(10)},
+		},
+		Artifacts:         []domain.Artifact{{ID: 2, Name: "build-logs", SizeInBytes: 145212, ExpiresAt: gDay(31)}},
+		ArtifactsComplete: true,
+	})
+	m = send(m, "down") // from the Cache row onto the Artifact's
+	goldie.New(t).Assert(t, "download_offered", []byte(m.View()))
+}
+
+// TestGoldenDownloadGoneOnATombstone fixes R14 and AC9: download is unavailable on a row with
+// expired: true, which the frame says on its face, and pressing the key over one reports the
+// bytes as gone rather than as a transient failure a retry might fix.
+func TestGoldenDownloadGoneOnATombstone(t *testing.T) {
+	m := newStorage(t, 100, 12, writable("cli", "cli"))
+	m = fetched(m, storage.RepoStorage{
+		Repo:              rid("cli", "cli"),
+		Artifacts:         []domain.Artifact{{ID: 2, Name: "old-test-logs", SizeInBytes: 234131, Expired: true, ExpiresAt: gDay(1)}},
+		ArtifactsComplete: true,
+	})
+	m = send(m, "w") // download over a Tombstone: no request is issued (R14)
+	goldie.New(t).Assert(t, "download_gone", []byte(m.View()))
+}

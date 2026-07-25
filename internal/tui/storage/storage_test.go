@@ -31,6 +31,10 @@ func press(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
 		return tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "up":
+		return tea.KeyPressMsg{Code: tea.KeyUp}
+	case "down":
+		return tea.KeyPressMsg{Code: tea.KeyDown}
 	default:
 		r := []rune(s)[0]
 		return tea.KeyPressMsg{Code: r, Text: s}
@@ -39,15 +43,19 @@ func press(s string) tea.KeyPressMsg {
 
 // newStorage builds a Storage tab sized w x h, wired to a real planner and the discovered
 // repositories so the delete key can freeze a Cache and Artifact selection (ops.Plan needs
-// no transport). Fetch is nil, so no request is issued and the held state is injected.
+// no transport). Fetch is nil, so no request is issued and the held state is injected. The
+// Downloader is a stub that writes nothing: main.go always wires one, so a golden built
+// without one would fix a frame the product never paints, but no golden presses the key over
+// a live Artifact and so none reaches it.
 func newStorage(t *testing.T, w, h int, repos ...domain.Repo) storage.Model {
 	t.Helper()
 	planner := ops.New(ops.Options{ConfirmThreshold: 50, BreakerFailures: 50})
 	rr := append([]domain.Repo(nil), repos...)
 	m := storage.New(storage.Options{
-		Profile: keys.Standard,
-		Ops:     planner,
-		Repos:   func() []domain.Repo { return rr },
+		Profile:  keys.Standard,
+		Ops:      planner,
+		Repos:    func() []domain.Repo { return rr },
+		Download: func(domain.Artifact) (string, error) { return "", nil },
 	})
 	m, _ = m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	return m

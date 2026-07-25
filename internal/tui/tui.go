@@ -107,6 +107,12 @@ type Options struct {
 	// ops engine, so the Storage tab's DELETE travels the one mutation entry a Purge does.
 	StorageFetch storage.Fetch
 	StorageOps   storage.Planner
+	// StorageDownload writes the Artifact under the Storage tab's cursor to disk
+	// (storage-reclamation R13). It is a seam of its own rather than a mode of StorageOps,
+	// because a download is a GET that destroys nothing: it routes through no confirmation
+	// and writes no deletion-log line, and R14's expired Artifact is refused here rather than
+	// discovered by a request.
+	StorageDownload storage.Downloader
 	// WorkflowFetch reads one repository's Workflow list for the Workflows tab, and WorkflowOps
 	// enables or disables one Workflow through the shared ops engine (workflow-management R1,
 	// R5). main.go wires both over the same client and ops, so a toggle is paced by the
@@ -179,10 +185,11 @@ func New(opts Options) Model {
 	// archived flags to gate reclamation (R20). It reads the same Repos pull the root
 	// broadcasts, so a repository unknown to discovery is unknown to both.
 	st := storage.New(storage.Options{
-		Profile: opts.Profile,
-		Fetch:   opts.StorageFetch,
-		Repos:   opts.Repos,
-		Ops:     opts.StorageOps,
+		Profile:  opts.Profile,
+		Fetch:    opts.StorageFetch,
+		Repos:    opts.Repos,
+		Ops:      opts.StorageOps,
+		Download: opts.StorageDownload,
 	})
 	// The Workflows tab reads the same discovered repositories: it fans one Workflow-list
 	// request out over them (R0) and reads their permissions and archived flags to gate enable
