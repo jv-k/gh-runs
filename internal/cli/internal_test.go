@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
@@ -70,6 +73,90 @@ func TestPrintSummarySanitisesControlBytes(t *testing.T) {
 	}
 	if !strings.Contains(got, "Forbidden") {
 		t.Errorf("visible failure reason text was lost to the escape strip: %q", got)
+	}
+}
+
+// TestTimeAgoBuckets pins -t's timeago wording bucket by bucket, on gh's own
+// boundaries (cli-surface AC21, ADR-0023). Every bucket truncates rather than rounds,
+// which is why 29 days is still days and 364 days is still months, and a future
+// timestamp reads as "just now" rather than as a negative age.
+func TestTimeAgoBuckets(t *testing.T) {
+	const day = 24 * time.Hour
+	cases := []struct {
+		ago  time.Duration
+		want string
+	}{
+		{-time.Hour, "just now"},
+		{0, "just now"},
+		{59 * time.Second, "just now"},
+		{time.Minute, "1 minute ago"},
+		{90 * time.Second, "1 minute ago"},
+		{2 * time.Minute, "2 minutes ago"},
+		{59*time.Minute + 59*time.Second, "59 minutes ago"},
+		{time.Hour, "1 hour ago"},
+		{3 * time.Hour, "3 hours ago"},
+		{23*time.Hour + 59*time.Minute, "23 hours ago"},
+		{day, "1 day ago"},
+		{29*day + 23*time.Hour, "29 days ago"},
+		{30 * day, "1 month ago"},
+		{364 * day, "12 months ago"},
+		{365 * day, "1 year ago"},
+		{730 * day, "2 years ago"},
+	}
+	for _, tc := range cases {
+		if got := timeAgo(tc.ago); got != tc.want {
+			t.Errorf("timeAgo(%s) = %q, want %q", tc.ago, got, tc.want)
+		}
+	}
+}
+
+// TestTruncateToWidthMeasuresDisplayCells pins -t's truncate as a display-width
+// operation, not a rune count (cli-surface AC21, ADR-0023). A CJK title spends two
+// cells per rune, so a rune-count cut would overflow the column by its own width
+// again. Below five cells there is no room for the ellipsis and the cut is silent, and
+// a cut that lands between the cells of a wide rune pads to the requested width.
+func TestTruncateToWidthMeasuresDisplayCells(t *testing.T) {
+	cases := []struct {
+		name     string
+		maxWidth int
+		in       string
+		want     string
+	}{
+		{"fits untouched", 10, "abc", "abc"},
+		{"exact width untouched", 3, "abc", "abc"},
+		{"ascii with ellipsis", 10, "Fix the bug", "Fix the..."},
+		{"below the ellipsis floor", 4, "abcdef", "abcd"},
+		{"at the ellipsis floor", 5, "abcdef", "ab..."},
+		{"wide runes cost two cells", 5, "日本語です", "日..."},
+		{"wide cut pads to width", 6, "日本語です", "日... "},
+		{"emoji costs two cells", 5, "🚀🚀🚀🚀", "🚀..."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncateToWidth(tc.maxWidth, tc.in)
+			if got != tc.want {
+				t.Errorf("truncateToWidth(%d, %q) = %q, want %q", tc.maxWidth, tc.in, got, tc.want)
+			}
+			if w := lipgloss.Width(got); w > tc.maxWidth {
+				t.Errorf("truncateToWidth(%d, %q) rendered %d cells wide", tc.maxWidth, tc.in, w)
+			}
+		})
+	}
+}
+
+// TestTruncateToWidthKeepsEscapesOutOfTheBudget pins that a coloured value is cut on
+// what the terminal shows: the escape sequences cost no cells and are copied through,
+// and a cut inside an unreset colour emits a reset so the colour cannot leak into the
+// rest of the line. -t output is raw and unsanitised by design (ADR-0023), so the
+// escapes reaching truncate is the expected case, not a hostile one.
+func TestTruncateToWidthKeepsEscapesOutOfTheBudget(t *testing.T) {
+	got := truncateToWidth(8, "\x1b[31mhello world\x1b[0m")
+	want := "\x1b[31mhello...\x1b[0m"
+	if got != want {
+		t.Errorf("truncateToWidth = %q, want %q", got, want)
+	}
+	if w := lipgloss.Width(got); w != 8 {
+		t.Errorf("rendered width = %d, want 8", w)
 	}
 }
 

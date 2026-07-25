@@ -227,9 +227,10 @@ func knownFieldList() []string {
 }
 
 // renderJSON emits the gh-compatible projection, then applies -q or -t over it
-// exactly as gh does, by handing the bytes to go-gh's own jq and template
-// packages (cli-surface R7). Using go-gh's packages rather than reimplementing
-// them is what makes -q and -t byte-identical to gh's (AC6).
+// (cli-surface R7). -q goes to go-gh's own jq package, which is what makes it
+// byte-identical to gh's (AC6). -t goes to the standard library's text/template under
+// the function subset ADR-0023 fixes, because go-gh's template package cannot be
+// imported here (see renderTemplate).
 func renderJSON(deps Deps, f *listFlags, fields []string, runs []domain.Run) error {
 	rows := make([]map[string]any, 0, len(runs))
 	for _, r := range runs {
@@ -271,17 +272,13 @@ func renderJSON(deps Deps, f *listFlags, fields []string, runs []domain.Run) err
 // as its digits rather than in float64 scientific notation. It deliberately does
 // not use go-gh's template package: that package pulls classic lipgloss and
 // charmbracelet/x/cellbuf, whose ansi version conflicts with the charm.land Bubble
-// Tea fork this module already pins for the TUI (ADR-0013). gh's extra template
-// functions (timeago, autocolor, truncate and the rest) live in that package, so
-// a template that calls one errors here rather than rendering. This gap is
-// recorded for the verify step: it is a dependency conflict to resolve, not a
-// design choice, and -q covers the scriptable path AC6 pins in the meantime.
+// Tea fork this module already pins for the TUI (ADR-0013).
 //
-// Closing it is a maintainer product decision, deferred out of this read stage:
-// accept the documented R7 deviation, reimplement gh's template functions here, or
-// do the dependency surgery to split go-gh's template package off its classic-lipgloss
-// import. This repair does none of the three; it records the deviation and leaves the
-// choice.
+// gh's template functions live in that unimportable package, so this surface carries
+// its own (templateFuncs, ADR-0023): gh's pure, deterministic funcs reimplemented to
+// match, and the four that need a colour library or gh's table printer registered as
+// stubs that error by name. That is a scope line, recorded in R7 and pinned by AC21,
+// not an unresolved gap.
 func renderTemplate(deps Deps, data []byte, tmplText string) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
@@ -289,7 +286,7 @@ func renderTemplate(deps Deps, data []byte, tmplText string) error {
 	if err := dec.Decode(&v); err != nil {
 		return fmt.Errorf("decode json for template: %w", err)
 	}
-	tmpl, err := template.New("list").Parse(tmplText)
+	tmpl, err := template.New("list").Funcs(templateFuncs(deps)).Parse(tmplText)
 	if err != nil {
 		return err
 	}
