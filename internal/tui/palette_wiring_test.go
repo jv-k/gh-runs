@@ -75,7 +75,7 @@ func TestAutoFollowsTheTerminalBackground(t *testing.T) {
 		t.Errorf("a light terminal background resolved to the %v palette, want light (R6)", got)
 	}
 
-	m = step(t, m, tea.BackgroundColorMsg{Color: black})
+	step(t, m, tea.BackgroundColorMsg{Color: black})
 	if got := palette.Current(); got != palette.Dark {
 		t.Errorf("a dark terminal background resolved to the %v palette, want dark (R6)", got)
 	}
@@ -86,14 +86,14 @@ func TestAutoFollowsTheTerminalBackground(t *testing.T) {
 func TestExplicitThemeIgnoresTheBackground(t *testing.T) {
 	defer palette.Use(palette.Dark)()
 
-	m := New(Options{Profile: keys.Standard, Config: themedConfig(config.ThemeDark)})
-	m = step(t, m, tea.BackgroundColorMsg{Color: white})
+	dark := New(Options{Profile: keys.Standard, Config: themedConfig(config.ThemeDark)})
+	step(t, dark, tea.BackgroundColorMsg{Color: white})
 	if got := palette.Current(); got != palette.Dark {
 		t.Errorf("theme dark on a light terminal resolved to %v, want dark (R6)", got)
 	}
 
-	m = New(Options{Profile: keys.Standard, Config: themedConfig(config.ThemeLight)})
-	m = step(t, m, tea.BackgroundColorMsg{Color: black})
+	light := New(Options{Profile: keys.Standard, Config: themedConfig(config.ThemeLight)})
+	step(t, light, tea.BackgroundColorMsg{Color: black})
 	if got := palette.Current(); got != palette.Light {
 		t.Errorf("theme light on a dark terminal resolved to %v, want light (R6)", got)
 	}
@@ -126,7 +126,7 @@ func TestThemeChangeAppliesImmediately(t *testing.T) {
 	if got := palette.Current(); got != palette.Light {
 		t.Errorf("changing the theme to light did not repaint; the palette is still %v (R17)", got)
 	}
-	m = step(t, m, press("space")) // light back to auto, which follows the dark terminal
+	step(t, m, press("space")) // light back to auto, which follows the dark terminal
 	if got := palette.Current(); got != palette.Dark {
 		t.Errorf("auto did not return to the terminal's own background; the palette is %v (R6)", got)
 	}
