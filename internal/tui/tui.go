@@ -27,6 +27,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
@@ -75,13 +76,15 @@ type tab interface {
 
 // Options carries the root's seams. main.go fills them: the channel is the scheduler's
 // Updates, the pulls are the governor, discovery and the store, SetViewport is the
-// scheduler's medium-tier control, and the profile is the resolved keybinding set.
+// scheduler's medium-tier control, SetFilter hands it the Feed's active filter to push
+// server-side (R22), and the profile is the resolved keybinding set.
 type Options struct {
 	Updates     <-chan scheduler.Update
 	Readout     func() governor.Readout
 	Repos       func() []domain.Repo
 	Revalidated func() time.Time
 	SetViewport func([]domain.RepoID)
+	SetFilter   func(filter.Filter)
 	Profile     keys.Profile
 	// Config is the resolved settings the Settings pane opens over, and SaveSettings
 	// persists the pane's changes back to the config file (settings R17). main.go wires
@@ -162,6 +165,7 @@ func New(opts Options) Model {
 	f := feed.New(feed.Options{
 		Profile:       opts.Profile,
 		SetViewport:   opts.SetViewport,
+		SetFilter:     opts.SetFilter,
 		DetailFetch:   opts.DetailFetch,
 		Clock:         opts.Clock,
 		Ops:           opts.Ops,

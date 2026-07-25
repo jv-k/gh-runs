@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
@@ -110,8 +111,13 @@ func (s *Scheduler) poll(id domain.RepoID) {
 	defer s.clearInFlight(id)
 
 	// The store sends If-None-Match when it holds an ETag for this resource, so a
-	// steady-state poll is conditional and a 304 is free (R1, AC2, ADR-0004).
-	resp, err := s.opts.Client.Request(http.MethodGet, runsPath(id), nil)
+	// steady-state poll is conditional and a 304 is free (R1, AC2, ADR-0004). The
+	// active filter's Query() is pushed server-side, so the response is the newest
+	// matches rather than the newest Runs (R22, ADR-0016). A non-empty query makes
+	// this a filtered listing, whose total_count is the claimed match count R24 reads.
+	query := s.activeFilter().Query()
+	filtered := len(query) > 0
+	resp, err := s.opts.Client.Request(http.MethodGet, runsPath(id, query), nil)
 	if err != nil {
 		return // a transport error is retried on the next tick, not surfaced here
 	}
@@ -153,7 +159,14 @@ func (s *Scheduler) poll(id domain.RepoID) {
 		// the slow interval it was polled at.
 		s.signalWake()
 	}
-	s.emit(Update{Repo: id, Runs: runs})
+	// A filtered poll carries its claimed match count; an unfiltered one carries none
+	// (R24, ADR-0016). total_count is meaningful only when the listing was filtered:
+	// unfiltered it is the repository's whole count, never a cap.
+	claimed := 0
+	if filtered {
+		claimed = page.TotalCount
+	}
+	s.emit(Update{Repo: id, Runs: runs, Filtered: filtered, ClaimedTotal: claimed})
 }
 
 // nextWait is the duration until the earliest not-in-flight repository is next due
@@ -218,18 +231,24 @@ func untilResume(reset, now time.Time) time.Duration {
 	return slowTarget
 }
 
-// apiRunsPage is the fragment of an actions/runs listing the scheduler reads. It
-// takes workflow_runs and ignores total_count, which a filtered listing inflates
-// past the silent 1,000 cap (ADR-0005): the tiers read the Runs' Statuses, never a
-// count.
+// apiRunsPage is the fragment of an actions/runs listing the scheduler reads. The
+// tiers read the Runs' Statuses, never total_count, which a filtered listing inflates
+// past the silent 1,000 cap (ADR-0005). total_count is read only to carry a filtered
+// poll's claimed match count back for R24's cap label, and only then (poll).
 type apiRunsPage struct {
 	TotalCount   int          `json:"total_count"`
 	WorkflowRuns []domain.Run `json:"workflow_runs"`
 }
 
-// runsPath is a repository's Run listing, the resource every tier polls. It carries
-// no query, so it is the unfiltered listing; the Feed's filtered listing (ADR-0005)
-// is the Feed's to compose at stage 7.
-func runsPath(id domain.RepoID) string {
-	return "repos/" + id.Owner + "/" + id.Name + "/actions/runs"
+// runsPath is a repository's Run listing, the resource every tier polls. With no
+// active filter q is empty and the path is the unfiltered listing; with a filter the
+// query is url.Values-encoded onto the path, so the request pushes it server-side
+// (R22, ADR-0016) and a cassette can match the URL exactly. The store keys its cache
+// on the whole URL, so a filter change is a new resource with its own ETag.
+func runsPath(id domain.RepoID, q url.Values) string {
+	base := "repos/" + id.Owner + "/" + id.Name + "/actions/runs"
+	if len(q) == 0 {
+		return base
+	}
+	return base + "?" + q.Encode()
 }

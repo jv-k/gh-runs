@@ -80,6 +80,10 @@ type RevalidatedAt time.Time
 type Options struct {
 	Profile     keys.Profile
 	SetViewport func([]domain.RepoID)
+	// SetFilter publishes the Feed's active filter to the scheduler, which pushes its
+	// Query() server-side (R22, ADR-0016). main.go wires it to scheduler.SetFilter; a
+	// golden test leaves it nil, and the filter then narrows client-side only.
+	SetFilter   func(filter.Filter)
 	DetailFetch rundetail.Fetch
 	Clock       clock.Clock
 	// Ops freezes the selection into a Plan when the delete key opens the confirmation
@@ -110,6 +114,7 @@ type Model struct {
 
 	profile     keys.Profile
 	setViewport func([]domain.RepoID)
+	setFilter   func(filter.Filter) // publishes the active filter to the scheduler (R22)
 
 	// live is each repository's latest Runs, keyed by RepoID.String() and replaced
 	// wholesale as its RunsFetched arrives (ADR-0015).
@@ -140,9 +145,10 @@ type Model struct {
 	// reveal-subject-to-R10; see the stage notes.
 	engaged bool
 
-	// filter is applied client-side over held Runs at this stage (R22, R23). The engine
-	// polls unfiltered, so the server-side pushdown (R22) and R24's live cap label are
-	// not wired here; the cap label renders from held totals and is golden-verified.
+	// filter is the active filter. It narrows the held Runs client-side (R22, R23) and is
+	// published to the scheduler on accept and cancel (setFilter), which pushes its
+	// Query() server-side so the poll returns the newest matches (R22). A filtered poll's
+	// claimed total feeds totals for R24's live cap label.
 	filter       filter.Filter
 	filterInput  textinput.Model
 	filterActive bool // the filter input holds focus, so the cursor is not in the list (R10)
@@ -184,8 +190,8 @@ type Model struct {
 	showHelp bool
 
 	// totals carries each filtered repository's reachable and claimed counts for R24's
-	// cap label. Empty under the unfiltered live poll; populated from held state for the
-	// golden. Keyed by RepoID.String().
+	// cap label, populated from a filtered scheduler.Update and cleared on an unfiltered
+	// one. Empty when no filter is pushed server-side. Keyed by RepoID.String().
 	totals map[string]capTotal
 }
 
@@ -217,6 +223,7 @@ func New(opts Options) Model {
 		active:      true,
 		profile:     opts.Profile,
 		setViewport: opts.SetViewport,
+		setFilter:   opts.SetFilter,
 		live:        make(map[string][]domain.Run),
 		current:     make(map[int64]domain.Run),
 		selected:    make(map[int64]bool),
@@ -289,6 +296,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case scheduler.Update:
 		// One repository's fresh Runs, replacing its slice wholesale (ADR-0015).
 		m.live[msg.Repo.String()] = msg.Runs
+		// A filtered poll carries its claimed match count, so record the repository's
+		// cap total for R24's honest label: reachable is what the Feed holds (the Runs
+		// this Update carried), claimed is the response's total_count. An unfiltered
+		// poll has no cap, so clear any stale total rather than leaving the label
+		// standing over a lifted filter.
+		if msg.Filtered {
+			m.totals[msg.Repo.String()] = capTotal{reachable: len(msg.Runs), claimed: msg.ClaimedTotal}
+		} else {
+			delete(m.totals, msg.Repo.String())
+		}
 		m.recompute()
 		// Report the cursor's freshest Run to the open pane, so its Attempt badge tracks a
 		// re-run (R17) and its liveness gate reads the current Status (R13). A same-Run
@@ -712,14 +729,17 @@ func (m Model) handleFilterKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.filterActive = false
 		m.filterInput.Blur()
 		m.applyFilterFromInput()
-		return m, nil
+		// Publish the accepted filter so the scheduler pushes it server-side (R22).
+		return m, m.publishFilter()
 	case key.Matches(k, m.profile.FilterCancel):
 		m.filterActive = false
 		m.filterInput.Blur()
 		m.filterInput.SetValue("")
 		m.filter = filter.Filter{}
 		m.applyView(m.liveView())
-		return m, nil
+		// Publish the cleared filter so the scheduler drops back to the unfiltered
+		// listing rather than staying narrowed to the abandoned filter (R22).
+		return m, m.publishFilter()
 	}
 	var cmd tea.Cmd
 	m.filterInput, cmd = m.filterInput.Update(k)
@@ -943,6 +963,23 @@ func (m Model) publishViewport() tea.Cmd {
 	set := m.setViewport
 	return func() tea.Msg {
 		set(ids)
+		return nil
+	}
+}
+
+// publishFilter hands the active filter to the scheduler, which pushes its Query()
+// server-side (R22, ADR-0016). It runs in a Cmd so Update stays pure, and is a no-op
+// when no setter is wired (a golden test). The Feed publishes on accept and on cancel,
+// never per keystroke, so a half-typed query does not re-poll the whole set each
+// character; the client-side narrowing over held Runs still updates as it is typed.
+func (m Model) publishFilter() tea.Cmd {
+	if m.setFilter == nil {
+		return nil
+	}
+	f := m.filter
+	set := m.setFilter
+	return func() tea.Msg {
+		set(f)
 		return nil
 	}
 }
