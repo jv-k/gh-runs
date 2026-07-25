@@ -112,7 +112,9 @@ func TestRepoPollFailedReachesThePaintedFrame(t *testing.T) {
 	// to be asleep on its timer first, or an advance issued before the timer is armed
 	// is simply missed and the receive below waits out its deadline. The scheduler's
 	// own harness blocks the same way for the same reason.
-	clk.BlockUntil(1)
+	if err := clk.BlockUntilContext(t.Context(), 1); err != nil {
+		t.Fatalf("waiting for the loop to arm its timer: %v", err)
+	}
 	clk.Advance(2 * time.Minute)
 	ev = recv(t, sched.Updates())
 	if _, ok := ev.(scheduler.Update); !ok {
