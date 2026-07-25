@@ -500,9 +500,8 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 // openDetail opens the detail pane over the Run under the cursor, the OpenDetail key's
 // handler (BUILD-ORDER stage 8). With no row under the cursor it is a no-op. The pane owns
 // the debounce, the fetch and the discard rule; the Feed reports the cursor and forwards
-// broadcasts (ADR-0011, ADR-0015). The Workflow's deleted State is not stamped on a Run and
-// the Feed does not yet resolve it, so R8's marker stays off until that seam is wired; this
-// is the one call site that will set it.
+// broadcasts (ADR-0011, ADR-0015). The Run arrives stamped with its Workflow's State, so
+// R8's marker is handed over here rather than resolved: the fan-out did the join.
 func (m Model) openDetail() (Model, tea.Cmd) {
 	if m.detailOpen {
 		// Already open and Feed-focused: a second open-detail press descends into the pane, so
@@ -520,6 +519,7 @@ func (m Model) openDetail() (Model, tea.Cmd) {
 	m.detail = m.detail.SetRepoCapability(repo, known) // the log-delete gate reads this (log-viewer R17)
 	var cmd tea.Cmd
 	m.detail, cmd = m.detail.Open(r)
+	m.detail = m.detail.SetWorkflowState(r.WorkflowState) // after Open: a fresh selection clears it (R8)
 	return m, cmd
 }
 
@@ -768,6 +768,10 @@ func (m Model) retargetDetail() (Model, tea.Cmd) {
 	m.detail = m.detail.SetRepoCapability(repo, known) // keep the log-delete gate matched to the Run on screen
 	var cmd tea.Cmd
 	m.detail, cmd = m.detail.SelectRun(r)
+	// The marker is per-Run, and the pane clears it on a fresh selection for exactly that
+	// reason, so it is re-stamped here on every retarget. Stamping only at open would paint
+	// the first Run's answer over every Run the cursor later reached (R8).
+	m.detail = m.detail.SetWorkflowState(r.WorkflowState)
 	return m, cmd
 }
 

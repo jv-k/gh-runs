@@ -175,8 +175,18 @@ func (s *Scheduler) poll(id domain.RepoID) {
 		return
 	}
 	runs := page.WorkflowRuns
+	// The fan-out stamps what the run object does not carry, before the event leaves the
+	// worker (ADR-0014, ADR-0018). Repo is the identity the payload has no key for; the
+	// Workflow's State is the join against the repository's Workflow list, read here
+	// because this is where both sides are held. A Run is whole when it is emitted, and no
+	// consumer joins anything (ADR-0015).
+	var wf map[int64]domain.State
+	if len(runs) > 0 {
+		wf = s.workflowStates(id)
+	}
 	for i := range runs {
-		runs[i].Repo = id // ADR-0018: stamp Repo before the event leaves the worker
+		runs[i].Repo = id
+		runs[i].WorkflowState = wf[runs[i].WorkflowID] // absent or unread reads as the empty State
 	}
 
 	if s.recordPoll(id, runs, etag) {
@@ -193,6 +203,50 @@ func (s *Scheduler) poll(id domain.RepoID) {
 		claimed = page.TotalCount
 	}
 	s.emit(Update{Repo: id, Runs: runs, Filtered: filtered, ClaimedTotal: claimed})
+}
+
+// workflowStates is a repository's Workflow ID to State join, read through the injected
+// WorkflowLister the first time it is needed and held for the process (run-detail R8).
+//
+// Once per repository is the whole cost of the marker. A Workflow's State changes only
+// when a person edits, disables or deletes it, so re-reading the list on every poll would
+// buy a rarer event than the poll itself at the price of doubling the engine's request
+// count. Reading it lazily, from the poll that has Runs to stamp, means a repository the
+// operator never sees Runs from costs nothing at all.
+//
+// A failed read is not remembered, so a transient 502 or a 403 that later clears does not
+// disable the marker for the session: the repository asks again on its next changed poll,
+// which is the same retry rule a failed poll already has. A successful read of an empty
+// list is remembered, so a repository with no Workflows is asked exactly once.
+//
+// It is called from the poll goroutine, which already holds the repository's
+// single-flight flag, so two reads of one repository never overlap and the wire bound
+// stays the transport limiter's (ADR-0018). A failure emits nothing: the poll itself
+// succeeded, and a RepoPollFailed here would report a repository whose Runs have just
+// arrived as failing to update.
+func (s *Scheduler) workflowStates(id domain.RepoID) map[int64]domain.State {
+	key := id.String()
+	s.mu.Lock()
+	held, read := s.wfStates[key]
+	s.mu.Unlock()
+	if read {
+		return held
+	}
+	if s.opts.Workflows == nil {
+		return nil
+	}
+	ws, err := s.opts.Workflows(id)
+	if err != nil {
+		return nil
+	}
+	states := make(map[int64]domain.State, len(ws))
+	for _, w := range ws {
+		states[w.ID] = w.State
+	}
+	s.mu.Lock()
+	s.wfStates[key] = states
+	s.mu.Unlock()
+	return states
 }
 
 // nextWait is the duration until the earliest not-in-flight repository is next due

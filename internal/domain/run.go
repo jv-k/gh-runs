@@ -28,6 +28,14 @@ type Run struct {
 	// Stamped by the decoding caller, never decoded. See below.
 	Repo         RepoID `json:"-"`
 	WorkflowName string `json:"-"`
+
+	// WorkflowState is the owning Workflow's State, resolved by the same
+	// WorkflowID join that resolves WorkflowName and stamped in the same
+	// place. A deleted Workflow makes this Run an Orphaned Run, which
+	// run-detail R8 marks and R18 excludes from re-run. The empty State
+	// is an unresolved join, and reads as not-deleted: a Run is never
+	// marked Orphaned on the strength of a join that found nothing.
+	WorkflowState State `json:"-"`
 }
 
 // User is an actor reduced to the one field a requirement reads.

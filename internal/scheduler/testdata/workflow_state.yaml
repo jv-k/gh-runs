@@ -1,0 +1,50 @@
+---
+version: 2
+interactions:
+    # One repository whose Runs belong to two Workflows: 9001, whose YAML has been
+    # deleted, and 9002, which is still active. Both Runs are completed, so the
+    # repository is slow-tier and the test drives its second poll by advancing the
+    # injected clock.
+    # Interaction 0: the cold-start poll, unconditional, a 200 carrying both Runs.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/legacy/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":2,"workflow_runs":[{"id":1,"workflow_id":9001,"status":"completed","conclusion":"failure","name":"Old Pipeline"},{"id":2,"workflow_id":9002,"status":"completed","conclusion":"success","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"legacy-v1"'
+            X-Ratelimit-Remaining:
+                - "5000"
+    # Interaction 1: the steady-state poll, conditional, answered with a changed 200
+    # rather than a 304, so a second Update is emitted and its Runs are stamped again.
+    # A third Run arrives on the same deleted Workflow.
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/legacy/actions/runs
+        headers:
+            If-None-Match:
+                - '"legacy-v1"'
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":3,"workflow_runs":[{"id":3,"workflow_id":9001,"status":"completed","conclusion":"failure","name":"Old Pipeline"},{"id":1,"workflow_id":9001,"status":"completed","conclusion":"failure","name":"Old Pipeline"},{"id":2,"workflow_id":9002,"status":"completed","conclusion":"success","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"legacy-v2"'
+            X-Ratelimit-Remaining:
+                - "4999"
