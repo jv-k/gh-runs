@@ -1,6 +1,6 @@
 # Configurable Default Tab
 
-This project does not support a configurable default or startup tab. The Feed, which is the Runs tab, is the fixed launch view.
+This project does not support a configurable default or startup tab. The Feed, which occupies the Runs tab, is the fixed launch view.
 
 ## Why this is out of scope
 
