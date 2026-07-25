@@ -305,9 +305,11 @@ func (m Model) hintLine() string {
 }
 
 // downloadHint states whether the row under the cursor offers a download (R13, R14). A live
-// Artifact names the key. A Tombstone says the download is unavailable and why, because its
-// bytes are gone and a key that silently did nothing would read as a broken one (AC9). A Cache
-// has no archive at all, so it names neither.
+// Artifact names the key, but only when a Downloader is wired: advertising a key the tab
+// cannot honour is worse than saying nothing. A Tombstone says the download is unavailable
+// and why, whether or not a seam exists, because its bytes are gone and that is a fact about
+// the row rather than about the wiring (AC9). A Cache has no archive at all, so it names
+// neither.
 func (m Model) downloadHint() string {
 	rows := m.displayRows()
 	if m.cursor < 0 || m.cursor >= len(rows) {
@@ -319,6 +321,9 @@ func (m Model) downloadHint() string {
 	}
 	if row.tombstone() {
 		return "no download, bytes gone" // R14, AC9
+	}
+	if m.download == nil {
+		return ""
 	}
 	return m.profile.ArtifactDownload.Help().Key + " download" // R13
 }

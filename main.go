@@ -97,11 +97,12 @@ func run() int {
 
 	// go-gh installs our transport as opts.Transport with its own cache off
 	// (CacheTTL: 0). ghclient exposes Request, never Get or Do.
-	client, err := ghclient.New(ghclient.Options{Transport: transport})
+	cl, err := newClients(transport, gov, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gh-runs:", err)
 		return 1
 	}
+	client := cl.shared
 
 	// Discovery stands on the whole chain: it issues its enumeration and probes
 	// through the client (so the governor accounts them and the store revalidates
@@ -139,7 +140,7 @@ func run() int {
 	// operation; any subcommand carrying flags or arguments runs the CLI. The composition
 	// root already knows both, and that is where the choice belongs.
 	if opensTUI(os.Args[1:]) {
-		return runTUI(cfg, clk, client, gov, transport, disc, purge)
+		return runTUI(cfg, clk, cl, gov, transport, disc, purge)
 	}
 
 	// The read half's dependencies. The discovered set is a function so cli stays
@@ -201,7 +202,8 @@ func run() int {
 // the scheduler on the chain, discovery's poll set and the governor's Budget Readout,
 // hands the root the engine channel and the pulls it broadcasts, runs the program, and
 // stops the engine cleanly, bounded so quit stays snappy (ADR-0015).
-func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *governor.Governor, transport *store.Transport, disc *discovery.Discovery, purge *ops.Ops) int {
+func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Governor, transport *store.Transport, disc *discovery.Discovery, purge *ops.Ops) int {
+	client := cl.shared
 	if !term.FromEnv().IsTerminalOutput() {
 		fmt.Fprintln(os.Stderr, "gh-runs: standard output is not a terminal; refusing to open the dashboard. Run `gh runs list` for non-interactive output.")
 		return 1
@@ -268,12 +270,15 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		// freezes a Cache and Artifact selection into a reclamation Plan through the same ops
 		// engine, so its DELETE travels the one mutation entry a Purge does (R17).
 		// A download is the one Storage action that destroys nothing, so it takes its own seam
-		// over the same client and lands in the working directory beside a log export
-		// (storage-reclamation R13). An expired Artifact is refused here, and a 410 arriving
-		// anyway reads as the bytes being gone (R14).
+		// and lands in the working directory beside a log export (storage-reclamation R13). It
+		// dials the blob client, which shares the governor and the limiter but not the store:
+		// an Artifact archive is a one-shot binary behind a signed URL, and caching it would
+		// spend memory and disk proportional to the download for an entry nothing can ever
+		// revalidate (see newClients). An expired Artifact is refused before any request, and a
+		// 410 arriving anyway reads as the bytes being gone (R14).
 		StorageFetch:    storage.ClientFetch(client),
 		StorageOps:      purge,
-		StorageDownload: storage.ClientDownload(client, downloadDir()),
+		StorageDownload: cl.storageDownload(downloadDir()),
 		// The Workflows tab reads each repository's Workflow list over the same client, so the
 		// store revalidates and the governor accounts each request (workflow-management R1), and
 		// it enables or disables one Workflow through the same ops engine, so a toggle is paced
@@ -342,6 +347,55 @@ func currentHostSupported(current func() (domain.RepoID, error)) error {
 		return unsupported
 	}
 	return nil
+}
+
+// clients is the pair of request surfaces the tool dials one assembled chain with.
+//
+// shared is everything's client: it enters at the store, so a read revalidates and costs
+// nothing when nothing changed (local-store R8, ADR-0012). blob enters one layer lower, at
+// the governor, so it is still paced and still bounded by the limiter, and the store is not
+// in its path.
+//
+// The distinction exists because the store persists any 200 GET carrying an ETag: it reads
+// the whole body into memory and writes it base64-in-JSON to disk (local-store R19). For an
+// API resource that is the point. For an Artifact archive it is a defect with teeth: the
+// archive is an arbitrarily large one-shot binary served from a signed, single-use blob URL,
+// so caching it spends memory and disk proportional to the download and caches something no
+// later request can revalidate or even address. The blob URL carries no /repos/ path either,
+// so repoOf yields "" and no repository invalidation could ever reclaim the entry. A tool
+// whose subject is reclaiming storage must not consume multiples of an Artifact in hidden
+// storage to hand the user a copy of it.
+//
+// Only the Artifact download is routed this way. The whole-Run log export has the same shape
+// and the same problem, and is tracked separately at
+// https://github.com/jv-k/gh-runs/issues/89 rather than changed under a storage-reclamation
+// commit.
+type clients struct {
+	shared *ghclient.Client
+	blob   *ghclient.Client
+}
+
+// newClients builds both surfaces over one chain. token is empty in production, where go-gh
+// resolves it from the environment or the gh keyring (ADR-0002); a test injects a fixed one.
+func newClients(chain, gov http.RoundTripper, token string) (clients, error) {
+	shared, err := ghclient.New(ghclient.Options{AuthToken: token, Transport: chain})
+	if err != nil {
+		return clients{}, err
+	}
+	blob, err := ghclient.New(ghclient.Options{AuthToken: token, Transport: gov})
+	if err != nil {
+		return clients{}, err
+	}
+	return clients{shared: shared, blob: blob}, nil
+}
+
+// storageDownload is the Storage tab's download seam (storage-reclamation R13). It is a named
+// function rather than an inline expression because which of the two surfaces it dials is the
+// whole decision: blob, never shared, so an Artifact archive does not travel the store. A test
+// calls this exact function against a real store transport and asserts the store stays empty,
+// so flipping it back to shared fails rather than merely costing a user disk.
+func (c clients) storageDownload(dir string) storage.Downloader {
+	return storage.ClientDownload(c.blob, dir)
 }
 
 // baseTransport is the base RoundTripper the chain dials through, a clone of

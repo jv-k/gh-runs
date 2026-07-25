@@ -144,8 +144,10 @@ func (r storeRow) item() ops.Item {
 // resolved keybinding set (R7a), Fetch reads one repository's storage over the shared
 // client, Repos is the discovered capability data the gate reads (R20) and the fan-out
 // covers (R0), Ops freezes a selection into a Plan (R17), and Download writes an Artifact's
-// archive to disk (R13). A golden test leaves Fetch, Repos, Ops and Download nil, where the
-// tab renders held state and the delete and download keys are inert.
+// archive to disk (R13). A test may leave any of them nil, where the tab renders held state
+// alone: the delete key opens nothing, and the download key neither requests nor advertises
+// itself, though it still refuses a Tombstone out loud, because that refusal is a fact about
+// the row rather than about the seam (R14).
 type Options struct {
 	Profile  keys.Profile
 	Fetch    Fetch
@@ -237,6 +239,12 @@ func New(opts Options) Model {
 // spending a burst of Budget the operator did not ask for, and keeps SetActive a pure state
 // change matching the other tabs (ADR-0011).
 func (m Model) SetActive(active bool) Model {
+	if !active {
+		// A download's outcome describes a row on this tab, so it does not survive leaving it
+		// (R13). A tab returned to later must not still be announcing what happened before the
+		// operator went elsewhere.
+		m.status = ""
+	}
 	m.active = active
 	return m
 }
@@ -304,6 +312,12 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.confirmOpen {
 		return m.handleConfirmKey(k)
 	}
+	// A download's outcome reports on the row it was pressed over, so the next keystroke
+	// retires it (R13). Left standing it would sit under unrelated rows for the rest of the
+	// session and cost the list a row to do it. startDownload sets it again below, and a
+	// result still in flight sets it when it lands, which is the one case where an outcome
+	// legitimately outlives the keystroke that asked for it.
+	m.status = ""
 	switch {
 	case key.Matches(k, m.profile.Delete):
 		return m.openConfirm(), nil
@@ -366,10 +380,14 @@ func (m Model) startFetch() (Model, tea.Cmd) {
 // startDownload downloads the Artifact under the cursor to disk (R13). Downloading is a
 // genuine non-storage use case, independent of whether the Artifact is worth deleting, so the
 // key acts on the row alone and nothing about the reclaimable figures gates it. It runs off
-// the Update loop, and it is offered on no expired Artifact: a Tombstone's download answers
-// 410 Gone, so pressing the key over one issues no request and reports the bytes as gone
-// rather than as a transient failure (R14, AC9). A Cache row has no archive, and with no
-// Downloader wired the key is inert, which is the golden path.
+// the Update loop.
+//
+// The three refusals are ordered deliberately. A Cache row has no archive at all, so the key
+// does nothing and says nothing. A Tombstone is refused before the Downloader is consulted,
+// and it does say something: its download would answer 410 Gone, so the tab reports the bytes
+// as gone rather than issuing a request to be told (R14, AC9). That refusal holds whether or
+// not a Downloader is wired, which is why a golden with no seam can still show it. Only a live
+// Artifact reaches the nil check, so an unwired tab is inert there and nowhere else.
 func (m Model) startDownload() (Model, tea.Cmd) {
 	rows := m.displayRows()
 	if m.cursor < 0 || m.cursor >= len(rows) {

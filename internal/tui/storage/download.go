@@ -34,14 +34,18 @@ const maxNameSlug = 48
 // golden path.
 type Downloader func(a domain.Artifact) (path string, err error)
 
-// ClientDownload is the production Downloader, wired in main.go over the shared ghclient and
-// a target directory main.go resolves. It refuses a Tombstone outright, issuing no request,
-// because an expired Artifact's download answers 410 Gone and its bytes are already gone
-// (R14). Otherwise it GETs the Artifact's zip endpoint, follows the redirect to the signed
-// blob, and streams the archive to disk exactly as received, without unpacking, because
-// unpacking assumes a directory layout the user did not ask for. A 410 arriving anyway, from
-// an Artifact that expired between the listing and the keystroke, reads as ErrArtifactGone
-// and not as a transient failure (R14, AC9).
+// ClientDownload is the production Downloader. main.go wires it over the blob client, which
+// dials the governor and the limiter but deliberately not the local-store, and over a target
+// directory main.go resolves. The client matters: an archive routed through the store would
+// be read into memory whole and written to disk a second time as a cache entry nothing can
+// ever revalidate (see main.go's clients).
+//
+// It refuses a Tombstone outright, issuing no request, because an expired Artifact's download
+// answers 410 Gone and its bytes are already gone (R14). Otherwise it GETs the Artifact's zip
+// endpoint, follows the redirect to the signed blob, and copies the archive to disk exactly as
+// received, without unpacking, because unpacking assumes a directory layout the user did not
+// ask for. A 410 arriving anyway, from an Artifact that expired between the listing and the
+// keystroke, reads as ErrArtifactGone and not as a transient failure (R14, AC9).
 func ClientDownload(client Requester, dir string) Downloader {
 	return func(a domain.Artifact) (string, error) {
 		if a.Tombstone() {
@@ -55,8 +59,15 @@ func ClientDownload(client Requester, dir string) Downloader {
 			return "", fmt.Errorf("artifact download: fetching the archive failed: %w", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
+		// Unreachable through the wired client, and kept anyway. go-gh v2.13.0 converts every
+		// non-2xx to an *api.HTTPError before returning, and ghclient.Request delegates straight
+		// to it, so a 410 always arrives on the error branch above. This branch covers the rest
+		// of what the Requester interface permits: a transport that hands back the response for
+		// any status, which is what a fake does and what ghclient's raw surface would do if a
+		// later change routed the download through it. Defence in depth on the one status whose
+		// meaning R14 turns on, not a live path.
 		if resp.StatusCode == http.StatusGone {
-			return "", ErrArtifactGone // R14, AC9: a raw transport reports the status rather than an error
+			return "", ErrArtifactGone // R14, AC9
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return "", fmt.Errorf("artifact download: the archive endpoint returned HTTP %d", resp.StatusCode)
@@ -65,9 +76,15 @@ func ClientDownload(client Requester, dir string) Downloader {
 	}
 }
 
-// writeArchive streams body into dir/name and returns the path written. It streams rather
-// than buffering, so an Artifact larger than memory still lands, and it removes a partial
+// writeArchive copies body into dir/name and returns the path written, removing a partial
 // file on failure so no half-written archive is left looking like a download that worked.
+//
+// It reads incrementally and never holds the archive in memory, but that alone does not make
+// the download streaming end to end: whether an Artifact larger than memory lands depends on
+// the transport underneath. The local-store reads any 200 GET it caches into memory whole
+// (local-store R19), so a download routed through it is buffered however carefully this
+// function copies. That is why main.go dials the blob client here, and why the wiring is
+// asserted by a test rather than left to a comment.
 func writeArchive(dir, name string, body io.Reader) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("artifact download: creating %s: %w", dir, err)
@@ -110,19 +127,36 @@ func artifactArchivePath(a domain.Artifact) string {
 
 // archiveName is the file one download writes: the repository, the Artifact's id and a slug
 // of its name. The id makes it unique, so two Artifacts sharing a name never collide, and the
-// name makes it recognisable months later. The slug keeps only characters safe in a filename,
-// so a hostile Artifact name cannot escape the target directory or hide as a dotfile.
+// name makes it recognisable months later.
+//
+// Every component that came off the wire is slugged, the owner and repository as much as the
+// Artifact's name. All three are remote text, and a filename that contains two of them
+// carefully and the third raw has no standard at all. The slug keeps only characters safe in
+// a filename, so none of them can carry a separator into the path, escape the target
+// directory or hide the download as a dotfile. Dots go with everything else, so a repository
+// called docs.github.com writes docs-github-com: predictable, and never one dot away from a
+// parent directory.
 func archiveName(a domain.Artifact) string {
-	base := a.Repo.Owner + "-" + a.Repo.Name + "-artifact-" + strconv.FormatInt(a.ID, 10)
+	parts := []string{nameSlug(a.Repo.Owner), nameSlug(a.Repo.Name), "artifact", strconv.FormatInt(a.ID, 10)}
+	base := ""
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		if base != "" {
+			base += "-"
+		}
+		base += p
+	}
 	if slug := nameSlug(a.Name); slug != "" {
 		base += "-" + slug
 	}
 	return base + ".zip"
 }
 
-// nameSlug reduces an Artifact's name to filename-safe characters, collapsing every run of
-// anything else to a single hyphen and capping the length. It returns the empty string when
-// nothing survives, in which case the id alone names the file.
+// nameSlug reduces remote text to filename-safe characters, collapsing every run of anything
+// else to a single hyphen and capping the length. It returns the empty string when nothing
+// survives, in which case the component is dropped and the id still names the file.
 func nameSlug(name string) string {
 	var b strings.Builder
 	lastHyphen := true // leading hyphens are dropped, so a name of punctuation yields nothing

@@ -157,6 +157,36 @@ func TestClientDownloadKeepsAHostileNameInsideTheTargetDirectory(t *testing.T) {
 	}
 }
 
+// TestClientDownloadContainsTheRepositoryNameToo pins that the same containment covers every
+// remote string in the filename, not only the Artifact's name. The owner and the repository
+// are API text like any other, and a filename that trusts two of its three components has no
+// standard at all.
+func TestClientDownloadContainsTheRepositoryNameToo(t *testing.T) {
+	dir := t.TempDir()
+	raw := requesterFunc(func(string, string) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("payload")),
+			Header:     http.Header{},
+		}, nil
+	})
+	hostile := domain.Artifact{
+		ID:   7,
+		Name: "logs",
+		Repo: domain.RepoID{Host: domain.HostGitHub, Owner: "../..", Name: "etc/passwd"},
+	}
+	path, err := storage.ClientDownload(raw, dir)(hostile)
+	if err != nil {
+		t.Fatalf("ClientDownload returned an error: %v", err)
+	}
+	if filepath.Dir(path) != dir {
+		t.Errorf("download landed at %s, outside the target directory %s", path, dir)
+	}
+	if base := filepath.Base(path); strings.HasPrefix(base, ".") {
+		t.Errorf("download filename = %q, want a non-hidden name", base)
+	}
+}
+
 // TestClientDownloadRefusesATombstoneWithoutARequest pins R14's first half: download is
 // offered on no expired Artifact, so the seam itself refuses one and issues no request. The
 // cassette tapes a 200, so a seam that asked anyway would succeed and write a file, and this

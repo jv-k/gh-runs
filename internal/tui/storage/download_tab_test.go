@@ -157,6 +157,102 @@ func TestDownloadFailureReadsAsAFailure(t *testing.T) {
 	}
 }
 
+// TestDownloadStatusClearsOnTheNextAction pins that the outcome line is transient. It reports
+// what happened to the row it was pressed over, so it must not outlive that row being the one
+// under the cursor: left up, "Downloaded build-logs to /path" would sit under an unrelated
+// repository's rows for the rest of the session, and it costs a list row to do it.
+func TestDownloadStatusClearsOnTheNextAction(t *testing.T) {
+	live := domain.Artifact{ID: 42, Name: "build-logs", SizeInBytes: 145212, ExpiresAt: day}
+	second := domain.Artifact{ID: 43, Name: "other-logs", SizeInBytes: 99999, ExpiresAt: day}
+
+	for _, tc := range []struct {
+		name string
+		key  string
+	}{
+		{"cursor movement", "down"},
+		{"refresh", "r"},
+		{"the artifacts-only filter", "a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &recordingDownloader{path: "/tmp/cli-cli-artifact-42-build-logs.zip"}
+			m := downloadTab(t, d, live, second)
+			m, cmd := m.Update(press("w"))
+			m = runCmd(m, cmd)
+			if !strings.Contains(m.View(), "build-logs.zip") {
+				t.Fatalf("the download did not report an outcome, so there is nothing to clear:\n%s", m.View())
+			}
+
+			m = send(m, tc.key)
+			if strings.Contains(m.View(), "build-logs.zip") {
+				t.Errorf("%s left the previous download's outcome on screen:\n%s", tc.name, m.View())
+			}
+		})
+	}
+}
+
+// TestDownloadStatusClearsOnTabBlur pins the same for leaving the tab: a Storage tab returned
+// to later must not still be announcing a download from before the operator went elsewhere.
+func TestDownloadStatusClearsOnTabBlur(t *testing.T) {
+	d := &recordingDownloader{path: "/tmp/cli-cli-artifact-42-build-logs.zip"}
+	m := downloadTab(t, d, domain.Artifact{ID: 42, Name: "build-logs", SizeInBytes: 145212, ExpiresAt: day})
+	m, cmd := m.Update(press("w"))
+	m = runCmd(m, cmd)
+
+	m = m.SetActive(false)
+	if strings.Contains(m.View(), "build-logs.zip") {
+		t.Errorf("leaving the tab left the previous download's outcome on screen:\n%s", m.View())
+	}
+}
+
+// TestDownloadTargetsTheRowsOwnRepository pins R13 under R0's default all-repos scope, which
+// is the shape the tab actually runs in: the merged list interleaves rows from every
+// repository by size, so the row under the cursor routinely belongs to a different repository
+// from the one above it. The download must resolve against the row's own repository, not the
+// first fetched or the one the cursor started on.
+func TestDownloadTargetsTheRowsOwnRepository(t *testing.T) {
+	d := &recordingDownloader{path: "/tmp/written.zip"}
+	m := storage.New(storage.Options{Profile: keys.Standard, Download: d.download})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	// Fetched cli/cli first, so its Artifact is the one a repository-blind implementation
+	// would pick. The bytes-descending sort files octo/hello's row above it.
+	m = fetched(m, storage.RepoStorage{
+		Repo:              rid("cli", "cli"),
+		Artifacts:         []domain.Artifact{{ID: 1, Name: "small", SizeInBytes: 1000, ExpiresAt: day}},
+		ArtifactsComplete: true,
+	})
+	m = fetched(m, storage.RepoStorage{
+		Repo:              rid("octo", "hello"),
+		Artifacts:         []domain.Artifact{{ID: 2, Name: "large", SizeInBytes: 9_000_000, ExpiresAt: day}},
+		ArtifactsComplete: true,
+	})
+
+	m2, cmd := m.Update(press("w")) // cursor is on the largest row, octo/hello's
+	runCmd(m2, cmd)
+
+	if len(d.asked) != 1 {
+		t.Fatalf("the Downloader was asked %d times, want once (R13)", len(d.asked))
+	}
+	if got := d.asked[0]; got.ID != 2 || got.Repo != rid("octo", "hello") {
+		t.Errorf("downloaded artifact %d of %v, want 2 of octo/hello: the row's own repository, not the first fetched (R0, R13)", got.ID, got.Repo)
+	}
+}
+
+// TestDownloadHintIsSilentWithoutDownloader pins that the frame advertises only what it can
+// do. With no Downloader wired the key cannot download, so naming it on a live Artifact's row
+// would be an offer the tab cannot honour.
+func TestDownloadHintIsSilentWithoutDownloader(t *testing.T) {
+	m := storage.New(storage.Options{Profile: keys.Standard})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	m, _ = m.Update(storage.StorageFetched(storage.RepoStorage{
+		Repo:              rid("cli", "cli"),
+		Artifacts:         []domain.Artifact{{ID: 1, Name: "build-logs", SizeInBytes: 145212, ExpiresAt: day}},
+		ArtifactsComplete: true,
+	}))
+	if got := m.View(); strings.Contains(got, "w download") {
+		t.Errorf("the frame advertises a download with no Downloader wired:\n%s", got)
+	}
+}
+
 // TestDownloadKeyInertWithoutDownloader pins the golden path: with no Downloader wired the
 // key is inert, exactly as the delete key is with no planner.
 func TestDownloadKeyInertWithoutDownloader(t *testing.T) {
