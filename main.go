@@ -21,7 +21,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/colorprofile"
 	"github.com/cli/go-gh/v2/pkg/auth"
 	"github.com/cli/go-gh/v2/pkg/term"
 
@@ -35,6 +34,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/limiter"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 	"github.com/jv-k/gh-runs/v2/internal/tui"
@@ -241,10 +241,15 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 
 	// The colour profile is resolved here and handed to Bubble Tea explicitly, rather than
 	// left to colorprofile.Detect, which resolves NO_COLOR through strconv.ParseBool and so
-	// resolves it against R15 (settings R15a, ADR-0013). Detection supplies what the output
-	// stream can carry; config.ColorProfile applies the environment over it, and NO_COLOR
-	// caps the answer whatever the theme setting says (R6, R15, AC9).
-	colorProfile := config.ColorProfile(os.LookupEnv, cfg.Theme, colorprofile.Detect(os.Stdout, os.Environ()))
+	// resolves it against R15 (settings R15a, ADR-0013). DetectCapability reports what the
+	// output stream can carry with the three colour variables kept out of it, and
+	// palette.ColorProfile is the only thing that reads them.
+	colorProfile := palette.ColorProfile(os.LookupEnv, palette.DetectCapability(os.Stdout, os.Environ()))
+
+	// The palette the views paint with is not resolved here. The root applies the theme as it
+	// is constructed, asks the terminal for its background as it starts, and re-resolves when
+	// the answer arrives or the operator changes the setting, so auto follows the terminal as
+	// gh does and a change applies from the next frame (settings R6, R17).
 
 	// Seed discovery so the poll set is not empty on a warm cache; a cold cache spends
 	// one pass and the Feed reveals repositories as they arrive (R32, R33). A discovery

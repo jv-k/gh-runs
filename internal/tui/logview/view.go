@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
 
@@ -32,17 +33,17 @@ const (
 var (
 	styleDefault = lipgloss.NewStyle()
 	styleHeader  = lipgloss.NewStyle().Bold(true)
-	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
-	styleFold    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00afff"))
-	styleError   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ff5f5f"))
-	styleWarning = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff875f"))
-	styleNotice  = lipgloss.NewStyle().Foreground(lipgloss.Color("#00d7af"))
-	styleCommand = lipgloss.NewStyle().Foreground(lipgloss.Color("#5faf5f"))
-	styleDebug   = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
+	styleDim     = lipgloss.NewStyle().Foreground(palette.Muted)
+	styleFold    = lipgloss.NewStyle().Bold(true).Foreground(palette.Accent)
+	styleError   = lipgloss.NewStyle().Bold(true).Foreground(palette.Danger)
+	styleWarning = lipgloss.NewStyle().Foreground(palette.Warn)
+	styleNotice  = lipgloss.NewStyle().Foreground(palette.Requested)
+	styleCommand = lipgloss.NewStyle().Foreground(palette.Passed)
+	styleDebug   = lipgloss.NewStyle().Foreground(palette.Muted)
 	stylePrompt  = lipgloss.NewStyle().Bold(true)
-	styleWarn    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ff875f"))
-	cursorBg     = lipgloss.Color("#303030")
-	matchBg      = lipgloss.Color("#5f5f00")
+	styleWarn    = lipgloss.NewStyle().Bold(true).Foreground(palette.Warn)
+	cursorBg     = palette.CursorBackground
+	matchBg      = palette.MatchBackground
 )
 
 // visKind distinguishes a fold header, which the cursor toggles, from an ordinary content

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/approvals"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
 
@@ -22,11 +23,11 @@ const (
 // Styles mirror the confirm and dispatch panes' palette so the three read as one product.
 var (
 	styleTitle = lipgloss.NewStyle().Bold(true)
-	styleDim   = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
-	styleErr   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ff5f5f"))
-	styleOK    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#5fd75f"))
+	styleDim   = lipgloss.NewStyle().Foreground(palette.Muted)
+	styleErr   = lipgloss.NewStyle().Bold(true).Foreground(palette.Danger)
+	styleOK    = lipgloss.NewStyle().Bold(true).Foreground(palette.Success)
 	styleFocus = lipgloss.NewStyle().Bold(true)
-	styleWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffaf00"))
+	styleWarn  = lipgloss.NewStyle().Foreground(palette.Attention)
 )
 
 // View renders the decision from held state alone, with no live terminal and no network. It

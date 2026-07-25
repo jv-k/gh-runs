@@ -8,6 +8,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/tui/settings"
 )
 
@@ -34,6 +35,19 @@ func TestGoldenThemeFocused(t *testing.T) {
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = focusWith(t, m, "down", "theme")
 	goldie.New(t).Assert(t, "theme_focused", []byte(m.View()))
+}
+
+// TestGoldenLightPalette fixes the same frame under the light palette, which is the theme
+// setting's whole observable effect (settings R6). Every other golden in the suite is taken
+// under the dark palette, the default, so this one is where the light set is pinned: the
+// text and the layout are the dark golden's, and every colour differs.
+func TestGoldenLightPalette(t *testing.T) {
+	defer palette.Use(palette.Light)()
+
+	m := settings.New(keys.Standard, defaultConfig(), nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focusWith(t, m, "down", "theme")
+	goldie.New(t).Assert(t, "theme_focused_light", []byte(m.View()))
 }
 
 // TestGoldenEditingNumber fixes the numeric editor mid-entry: the discovery refresh row is

@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
+	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
 
@@ -16,15 +17,18 @@ const (
 	markerCol  = 2
 )
 
-// Styles. lipgloss v2 renders truecolour regardless of TERM or NO_COLOR, so a golden over
-// View() is byte-stable on any machine (ADR-0013). The palette matches the confirm pane's.
+// Styles. Every colour comes from the palette, so the theme setting reaches this frame
+// (settings R6): a role resolves to its dark or light value as the style renders. lipgloss
+// v2 renders truecolour regardless of TERM or NO_COLOR, so a golden over View() is
+// byte-stable on any machine at a given appearance (ADR-0013), and the light golden beside
+// the dark one is what pins the other half.
 var (
 	styleTitle  = lipgloss.NewStyle().Bold(true)
-	styleDim    = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
-	styleWarn   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ff875f"))
-	styleValue  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00afff"))
+	styleDim    = lipgloss.NewStyle().Foreground(palette.Muted)
+	styleWarn   = lipgloss.NewStyle().Bold(true).Foreground(palette.Warn)
+	styleValue  = lipgloss.NewStyle().Bold(true).Foreground(palette.Accent)
 	styleActive = lipgloss.NewStyle().Bold(true)
-	styleCaret  = lipgloss.NewStyle().Foreground(lipgloss.Color("#00afff"))
+	styleCaret  = lipgloss.NewStyle().Foreground(palette.Accent)
 )
 
 // View renders the pane from held state alone, with no live terminal and no network (R18).

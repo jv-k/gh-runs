@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,6 +24,22 @@ func baseConfig() config.Config {
 		WorkflowsScope:          config.ScopeAllRepos,
 		StorageScope:            config.ScopeAllRepos,
 	}
+}
+
+// topLevelKeys returns the config file's keys in the order they appear, so a test can assert
+// that a Save added none. It reads the text rather than the parsed document deliberately:
+// the point is what the file carries, comments and order included.
+func topLevelKeys(contents string) []string {
+	var keys []string
+	for _, line := range strings.Split(contents, "\n") {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, " ") {
+			continue
+		}
+		if k, _, found := strings.Cut(line, ":"); found {
+			keys = append(keys, strings.TrimSpace(k))
+		}
+	}
+	return keys
 }
 
 // readSaved returns the bytes of the config file Save wrote under xdgDir.
@@ -195,6 +212,11 @@ func TestSaveThemeChangesOnlyThatKey(t *testing.T) {
 	}
 	if strings.Index(got, "theme") > strings.Index(got, "budget") {
 		t.Errorf("Save reordered the keys; theme must stay first:\n%s", got)
+	}
+	// AC11 is "changed in that key only", so the file must also gain no key. A marshaller
+	// that wrote every field rather than the changed one would satisfy every check above.
+	if before, after := topLevelKeys(original), topLevelKeys(got); !slices.Equal(before, after) {
+		t.Errorf("Save changed the key set from %v to %v; only the value of theme may change", before, after)
 	}
 	if cfg, _ := config.Load(env, config.Flags{}); cfg.Theme != config.ThemeDark {
 		t.Errorf("Theme after round-trip = %q, want %q", cfg.Theme, config.ThemeDark)
