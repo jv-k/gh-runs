@@ -18,9 +18,16 @@
 // result (R19). Reclamation destroys irreversibly, so a deletion travels the single
 // mutation entry ops.Execute over the store-governor-limiter chain, paced and logged, and
 // the confirmation is reused unchanged (R15, R17, R23).
+//
+// Downloading an Artifact is the exception to all of that, and takes its own seam for exactly
+// that reason (R13). It is a GET that destroys nothing, so it routes through no confirmation,
+// writes no deletion-log line and touches no eligibility gate. It is offered on no expired
+// Artifact, whose download answers 410 Gone, and a 410 arriving anyway reads as the bytes
+// being gone rather than as a transient failure a retry might fix (R14, AC9).
 package storage
 
 import (
+	"errors"
 	"sort"
 
 	"charm.land/bubbles/v2/key"
@@ -136,13 +143,24 @@ func (r storeRow) item() ops.Item {
 // Options carries the tab's construction seams. main.go fills them: the profile is the
 // resolved keybinding set (R7a), Fetch reads one repository's storage over the shared
 // client, Repos is the discovered capability data the gate reads (R20) and the fan-out
-// covers (R0), and Ops freezes a selection into a Plan (R17). A golden test leaves Fetch,
-// Repos and Ops nil, where the tab renders held state and the delete key is inert.
+// covers (R0), Ops freezes a selection into a Plan (R17), and Download writes an Artifact's
+// archive to disk (R13). A golden test leaves Fetch, Repos, Ops and Download nil, where the
+// tab renders held state and the delete and download keys are inert.
 type Options struct {
-	Profile keys.Profile
-	Fetch   Fetch
-	Repos   func() []domain.Repo
-	Ops     Planner
+	Profile  keys.Profile
+	Fetch    Fetch
+	Repos    func() []domain.Repo
+	Ops      Planner
+	Download Downloader
+}
+
+// downloadDoneMsg carries a download's result: the Artifact's name, the path written, or the
+// error (R13, R14). It is tagged with the name rather than the id because the line it feeds
+// is read by a person, and the name is what they pressed the key over.
+type downloadDoneMsg struct {
+	name string
+	path string
+	err  error
 }
 
 // Model is the Storage tab's state. The storage map is the truth per repository, keyed by
@@ -154,10 +172,11 @@ type Model struct {
 	width, height int
 	active        bool
 
-	profile keys.Profile
-	fetch   Fetch
-	repos   func() []domain.Repo
-	planner Planner
+	profile  keys.Profile
+	fetch    Fetch
+	repos    func() []domain.Repo
+	planner  Planner
+	download Downloader
 
 	storage map[string]RepoStorage
 	order   []domain.RepoID
@@ -187,6 +206,12 @@ type Model struct {
 	confirm        confirm.Model
 	confirmOpen    bool
 	pendingReclaim int64
+
+	// status is a transient line reporting the last download's outcome: the path written
+	// (R13), or that the Artifact's bytes are gone (R14, AC9). It is display state alone and
+	// nothing reads it back, which keeps a download outside ADR-0006's statelessness rule as
+	// well as outside the deletion log, because a download destroys nothing.
+	status string
 }
 
 // New returns a Storage tab over opts. It holds no storage until the first StorageFetched
@@ -197,6 +222,7 @@ func New(opts Options) Model {
 		fetch:      opts.Fetch,
 		repos:      opts.Repos,
 		planner:    opts.Ops,
+		download:   opts.Download,
 		storage:    make(map[string]RepoStorage),
 		capability: make(map[string]domain.Repo),
 		selected:   make(map[selKey]bool),
@@ -233,10 +259,30 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.applyFetched(RepoStorage(msg))
 		return m, nil
 
+	case downloadDoneMsg:
+		m.status = downloadOutcome(msg)
+		return m, nil
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
 	return m, nil
+}
+
+// downloadOutcome words a download's result (R13, R14, AC9). A 410 is not a failure: the
+// Artifact expired, the archive was destroyed by the retention policy, and no retry brings it
+// back, so it is worded as the bytes being gone. Anything else is a failure, worded as one,
+// because conflating the two would tell an operator to retry what can never succeed or to
+// give up on what a second attempt would fix.
+func downloadOutcome(msg downloadDoneMsg) string {
+	switch {
+	case errors.Is(msg.err, ErrArtifactGone):
+		return msg.name + " expired: its bytes are gone, and no download can bring them back"
+	case msg.err != nil:
+		return "Download of " + msg.name + " failed: " + msg.err.Error()
+	default:
+		return "Downloaded " + msg.name + " to " + msg.path
+	}
 }
 
 // applyFetched replaces one repository's held storage wholesale and records it in the
@@ -261,6 +307,8 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch {
 	case key.Matches(k, m.profile.Delete):
 		return m.openConfirm(), nil
+	case key.Matches(k, m.profile.ArtifactDownload):
+		return m.startDownload() // R13, R14
 	case key.Matches(k, m.profile.ArtifactsOnly):
 		m.artifactsOnly = !m.artifactsOnly // R8
 		m.cursor, m.top = 0, 0
@@ -313,6 +361,38 @@ func (m Model) startFetch() (Model, tea.Cmd) {
 		cmds = append(cmds, func() tea.Msg { return StorageFetched(fetch(id)) })
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// startDownload downloads the Artifact under the cursor to disk (R13). Downloading is a
+// genuine non-storage use case, independent of whether the Artifact is worth deleting, so the
+// key acts on the row alone and nothing about the reclaimable figures gates it. It runs off
+// the Update loop, and it is offered on no expired Artifact: a Tombstone's download answers
+// 410 Gone, so pressing the key over one issues no request and reports the bytes as gone
+// rather than as a transient failure (R14, AC9). A Cache row has no archive, and with no
+// Downloader wired the key is inert, which is the golden path.
+func (m Model) startDownload() (Model, tea.Cmd) {
+	rows := m.displayRows()
+	if m.cursor < 0 || m.cursor >= len(rows) {
+		return m, nil
+	}
+	row := rows[m.cursor]
+	if row.kind != ops.KindArtifact {
+		return m, nil // only an Artifact has an archive to download (R13)
+	}
+	a := row.artifact
+	a.Repo = row.repo // the merged list is grouped by repository, which is authoritative (R4)
+	if a.Tombstone() {
+		m.status = downloadOutcome(downloadDoneMsg{name: a.Name, err: ErrArtifactGone}) // R14, AC9
+		return m, nil
+	}
+	if m.download == nil {
+		return m, nil
+	}
+	dl := m.download
+	return m, func() tea.Msg {
+		path, err := dl(a)
+		return downloadDoneMsg{name: a.Name, path: path, err: err}
+	}
 }
 
 // scopeRepos is the set the fan-out covers: the discovered repositories under all-repos

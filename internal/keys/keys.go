@@ -49,6 +49,16 @@
 // over the Storage tab's frozen Cache and Artifact selection, selection reuses
 // ToggleSelect (space), and refresh reuses Refresh (r) (storage-reclamation R15, R17).
 //
+// ArtifactDownload is the one binding that stage minted late: the Storage tab's key that
+// downloads the Artifact under the cursor to disk (storage-reclamation R13). The canon names
+// no literal for it, so the unclaimed literal w is chosen and documented here, a mnemonic for
+// writing the archive to disk. It is deliberately neither d nor D, the two deletion keys,
+// because a download is the only action in this view that destroys nothing and the key for it
+// does not belong a shift away from the key that destroys. It is a motion-independent action,
+// identical in both profiles. The key is inert on a Cache row and on a Tombstone, whose
+// download answers 410 Gone (R14, AC9), so the binding exists in the registry while the row
+// decides whether it acts, exactly as the Workflows tab's State key does.
+//
 // ToggleWorkflow is the workflow-management stage (BUILD-ORDER stage 11) added the same way:
 // the Workflows tab's key that enables a disabled Workflow and disables an active one
 // (workflow-management R5). The action offered depends on the row's State (active offers
@@ -132,24 +142,25 @@ type Profile struct {
 
 	// Navigation and actions. Identical in both profiles (R7a's "Everything
 	// else" table).
-	NextTab        key.Binding // tab: next tab (R2)
-	PrevTab        key.Binding // shift+tab: previous tab (R2)
-	SelectTab      key.Binding // 1/2/3: jump to a tab by position (R2)
-	Settings       key.Binding // ,: settings, reachable from any tab (R2)
-	ToggleSelect   key.Binding // space: toggle row selection (purge R4)
-	Delete         key.Binding // d: open the graduated confirmation over the selection (purge R4 to R9)
-	Cancel         key.Binding // c: cancel the selected Run(s) (run-lifecycle R1, R16)
-	ForceCancel    key.Binding // C: force-cancel, the escalation of cancel (run-lifecycle R6)
-	Rerun          key.Binding // R: re-run the selected Run(s), adding an Attempt (run-lifecycle R1, R8)
-	RerunFailed    key.Binding // F: re-run only the failed Jobs of the selected Run(s) (run-lifecycle R13)
-	ArtifactsOnly  key.Binding // a: filter the Storage tab's list to Artifacts alone (storage-reclamation R8)
-	ToggleWorkflow key.Binding // s: enable a disabled Workflow, disable an active one (workflow-management R5)
-	Dispatch       key.Binding // x: open the workflow_dispatch form over a Workflow, and submit it (workflow-dispatch R2, R16)
-	LogTimestamps  key.Binding // t: toggle the log view's ISO timestamp prefix (log-viewer R4)
-	LogDelete      key.Binding // D: delete the Run's logs, distinct from Run deletion's d (log-viewer R17, AC6)
-	LogExport      key.Binding // e: export the whole-Run log archive to disk (log-viewer R11)
-	LogNextMatch   key.Binding // n: move to the next in-log search match (log-viewer R21)
-	LogPrevMatch   key.Binding // N: move to the previous in-log search match (log-viewer R21)
+	NextTab          key.Binding // tab: next tab (R2)
+	PrevTab          key.Binding // shift+tab: previous tab (R2)
+	SelectTab        key.Binding // 1/2/3: jump to a tab by position (R2)
+	Settings         key.Binding // ,: settings, reachable from any tab (R2)
+	ToggleSelect     key.Binding // space: toggle row selection (purge R4)
+	Delete           key.Binding // d: open the graduated confirmation over the selection (purge R4 to R9)
+	Cancel           key.Binding // c: cancel the selected Run(s) (run-lifecycle R1, R16)
+	ForceCancel      key.Binding // C: force-cancel, the escalation of cancel (run-lifecycle R6)
+	Rerun            key.Binding // R: re-run the selected Run(s), adding an Attempt (run-lifecycle R1, R8)
+	RerunFailed      key.Binding // F: re-run only the failed Jobs of the selected Run(s) (run-lifecycle R13)
+	ArtifactsOnly    key.Binding // a: filter the Storage tab's list to Artifacts alone (storage-reclamation R8)
+	ArtifactDownload key.Binding // w: download the Artifact under the cursor to disk (storage-reclamation R13, R14)
+	ToggleWorkflow   key.Binding // s: enable a disabled Workflow, disable an active one (workflow-management R5)
+	Dispatch         key.Binding // x: open the workflow_dispatch form over a Workflow, and submit it (workflow-dispatch R2, R16)
+	LogTimestamps    key.Binding // t: toggle the log view's ISO timestamp prefix (log-viewer R4)
+	LogDelete        key.Binding // D: delete the Run's logs, distinct from Run deletion's d (log-viewer R17, AC6)
+	LogExport        key.Binding // e: export the whole-Run log archive to disk (log-viewer R11)
+	LogNextMatch     key.Binding // n: move to the next in-log search match (log-viewer R21)
+	LogPrevMatch     key.Binding // N: move to the previous in-log search match (log-viewer R21)
 
 	Approve         key.Binding // A: open the approval decision over the cursor awaiting Run, and submit it (approvals R11, R12)
 	ApprovalsFilter key.Binding // b: apply the approvals saved filter over the Feed, the badge's activation (approvals R9)
@@ -181,25 +192,26 @@ type Profile struct {
 // motion bindings, so "differ on motion, and nowhere else" holds by construction.
 func shared(name string) Profile {
 	return Profile{
-		Name:           name,
-		NextTab:        key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next tab")),
-		PrevTab:        key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous tab")),
-		SelectTab:      key.NewBinding(key.WithKeys("1", "2", "3"), key.WithHelp("1/2/3", "jump to tab")),
-		Settings:       key.NewBinding(key.WithKeys(","), key.WithHelp(",", "settings")),
-		ToggleSelect:   key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select")),
-		Delete:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
-		Cancel:         key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "cancel")),
-		ForceCancel:    key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "force-cancel")),
-		Rerun:          key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "re-run")),
-		RerunFailed:    key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "re-run failed")),
-		ArtifactsOnly:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "artifacts only")),
-		ToggleWorkflow: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "enable/disable")),
-		Dispatch:       key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "dispatch")),
-		LogTimestamps:  key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "timestamps")),
-		LogDelete:      key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete logs")),
-		LogExport:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export archive")),
-		LogNextMatch:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
-		LogPrevMatch:   key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous match")),
+		Name:             name,
+		NextTab:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next tab")),
+		PrevTab:          key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous tab")),
+		SelectTab:        key.NewBinding(key.WithKeys("1", "2", "3"), key.WithHelp("1/2/3", "jump to tab")),
+		Settings:         key.NewBinding(key.WithKeys(","), key.WithHelp(",", "settings")),
+		ToggleSelect:     key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select")),
+		Delete:           key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
+		Cancel:           key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "cancel")),
+		ForceCancel:      key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "force-cancel")),
+		Rerun:            key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "re-run")),
+		RerunFailed:      key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "re-run failed")),
+		ArtifactsOnly:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "artifacts only")),
+		ArtifactDownload: key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "download")),
+		ToggleWorkflow:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "enable/disable")),
+		Dispatch:         key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "dispatch")),
+		LogTimestamps:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "timestamps")),
+		LogDelete:        key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete logs")),
+		LogExport:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export archive")),
+		LogNextMatch:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
+		LogPrevMatch:     key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous match")),
 
 		Approve:         key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve/review")),
 		ApprovalsFilter: key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "awaiting")),
@@ -306,7 +318,8 @@ func (p Profile) Bindings() []key.Binding {
 	bindings := []key.Binding{
 		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
 		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect, p.Delete,
-		p.Cancel, p.ForceCancel, p.Rerun, p.RerunFailed, p.ArtifactsOnly, p.ToggleWorkflow,
+		p.Cancel, p.ForceCancel, p.Rerun, p.RerunFailed, p.ArtifactsOnly, p.ArtifactDownload,
+		p.ToggleWorkflow,
 		p.Dispatch,
 		p.LogTimestamps, p.LogDelete, p.LogExport, p.LogNextMatch, p.LogPrevMatch,
 		p.Approve, p.ApprovalsFilter,

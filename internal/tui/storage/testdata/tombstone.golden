@@ -4,4 +4,4 @@
 [38;2;255;175;0m> [m[ ] [38;2;135;215;135mARTIFACT[m    258.00 KB  cli/cli               release-binaries      expires 2026-07-31
   [ ] [38;2;138;138;138mARTIFACT[m    234.13 KB  cli/cli               old-test-logs         [38;2;138;138;138mtombstone, reclaims nothing[m
 
-[38;2;138;138;138m  space select (0)   d reclaim   a artifacts-only   r refresh[m
+[38;2;138;138;138m  space select (0)   d reclaim   a artifacts-only   r refresh   w download[m

@@ -267,8 +267,13 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		// revalidates and the governor accounts each request (storage-reclamation R1), and it
 		// freezes a Cache and Artifact selection into a reclamation Plan through the same ops
 		// engine, so its DELETE travels the one mutation entry a Purge does (R17).
-		StorageFetch: storage.ClientFetch(client),
-		StorageOps:   purge,
+		// A download is the one Storage action that destroys nothing, so it takes its own seam
+		// over the same client and lands in the working directory beside a log export
+		// (storage-reclamation R13). An expired Artifact is refused here, and a 410 arriving
+		// anyway reads as the bytes being gone (R14).
+		StorageFetch:    storage.ClientFetch(client),
+		StorageOps:      purge,
+		StorageDownload: storage.ClientDownload(client, downloadDir()),
 		// The Workflows tab reads each repository's Workflow list over the same client, so the
 		// store revalidates and the governor accounts each request (workflow-management R1), and
 		// it enables or disables one Workflow through the same ops engine, so a toggle is paced
@@ -288,7 +293,7 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		// deletion reuses purge, the one mutation entry, so a log DELETE is paced and logged like
 		// every other (R17).
 		LogFetch:  logview.ClientFetch(client),
-		LogExport: logview.ClientExport(client, exportDir()),
+		LogExport: logview.ClientExport(client, downloadDir()),
 		// The approvals decision pane approves a fork-PR Run or reviews a Run's pending deployments
 		// through the same ops engine every other write uses, so an approve and a review are paced
 		// and travel ops's write path (approvals R11, R12), and it reads the pending deployments
@@ -397,11 +402,14 @@ func storeDir() string {
 	return filepath.Join(home, ".cache", "gh-runs")
 }
 
-// exportDir is where a whole-Run log archive is written on export: the current working
-// directory, where a user expects a download to land (log-viewer R11). It is not state and
-// not cache: it is a file the user asked for, so it goes where they are, not under XDG. A
+// downloadDir is where a file the user asked for is written: a whole-Run log archive on
+// export (log-viewer R11) and an Artifact's archive on download (storage-reclamation R13).
+// It is the current working directory, where a person expects a download to land. It is not
+// state and not cache, so it does not go under XDG the way the local-store and the deletion
+// log do: those are the tool's own derivations, while these two are the user's files. One
+// directory serves both, because "where did my download go" should have one answer. A
 // working directory that cannot be resolved falls back to ".", the same directory by name.
-func exportDir() string {
+func downloadDir() string {
 	if dir, err := os.Getwd(); err == nil {
 		return dir
 	}

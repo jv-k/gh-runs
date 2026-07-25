@@ -66,6 +66,9 @@ func (m Model) View() string {
 		lines = append(lines, "")
 		lines = append(lines, styleDim.Render(hint))
 	}
+	if m.status != "" {
+		lines = append(lines, styleDim.Render("  "+textsan.Sanitize(m.status)))
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -283,16 +286,41 @@ func (m Model) listRow(r storeRow, cursor bool) string {
 }
 
 // hintLine names the keys the tab acts on, drawn from the registry so it advertises exactly
-// what it matches (R7a, AC18).
+// what it matches (R7a, AC18). Its download segment is the row's, not the tab's: R13 offers
+// download from an Artifact's row, and R14 offers it on no expired one, so the line says which
+// of the two the cursor is on rather than advertising an action that would do nothing.
 func (m Model) hintLine() string {
 	sel := strconv.Itoa(len(m.selected))
 	filter := "a artifacts-only"
 	if m.artifactsOnly {
 		filter = "a all"
 	}
-	return "  " + m.profile.ToggleSelect.Help().Key + " select (" + sel + ")   " +
+	line := "  " + m.profile.ToggleSelect.Help().Key + " select (" + sel + ")   " +
 		m.profile.Delete.Help().Key + " reclaim   " + filter + "   " +
 		m.profile.Refresh.Help().Key + " refresh"
+	if hint := m.downloadHint(); hint != "" {
+		line += "   " + hint
+	}
+	return line
+}
+
+// downloadHint states whether the row under the cursor offers a download (R13, R14). A live
+// Artifact names the key. A Tombstone says the download is unavailable and why, because its
+// bytes are gone and a key that silently did nothing would read as a broken one (AC9). A Cache
+// has no archive at all, so it names neither.
+func (m Model) downloadHint() string {
+	rows := m.displayRows()
+	if m.cursor < 0 || m.cursor >= len(rows) {
+		return ""
+	}
+	row := rows[m.cursor]
+	if row.kind != ops.KindArtifact {
+		return ""
+	}
+	if row.tombstone() {
+		return "no download, bytes gone" // R14, AC9
+	}
+	return m.profile.ArtifactDownload.Help().Key + " download" // R13
 }
 
 // nameWidth is the flex NAME column: the width less the fixed columns, their separators and
@@ -314,15 +342,23 @@ func (m Model) contentWidth() int {
 }
 
 // listCapacity is the number of merged-list rows the viewport shows, the height less the
-// summary, the rollup, the list header and the hint. It floors at one so a tiny terminal
-// still pages.
+// summary, the rollup, the list header, the hint and the download status line when one is
+// showing. It floors at one so a tiny terminal still pages.
 func (m Model) listCapacity() int {
-	chrome := 2 + m.rollupChrome() + 2 // summary+blank, rollup, list header, hint(+blank)
+	chrome := 2 + m.rollupChrome() + 2 + m.statusChrome() // summary+blank, rollup, list header, hint(+blank), status
 	n := m.height - chrome
 	if n < 1 {
 		return 1
 	}
 	return n
+}
+
+// statusChrome is the line the download status occupies, zero while there is none (R13).
+func (m Model) statusChrome() int {
+	if m.status == "" {
+		return 0
+	}
+	return 1
 }
 
 // rollupChrome is the line count the rollup section occupies, zero under a single-repository

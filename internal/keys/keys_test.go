@@ -168,7 +168,8 @@ func TestNoDuplicateListKey(t *testing.T) {
 			{"NextTab", p.NextTab}, {"PrevTab", p.PrevTab}, {"SelectTab", p.SelectTab}, {"Settings", p.Settings},
 			{"ToggleSelect", p.ToggleSelect}, {"Delete", p.Delete},
 			{"Cancel", p.Cancel}, {"ForceCancel", p.ForceCancel}, {"Rerun", p.Rerun}, {"RerunFailed", p.RerunFailed},
-			{"ArtifactsOnly", p.ArtifactsOnly}, {"ToggleWorkflow", p.ToggleWorkflow},
+			{"ArtifactsOnly", p.ArtifactsOnly}, {"ArtifactDownload", p.ArtifactDownload},
+			{"ToggleWorkflow", p.ToggleWorkflow},
 			{"Approve", p.Approve}, {"ApprovalsFilter", p.ApprovalsFilter},
 			{"Refresh", p.Refresh}, {"OpenDetail", p.OpenDetail}, {"Filter", p.Filter}, {"Help", p.Help}, {"Quit", p.Quit},
 		}
@@ -203,6 +204,32 @@ func assertReclamation(t *testing.T, name string, p keys.Profile) {
 func TestReclamationBindings(t *testing.T) {
 	assertReclamation(t, "Vim", keys.Vim)
 	assertReclamation(t, "Standard", keys.Standard)
+}
+
+// assertArtifactDownload pins the Artifact-download key (storage-reclamation R13),
+// identical in both profiles like Delete. The canon names no literal for it, so this is
+// the chosen unclaimed key the package documents: w writes the Artifact's archive to
+// disk. Transcribed from the package doc, not read back off the binding, so a drift from
+// the documented choice fails here.
+func assertArtifactDownload(t *testing.T, name string, p keys.Profile) {
+	t.Helper()
+	assertKeys(t, name+".ArtifactDownload", p.ArtifactDownload, "w") // storage-reclamation R13
+}
+
+// TestArtifactDownloadBinding pins the Artifact-download key over both profiles, and its
+// sameness: a forked binding fails one of the two runs. It is deliberately neither d nor D,
+// which delete a Run and a Run's logs, because downloading an Artifact is the one action in
+// this view that destroys nothing, and a key one row away from deletion would be the worst
+// place to put it. It is distinct from every other list binding, which TestNoDuplicateListKey
+// guards.
+func TestArtifactDownloadBinding(t *testing.T) {
+	assertArtifactDownload(t, "Vim", keys.Vim)
+	assertArtifactDownload(t, "Standard", keys.Standard)
+	for _, p := range keys.Profiles() {
+		if containsKey(p.ArtifactDownload, "d") || containsKey(p.ArtifactDownload, "D") {
+			t.Errorf("profile %s: ArtifactDownload binds a deletion key; a download destroys nothing and must not share one", p.Name)
+		}
+	}
 }
 
 // assertWorkflow pins the Workflows-tab action key (BUILD-ORDER stage 11,
