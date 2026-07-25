@@ -238,13 +238,14 @@ func New(opts Options) Model {
 // presses the refresh key to load, which the empty view names. That keeps a tab switch from
 // spending a burst of Budget the operator did not ask for, and keeps SetActive a pure state
 // change matching the other tabs (ADR-0011).
+// A download's outcome describes a row on this tab, so it does not survive a change of focus
+// in either direction (R13): leaving retires it, and arriving does not inherit one. A result
+// still in flight when focus changes still lands and still shows, which is deliberate, because
+// the alternative is discarding the answer to something the operator asked for. It names the
+// Artifact it reports on, so it identifies itself rather than attaching to whatever row the
+// cursor now sits on.
 func (m Model) SetActive(active bool) Model {
-	if !active {
-		// A download's outcome describes a row on this tab, so it does not survive leaving it
-		// (R13). A tab returned to later must not still be announcing what happened before the
-		// operator went elsewhere.
-		m.status = ""
-	}
+	m.status = ""
 	m.active = active
 	return m
 }
@@ -309,15 +310,17 @@ func (m *Model) applyFetched(rs RepoStorage) {
 // literal of its own (R7a, AC18). While the confirmation modal is open, every key reaches
 // it.
 func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
+	// A download's outcome reports on the row it was pressed over, so the next keystroke
+	// retires it (R13). Left standing it would sit under unrelated rows for the rest of the
+	// session and cost the list a row to do it. This precedes the modal branch, so an
+	// open-then-abort confirmation does not carry a stale outcome back to the list.
+	// startDownload sets it again below, and a result still in flight sets it when it lands,
+	// which is the one case where an outcome legitimately outlives the keystroke that asked
+	// for it.
+	m.status = ""
 	if m.confirmOpen {
 		return m.handleConfirmKey(k)
 	}
-	// A download's outcome reports on the row it was pressed over, so the next keystroke
-	// retires it (R13). Left standing it would sit under unrelated rows for the rest of the
-	// session and cost the list a row to do it. startDownload sets it again below, and a
-	// result still in flight sets it when it lands, which is the one case where an outcome
-	// legitimately outlives the keystroke that asked for it.
-	m.status = ""
 	switch {
 	case key.Matches(k, m.profile.Delete):
 		return m.openConfirm(), nil

@@ -190,17 +190,57 @@ func TestDownloadStatusClearsOnTheNextAction(t *testing.T) {
 	}
 }
 
-// TestDownloadStatusClearsOnTabBlur pins the same for leaving the tab: a Storage tab returned
-// to later must not still be announcing a download from before the operator went elsewhere.
-func TestDownloadStatusClearsOnTabBlur(t *testing.T) {
-	d := &recordingDownloader{path: "/tmp/cli-cli-artifact-42-build-logs.zip"}
-	m := downloadTab(t, d, domain.Artifact{ID: 42, Name: "build-logs", SizeInBytes: 145212, ExpiresAt: day})
-	m, cmd := m.Update(press("w"))
-	m = runCmd(m, cmd)
+// TestDownloadStatusClearsOnFocusChange pins the same for a change of focus, in both
+// directions: leaving retires the outcome, and arriving does not inherit one. A result still
+// in flight when focus changes does still land, which is deliberate and outside what this
+// asserts: the outcome names its Artifact, so it identifies itself rather than attaching to
+// whatever row the cursor now sits on.
+func TestDownloadStatusClearsOnFocusChange(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		d := &recordingDownloader{path: "/tmp/cli-cli-artifact-42-build-logs.zip"}
+		m := downloadTab(t, d, domain.Artifact{ID: 42, Name: "build-logs", SizeInBytes: 145212, ExpiresAt: day})
+		m, cmd := m.Update(press("w"))
+		m = runCmd(m, cmd)
 
-	m = m.SetActive(false)
-	if strings.Contains(m.View(), "build-logs.zip") {
-		t.Errorf("leaving the tab left the previous download's outcome on screen:\n%s", m.View())
+		m = m.SetActive(active)
+		if strings.Contains(m.View(), "build-logs.zip") {
+			t.Errorf("SetActive(%v) left the previous download's outcome on screen:\n%s", active, m.View())
+		}
+	}
+}
+
+// TestDownloadStatusClearsThroughAConfirmCycle pins that the modal is not a way to smuggle a
+// stale outcome back to the list. A result landing while the confirmation is open is the only
+// way an outcome can be set without a list keystroke, so the abort that closes the modal has
+// to retire it too. Sequenced deliberately: the download is issued, the modal opens, the
+// result lands underneath it, and only then is the modal aborted.
+func TestDownloadStatusClearsThroughAConfirmCycle(t *testing.T) {
+	// newStorage wires both a planner, so the delete key opens the confirmation, and a stub
+	// Downloader, so the download reports an outcome to leave behind.
+	m := newStorage(t, 100, 20, writable("cli", "cli"))
+	m = fetched(m, storage.RepoStorage{
+		Repo:              rid("cli", "cli"),
+		Artifacts:         []domain.Artifact{{ID: 42, Name: "build-logs", SizeInBytes: 145212, ExpiresAt: day}},
+		ArtifactsComplete: true,
+	})
+
+	m = send(m, "r")               // pull the discovered repositories into the eligibility gate
+	m, cmd := m.Update(press("w")) // issue the download, result not yet landed
+	if cmd == nil {
+		t.Fatalf("the download key issued no command")
+	}
+
+	m = send(m, "d") // open the confirmation over the row
+	if !m.CapturesInput() {
+		t.Fatalf("the delete key did not open the confirmation")
+	}
+	m = runCmd(m, cmd) // the result lands while the modal is up
+	m = send(m, "n")   // abort, back to the list
+	if m.CapturesInput() {
+		t.Fatalf("aborting did not close the confirmation")
+	}
+	if strings.Contains(m.View(), "Downloaded") {
+		t.Errorf("an open-then-abort confirm cycle carried a stale download outcome back to the list:\n%s", m.View())
 	}
 }
 

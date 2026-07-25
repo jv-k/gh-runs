@@ -161,8 +161,17 @@ func TestClientDownloadKeepsAHostileNameInsideTheTargetDirectory(t *testing.T) {
 // remote string in the filename, not only the Artifact's name. The owner and the repository
 // are API text like any other, and a filename that trusts two of its three components has no
 // standard at all.
+//
+// The fixture puts the target directory inside another that already exists, and aims the
+// escape one level up at it. That is deliberate: writeArchive creates the target directory and
+// no other, so an escape into a directory that does not exist fails on ENOENT and the test
+// would pass for the wrong reason, reporting a filesystem error rather than a containment
+// violation. Aiming at a directory that exists means an uncontained name lands successfully
+// and the assertion below is the one that fires. It also matches how the escape would be
+// exploited in the first place.
 func TestClientDownloadContainsTheRepositoryNameToo(t *testing.T) {
-	dir := t.TempDir()
+	outside := t.TempDir()
+	dir := filepath.Join(outside, "downloads")
 	raw := requesterFunc(func(string, string) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -173,17 +182,24 @@ func TestClientDownloadContainsTheRepositoryNameToo(t *testing.T) {
 	hostile := domain.Artifact{
 		ID:   7,
 		Name: "logs",
-		Repo: domain.RepoID{Host: domain.HostGitHub, Owner: "../..", Name: "etc/passwd"},
+		Repo: domain.RepoID{Host: domain.HostGitHub, Owner: "../escaped", Name: "repo"},
 	}
 	path, err := storage.ClientDownload(raw, dir)(hostile)
 	if err != nil {
 		t.Fatalf("ClientDownload returned an error: %v", err)
 	}
-	if filepath.Dir(path) != dir {
-		t.Errorf("download landed at %s, outside the target directory %s", path, dir)
+	if got := filepath.Dir(path); got != dir {
+		t.Errorf("download landed in %s, outside the target directory %s: a repository name is remote text and is not a path", got, dir)
 	}
 	if base := filepath.Base(path); strings.HasPrefix(base, ".") {
 		t.Errorf("download filename = %q, want a non-hidden name", base)
+	}
+	if entries, err := os.ReadDir(outside); err == nil {
+		for _, e := range entries {
+			if e.Name() != "downloads" {
+				t.Errorf("the download created %q beside the target directory, escaping it", e.Name())
+			}
+		}
 	}
 }
 

@@ -10,9 +10,12 @@ import (
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/cassette"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 
+	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
+	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/limiter"
+	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/store"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 )
@@ -89,13 +92,24 @@ func artifact() domain.Artifact {
 // what stops the first assertion passing vacuously and is the shape issue #89 tracks for log
 // export.
 func TestArtifactDownloadDoesNotFeedTheLocalStore(t *testing.T) {
-	t.Run("the wired seam leaves the store empty", func(t *testing.T) {
+	t.Run("the seam the root receives leaves the store empty", func(t *testing.T) {
 		dir := t.TempDir()
-		cl := wiredClients(t, dir)
+		cl, gov := wiredClients(t, dir)
 
-		// storageDownload is the seam runTUI hands the Storage tab, called here rather than
-		// reconstructed, so flipping it back to the shared client fails this test.
-		path, err := cl.storageDownload(t.TempDir())(artifact())
+		// The assertion is over the value the root is handed, not over the function that
+		// produces it. Pinning the producer alone left the deciding line uncovered: the
+		// pre-fix expression could be pasted back into the options literal and the whole
+		// suite stayed green. Reading opts.StorageDownload is what closes that.
+		opts := cl.tuiOptions(tuiDeps{
+			Config:    config.Config{},
+			Profile:   keys.Standard,
+			Clock:     clockwork.NewFakeClock(),
+			Scheduler: scheduler.New(scheduler.Options{}),
+			Governor:  gov,
+			Downloads: t.TempDir(),
+		})
+
+		path, err := opts.StorageDownload(artifact())
 		if err != nil {
 			t.Fatalf("download: %v", err)
 		}
@@ -109,7 +123,7 @@ func TestArtifactDownloadDoesNotFeedTheLocalStore(t *testing.T) {
 
 	t.Run("the shared client would persist it", func(t *testing.T) {
 		dir := t.TempDir()
-		cl := wiredClients(t, dir)
+		cl, _ := wiredClients(t, dir)
 
 		if _, err := storage.ClientDownload(cl.shared, t.TempDir())(artifact()); err != nil {
 			t.Fatalf("download: %v", err)
@@ -121,8 +135,9 @@ func TestArtifactDownloadDoesNotFeedTheLocalStore(t *testing.T) {
 }
 
 // wiredClients assembles the chain exactly as run() assembles it, store over governor over
-// limiter over the base, with a cassette at the foot and the store rooted at dir.
-func wiredClients(t *testing.T, dir string) clients {
+// limiter over the base, with a cassette at the foot and the store rooted at dir. It returns
+// the governor too, because tuiOptions takes it for the Budget readout.
+func wiredClients(t *testing.T, dir string) (clients, *governor.Governor) {
 	t.Helper()
 	clk := clockwork.NewFakeClock()
 	gov := governor.New(limiter.New(downloadCassette(t), limiter.Bound), clk)
@@ -130,5 +145,5 @@ func wiredClients(t *testing.T, dir string) clients {
 	if err != nil {
 		t.Fatalf("build clients: %v", err)
 	}
-	return cl
+	return cl, gov
 }
