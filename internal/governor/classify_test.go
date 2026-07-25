@@ -55,6 +55,48 @@ func TestClassification(t *testing.T) {
 	}
 }
 
+// TestRepositoryNameCannotStandInForAResource pins the discriminator against the one
+// input the user controls. A repository fetch has no sub-path, so its terminal segment
+// is the repository's name, and the contents endpoint the Dispatch form reads puts a
+// user-chosen file path there too. The classifier already requires the doc path to
+// carry /rest, so a repository named "rest" would have matched every rate-limit page
+// GitHub sends, turning a genuine secondary limit into an authorization reading. That
+// error runs in the direction open question 1 exists to prevent: no backoff, no hold,
+// and discovery's R22 adoption keeps issuing straight into the limit.
+func TestRepositoryNameCannotStandInForAResource(t *testing.T) {
+	rec := openCassette(t, "testdata/repo_name_hazard")
+
+	cases := []struct {
+		path        string
+		wantLimited bool
+		why         string
+	}{
+		{"repos/someone/rest", true, "a repository named rest must not match the rate-limits page, which every doc URL under /rest carries"},
+		{"repos/someone/overview", true, "a repository named overview is a whole segment of the legacy rate-limit page"},
+		{"repos/someone/resources", true, "the singular step must not let resources match resources-in-the-rest-api"},
+		{"repos/someone/app/contents/docs/rest", true, "a user-chosen contents path is user data in the terminal position too"},
+		{"user/repos", false, "the control: repos is a real resource and its own reference page still corresponds"},
+	}
+	for _, tc := range cases {
+		g := governor.New(rec, baseClock())
+		req, err := http.NewRequest(http.MethodGet, "https://api.github.com/"+tc.path, http.NoBody)
+		if err != nil {
+			t.Fatalf("%s: build request: %v", tc.path, err)
+		}
+		resp, err := g.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("%s: round trip: %v", tc.path, err)
+		}
+		got := governor.RateLimited(resp)
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("%s: close body: %v", tc.path, err)
+		}
+		if got != tc.wantLimited {
+			t.Errorf("%s: RateLimited = %v, want %v (%s)", tc.path, got, tc.wantLimited, tc.why)
+		}
+	}
+}
+
 // TestParentDocumentedEndpointClassification pins open question 1's discriminator on
 // the endpoints whose reference page's path does not carry their last segment. Two
 // shapes produce that. A segment naming an action (cancel, enable) or a sub-resource

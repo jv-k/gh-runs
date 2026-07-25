@@ -106,17 +106,23 @@ func isAuthorizationShape(req *http.Request, resp *http.Response) bool {
 	return docURLPointsAtEndpoint(payload.DocumentationURL, req.URL)
 }
 
-// docURLPointsAtEndpoint reports whether docURL is the docs.github.com REST
-// reference page for the resource endpoint targets. The measured authorization
-// documentation_url points at the endpoint's own reference page, so its path carries
+// docURLPointsAtEndpoint reports whether docURL is the docs.github.com REST reference
+// page for the resource endpoint targets. The measured authorization documentation_url
+// points at the endpoint's own reference page, so one of that page's path segments is
 // the endpoint's resource noun (permissions, runs, artifacts), which is what
-// terminalResource resolves, stepping over the trailing segments GitHub documents on
-// a parent's page. Two of GitHub's pages name the resource in the singular while the
-// endpoint says the plural (a Cache is documented at /rest/actions/cache), so the
-// singular is tried as well. A secondary-limit doc URL points at the rate-limits page,
-// which carries no resource noun of ours in either number, so it fails this test and
-// defaults to rate limiting. The check is a positive match on purpose: anything short
-// of a confident correspondence is treated as a limit, which is the safe direction.
+// terminalResource resolves, stepping over the trailing segments GitHub documents on a
+// parent's page. Some of GitHub's pages name the resource in the other number (a Cache
+// is documented at /rest/actions/cache), so both are tried. A secondary-limit doc URL
+// points at a rate-limit page, whose segments name no resource of ours, so it fails this
+// test and defaults to rate limiting. The check is a positive match on purpose: anything
+// short of a confident correspondence is treated as a limit, which is the safe direction.
+//
+// Two rules keep that safety from resting on how GitHub happens to word its URLs, which
+// is the only thing an earlier substring test rested on. The noun must be one we know is
+// a REST resource, so the repository names and file paths that reach the terminal
+// position of some endpoints cannot be compared at all. And the comparison is against
+// whole path segments, so a page merely containing a noun's letters is not a match.
+// TestNoResourceNounMatchesARateLimitPage checks the result over every known noun.
 func docURLPointsAtEndpoint(docURL string, endpoint *url.URL) bool {
 	if docURL == "" || endpoint == nil {
 		return false
@@ -135,28 +141,100 @@ func docURLPointsAtEndpoint(docURL string, endpoint *url.URL) bool {
 		return false
 	}
 	resource := terminalResource(endpoint.Path)
-	if resource == "" {
+	// Only a noun we know is a REST resource may correspond. The terminal segment can be
+	// a repository name or a file path the user chose, and neither may be compared
+	// against the doc URL at all.
+	if !knownResources[resource] {
 		return false
 	}
-	if strings.Contains(docPath, resource) {
+	for _, seg := range docSegments(docPath) {
+		if segmentNames(seg, resource) {
+			return true
+		}
+	}
+	return false
+}
+
+// docSegments splits a documentation path into the segments a resource may correspond
+// to, dropping the empty ones and the "rest" section marker. The marker is dropped
+// because every REST doc URL carries it, the rate-limit pages included, so matching on
+// it would make every 403 under /rest an authorization outcome. A locale or version
+// prefix (en, free-pro-team@latest) is left in place and simply never names a resource.
+func docSegments(docPath string) []string {
+	var out []string
+	for _, seg := range strings.Split(docPath, "/") {
+		if seg == "" || seg == "rest" {
+			continue
+		}
+		out = append(out, seg)
+	}
+	return out
+}
+
+// segmentNames reports whether one documentation path segment names the resource. The
+// reference page's own segment is the resource (workflows, artifacts, permissions), the
+// resource behind a qualifier (workflow-runs names runs, workflow-jobs names jobs), or
+// the resource in the other number (cache names caches, users names user).
+//
+// It compares whole segments rather than substrings, which is what keeps a resource from
+// matching a page that merely contains its letters: "rate-limits-for-the-rest-api" is one
+// segment, and it names no resource. The old substring test made every noun's safety a
+// property of GitHub's page wording rather than of this code.
+func segmentNames(segment, resource string) bool {
+	if segment == resource || segment == singular(resource) || singular(segment) == resource {
 		return true
 	}
-	// The page may name the resource in the singular (cache, not caches). This only
-	// ever widens the match, so nothing that corresponded before stops corresponding.
-	return strings.Contains(docPath, singular(resource))
+	return strings.HasSuffix(segment, "-"+resource) || strings.HasSuffix(segment, "-"+singular(resource))
 }
 
 // singular drops one trailing s, for the pages that name a resource in the singular
-// while its endpoint says the plural. It is a spelling adjustment and not a
-// pluraliser: nothing here needs one, and a real one would invent correspondences
-// this discriminator has no measurement for. The stem never falls below the four
-// characters terminalResource requires of a resource noun, so shortening never
-// produces a fragment loose enough to match a page by accident.
+// while its endpoint says the plural. It is a spelling adjustment and not a pluraliser:
+// nothing here needs one, and a real one would invent correspondences this discriminator
+// has no measurement for.
+//
+// The length guard is hygiene and nothing more. It stops a short word being reduced to a
+// stem no resource is spelled with, and it is NOT what makes the shortened form safe to
+// compare: "rest", "rate", "team" and "best" are all four characters and all appear in
+// real rate-limit doc paths. What makes it safe is that only a known resource reaches
+// this function, and that its result is compared against whole segments.
 func singular(noun string) string {
 	if len(noun) > 4 && strings.HasSuffix(noun, "s") {
 		return noun[:len(noun)-1]
 	}
 	return noun
+}
+
+// knownResources are the REST resource nouns this product's own endpoints resolve to,
+// and the only nouns allowed to satisfy the correspondence test.
+//
+// It exists because the terminal path segment is not always ours. GET /repos/{owner}/{repo}
+// has no sub-path, so its terminal segment is the repository's NAME, and
+// GET /repos/{owner}/{repo}/contents/{path} puts a user-chosen file path there. Both are
+// user data, and both would otherwise be compared against the documentation_url. A user
+// owning a repository called "rest", "overview" or "resources" would then turn a genuine
+// secondary limit into an authorization reading, and that error runs in the direction
+// open question 1 exists to prevent: no backoff, no hold, and the caller keeps issuing
+// into the limit. Only a noun on this list can match, so a repository may be named
+// anything at all.
+//
+// It is also what makes the safety checkable rather than incidental. The property the
+// discriminator rests on is that no resource noun appears in a rate-limit page's path,
+// and with an open set that could only ever be argued. With a closed one it is a test
+// (TestNoResourceNounMatchesARateLimitPage), and every future entry is checked by it.
+//
+// A noun missing from the list fails the safe way: it matches nothing and the 403
+// defaults to rate limiting.
+var knownResources = map[string]bool{
+	"runs":         true, // the crawl, the scheduler's polls, the CLI's listing, every Run write
+	"jobs":         true, // the Run-detail pane's job list, the log viewer's job logs
+	"workflows":    true, // the Workflows tab's listing, enable, disable and Dispatch
+	"caches":       true, // the Storage tab's listing and Reclamation's Cache deletion
+	"cache":        true, // GET .../actions/cache/usage, which GitHub documents on the same page
+	"artifacts":    true, // the Storage tab's listing and Reclamation's Artifact deletion
+	"permissions":  true, // open question 1's measured authorization 403
+	"repos":        true, // repo-discovery's user/repos enumeration
+	"environments": true, // the Dispatch form's environment list
+	"contents":     true, // the Dispatch form's Workflow file read
 }
 
 // parentDocumented are the trailing Actions path segments that GitHub documents on the
@@ -207,7 +285,13 @@ func terminalResource(path string) string {
 		if parentDocumented[s] {
 			continue // documented on the parent's page: the noun behind it is the resource
 		}
-		if _, err := strconv.Atoi(s); err == nil {
+		// Parsed at a fixed 64 bits, never at the platform's int width: strconv.Atoi
+		// returns ErrRange above 2^31-1 on a 32-bit build, and GitHub's Run, Cache and
+		// Artifact ids passed that long ago. An id that failed this test would be
+		// returned as the resource noun, match nothing, and quietly cost every
+		// parent-documented endpoint three backoffs on the 386 and arm builds
+		// gh-extension-precompile ships.
+		if _, err := strconv.ParseInt(s, 10, 64); err == nil {
 			continue // a numeric ID is never the resource noun
 		}
 		return s

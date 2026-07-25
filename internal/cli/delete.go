@@ -167,11 +167,13 @@ func printDryRun(deps Deps, plan ops.Plan) error {
 func printSummary(deps Deps, sum ops.Summary) {
 	_, _ = fmt.Fprintf(deps.Stdout, "Deleted %d, gone %d, skipped %d, failed %d of %d Runs.\n",
 		sum.Deleted, sum.Gone, sum.Skipped, sum.FailedCount(), sum.Total)
-	printGroups(deps, sum.Failures, "")
+	// Both lists are labelled, and neither by omission. They print into one flat list, so
+	// an unlabelled group would be read as whichever kind the reader assumed, and the
+	// reasons carry API text this command does not author.
+	printGroups(deps, sum.Failures, "failed: ")
 	// A skip is not a failure and changes no exit code, but a count with no words leaves
 	// the operator of a non-interactive Purge with nothing to act on: purge AC14a records
 	// the skip with its reason, and on R19a's path that reason carries the API's own 403.
-	// The label keeps the two apart in one flat list.
 	printGroups(deps, sum.Skips, "skipped: ")
 	if sum.Reason != "" {
 		_, _ = fmt.Fprintln(deps.Stdout, sum.Reason)
