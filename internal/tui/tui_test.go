@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -302,6 +303,30 @@ func TestSchedulerUpdatePullsReadout(t *testing.T) {
 		rt := tb.(*recordingTab)
 		if rt.readouts != 1 {
 			t.Errorf("tab %d received %d Readout broadcasts on a scheduler.Update, want 1 (ADR-0015)", i, rt.readouts)
+		}
+	}
+}
+
+// TestRepoPollFailedTakesTheEngineEventRoute pins that ADR-0015's fourth event travels
+// the same route as the first three. The root matches the sealed scheduler.Event
+// interface rather than each concrete type, so this is the test that would fail if a
+// catalog member were ever routed by name and the new one forgotten: a RepoPollFailed
+// that missed the case would reach no tab, and the Feed's indicator would never paint.
+func TestRepoPollFailedTakesTheEngineEventRoute(t *testing.T) {
+	m := Model{
+		tabs:    []tab{&recordingTab{}, &recordingTab{}, &recordingTab{}},
+		profile: keys.Standard,
+		readout: func() governor.Readout { return governor.Readout{Exhausted: true, Reset: time.Unix(1000, 0)} },
+	}
+	id := domain.RepoID{Host: domain.HostGitHub, Owner: "acme", Name: "api"}
+	m = step(t, m, scheduler.RepoPollFailed{Repo: id, Err: errors.New("HTTP 502: Bad Gateway")})
+	for i, tb := range m.tabs {
+		rt := tb.(*recordingTab)
+		if rt.data == 0 {
+			t.Errorf("tab %d received no broadcast of a RepoPollFailed (ADR-0015: data reaches every tab)", i)
+		}
+		if rt.readouts != 1 {
+			t.Errorf("tab %d received %d Readout broadcasts on a RepoPollFailed, want 1 (ADR-0015)", i, rt.readouts)
 		}
 	}
 }

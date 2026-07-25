@@ -92,9 +92,7 @@ func TestFilteredUpdateCarriesTheClaimedTotal(t *testing.T) {
 	h.start(t)
 
 	h.waitUpdates(t, 1)
-	h.mu.Lock()
-	u := h.updates[0]
-	h.mu.Unlock()
+	u := h.updates()[0]
 	if !u.Filtered {
 		t.Errorf("Update.Filtered = false, want true (the poll pushed a server-side filter)")
 	}
@@ -113,9 +111,7 @@ func TestUnfilteredUpdateCarriesNoClaimedTotal(t *testing.T) {
 	h.start(t) // no filter set: the listing is unfiltered
 
 	h.waitUpdates(t, 1)
-	h.mu.Lock()
-	u := h.updates[0]
-	h.mu.Unlock()
+	u := h.updates()[0]
 	if u.Filtered {
 		t.Errorf("Update.Filtered = true, want false (an unfiltered poll carries no cap)")
 	}

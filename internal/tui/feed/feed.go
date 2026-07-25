@@ -193,6 +193,27 @@ type Model struct {
 	// cap label, populated from a filtered scheduler.Update and cleared on an unfiltered
 	// one. Empty when no filter is pushed server-side. Keyed by RepoID.String().
 	totals map[string]capTotal
+
+	// failed carries each repository whose last poll failed, from ADR-0015's
+	// RepoPollFailed, keyed by RepoID.String(). It is what makes a failing repository
+	// distinguishable from one that has not answered yet: without it the repository's
+	// last Runs sit on screen going quietly stale with nothing saying so.
+	//
+	// An entry is cleared by that repository's next Update and by nothing else. The
+	// engine retries on the repository's own cadence and cancels nothing, so a success
+	// is the only evidence the failure has passed, and an indicator that outlived the
+	// failure would be worse than none.
+	failed map[string]repoFailure
+}
+
+// repoFailure is one repository's failed poll as the indicator needs it: the label the
+// rows would show it under, and the error behind it. The label is carried rather than
+// derived from the key, because the key is the host-qualified identity (ADR-0009) and
+// the rows are not: an indicator naming github.com/acme/api over rows reading acme/api
+// reads as a different repository.
+type repoFailure struct {
+	label string
+	err   error
 }
 
 // capTotal is one repository's reachable and claimed Run counts under a filtered
@@ -229,6 +250,7 @@ func New(opts Options) Model {
 		selected:    make(map[int64]bool),
 		repos:       make(map[string]domain.Repo),
 		totals:      make(map[string]capTotal),
+		failed:      make(map[string]repoFailure),
 		filterInput: ti,
 		detail: rundetail.New(rundetail.Options{
 			Fetch:      opts.DetailFetch,
@@ -293,8 +315,25 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.approval, _ = m.approval.Update(msg)
 		return m, cmd
 
+	case scheduler.RepoPollFailed:
+		// One repository's poll failed (ADR-0015). Record it so the chrome can say so,
+		// and hold its Runs: they are still the newest thing known about it, and the
+		// indicator is what says how old they now are. Discarding them would turn a
+		// transient 502 into rows vanishing from the merged view.
+		// Keyed by the host-qualified identity, matching live and totals, so the clear
+		// below and the lookup here cannot disagree (ADR-0009).
+		m.failed[msg.Repo.String()] = repoFailure{label: repoName(msg.Repo), err: msg.Err}
+		// The indicator is chrome, so it costs a row. Republish the viewport, or the
+		// repository that just fell off the bottom keeps its medium-tier ~5s cadence
+		// while off screen (polling-scheduler R5, AC17). The Update path below already
+		// does this; the failure path shrinks the list exactly the same way.
+		return m, m.publishViewport()
+
 	case scheduler.Update:
-		// One repository's fresh Runs, replacing its slice wholesale (ADR-0015).
+		// One repository's fresh Runs, replacing its slice wholesale (ADR-0015). A
+		// success is the only evidence a recorded failure has passed, because the engine
+		// retries on its own cadence and reports no recovery of its own.
+		delete(m.failed, msg.Repo.String())
 		m.live[msg.Repo.String()] = msg.Runs
 		// A filtered poll carries its claimed match count, so record the repository's
 		// cap total for R24's honest label: reachable is what the Feed holds (the Runs
@@ -317,6 +356,23 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case ReposDiscovered:
 		for _, r := range msg {
 			m.repos[r.ID.String()] = r
+		}
+		// Drop a failure for a repository that is no longer discovered. A repository
+		// deleted or made private upstream fails its next poll once, then leaves the
+		// poll set, so no Update can ever arrive to clear it and the indicator would
+		// assert a live condition nothing is testing anymore, undismissable for the
+		// rest of the session.
+		//
+		// This is a full set, pulled by the root rather than an incremental batch, so
+		// absence is meaningful. The empty case is not: at cold start nothing is
+		// discovered yet, and pruning against it would clear a failure the poll set
+		// still holds.
+		if len(msg) > 0 {
+			for key := range m.failed {
+				if _, known := m.repos[key]; !known {
+					delete(m.failed, key)
+				}
+			}
 		}
 		return m, nil
 
