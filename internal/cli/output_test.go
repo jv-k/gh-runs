@@ -186,6 +186,23 @@ func TestTemplateDroppedFuncsErrorByName(t *testing.T) {
 			if strings.Contains(stderr, "not defined") {
 				t.Errorf("error is the standard library's undefined-function message: %q", stderr)
 			}
+			// The list of what -t does carry is derived from the registered map, not
+			// restated, so it cannot drift into telling the operator to use something
+			// that is not there. Pinning it here is what keeps the derivation honest.
+			_, supported, ok := strings.Cut(stderr, "Supported functions: ")
+			if !ok {
+				t.Fatalf("error does not offer the supported set: %q", stderr)
+			}
+			for _, want := range []string{"timeago", "truncate", "hyperlink", "regexMatch"} {
+				if !strings.Contains(supported, want) {
+					t.Errorf("supported set omits %q: %q", want, supported)
+				}
+			}
+			for _, dropped := range []string{"color", "tablerow", "tablerender"} {
+				if strings.Contains(supported, dropped) {
+					t.Errorf("supported set advertises dropped %q: %q", dropped, supported)
+				}
+			}
 		})
 	}
 }

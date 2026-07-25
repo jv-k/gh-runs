@@ -84,8 +84,10 @@ type Deps struct {
 	Getenv func(string) (string, bool)
 	Stdout io.Writer
 	Stderr io.Writer
-	// Clock is the injected clock, read for the table's relative age column so a
-	// golden output is deterministic (BUILD-ORDER's testing seams).
+	// Clock is the injected clock, read by the two renderers that date a Run: the human
+	// table's relative age column, and -t's timeago function (ADR-0023). Both measure
+	// against it rather than the wall clock, so their output is deterministic
+	// (BUILD-ORDER's testing seams).
 	Clock clock.Clock
 	// Purge is the write half's ops engine, nil for a read-only invocation. The delete
 	// command routes through it (cli-surface R10, R11).

@@ -130,6 +130,10 @@ func TestTruncateToWidthMeasuresDisplayCells(t *testing.T) {
 		{"wide runes cost two cells", 5, "日本語です", "日..."},
 		{"wide cut pads to width", 6, "日本語です", "日... "},
 		{"emoji costs two cells", 5, "🚀🚀🚀🚀", "🚀..."},
+		// A flag is two regional indicators rendering as one two-cell glyph, so only a
+		// grapheme-cluster measure prices it at two. Charging per rune would spend four
+		// cells on it and cut the title a cell short of the column (code review).
+		{"multi code point cluster", 10, "🇬🇧 build passed on main", "🇬🇧 buil..."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -141,6 +145,41 @@ func TestTruncateToWidthMeasuresDisplayCells(t *testing.T) {
 				t.Errorf("truncateToWidth(%d, %q) rendered %d cells wide", tc.maxWidth, tc.in, w)
 			}
 		})
+	}
+}
+
+// TestTruncateToWidthEdgeWidths pins the two widths a template can compute its way
+// into. gh converts the width to a uint before cutting (its text.Truncate), so a
+// negative wraps to an enormous budget and the string comes back untouched, while zero
+// keeps nothing. Matching gh here matters because both are reachable from a template
+// that derives a width and neither is obvious from the signature.
+func TestTruncateToWidthEdgeWidths(t *testing.T) {
+	if got, want := truncateToWidth(-1, "abcdef"), "abcdef"; got != want {
+		t.Errorf("truncateToWidth(-1, %q) = %q, want %q untouched", "abcdef", got, want)
+	}
+	if got, want := truncateToWidth(0, "abcdef"), ""; got != want {
+		t.Errorf("truncateToWidth(0, %q) = %q, want %q", "abcdef", got, want)
+	}
+}
+
+// TestTruncateToWidthReproducesGhsOSC8Mangling pins a bug on purpose. gh cuts with
+// reflow, whose escape scanner treats any letter as a sequence terminator, so the "h"
+// of an OSC 8 hyperlink's https ends the sequence early and the rest of the URL is
+// charged as printable text. The output below is byte-identical to gh's, and R7 asks
+// for gh's behaviour, so the mis-parse is reproduced rather than fixed: a template
+// composing {{truncate N (hyperlink ...)}} must not quietly diverge here. Fixing it
+// would be a deliberate deviation, needing its own decision.
+func TestTruncateToWidthReproducesGhsOSC8Mangling(t *testing.T) {
+	link := hyperlinkFunc("https://gh.io/x", "Fix the bug")
+	if w := lipgloss.Width(link); w != 11 {
+		t.Fatalf("hyperlink renders %d cells, want 11 (the text, not the escape)", w)
+	}
+	got, err := truncateFunc(8, link)
+	if err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	if want := "\x1b]8;;https:... "; got != want {
+		t.Errorf("truncate over a hyperlink = %q, want gh's mangled %q", got, want)
 	}
 }
 
