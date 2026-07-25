@@ -190,6 +190,34 @@ func TestCancelRateLimitBoundThenSkip(t *testing.T) {
 	if got := h.counting.countMethod("POST"); got != 4 {
 		t.Errorf("issued %d cancel POSTs, want 4 (Run 1 x3 bounded, Run 2 x1) (R19a)", got)
 	}
+	// The skip carries the API's own words from the last 403 (AC14a: recorded as a skip
+	// WITH ITS REASON), so the surface states why rather than reporting a bare skip.
+	if len(sum.Skips) != 1 || !strings.Contains(sum.Skips[0].Reason, "Resource not accessible by personal access token") {
+		t.Errorf("skip groups = %+v, want one carrying the API's own 403 text (R19a, AC14a)", sum.Skips)
+	}
+}
+
+// TestCancelAuthorizationForbiddenIsNotRetried pins the other side of R19a's bound: a 403
+// whose documentation_url points at cancel's own reference page IS the measured
+// authorization shape, so it is a failure on the first attempt and none of the three
+// backoffs is spent (rate-governor open question 1). Cancel's reference page is the
+// workflow-runs page, so the doc URL names the Run and not the /cancel segment the path
+// ends in. The Run is recorded with the API's verbatim reason (R15, R20, AC18) and the
+// operation proceeds to the next Run, which cancels cleanly.
+func TestCancelAuthorizationForbiddenIsNotRetried(t *testing.T) {
+	h := newHarness(t, "cancel_forbidden", 50, 50)
+	c := h.confirmed(t, ops.OpCancel, items("o", "r", 1, 2), snapshot(writableRepo("o", "r")))
+	sum := runPurge(t, h, c)
+
+	if got := h.counting.countMethod("POST"); got != 2 {
+		t.Errorf("issued %d cancel POSTs, want 2 (Run 1 once, Run 2 once); an authorization 403 must not spend R19a's backoffs", got)
+	}
+	if sum.FailedCount() != 1 || sum.Acted != 1 || sum.Skipped != 0 {
+		t.Errorf("summary = failed %d, acted %d, skipped %d; want 1/1/0 (R20)", sum.FailedCount(), sum.Acted, sum.Skipped)
+	}
+	if len(sum.Failures) != 1 || !strings.Contains(sum.Failures[0].Reason, "Resource not accessible by personal access token") {
+		t.Errorf("failure groups = %+v, want one carrying the API's own 403 text (R15, R20, AC18)", sum.Failures)
+	}
 }
 
 // TestLifecycleSkipsIneligibleWithoutTouchingTheWire pins that an Item stamped ineligible

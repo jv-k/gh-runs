@@ -109,7 +109,8 @@ func isAuthorizationShape(req *http.Request, resp *http.Response) bool {
 // docURLPointsAtEndpoint reports whether docURL is the docs.github.com REST
 // reference page for the resource endpoint targets. The measured authorization
 // documentation_url points at the endpoint's own reference page, so its path
-// carries the endpoint's terminal resource noun (permissions, runs, caches). A
+// carries the endpoint's resource noun (permissions, runs, caches), which is what
+// terminalResource resolves, stepping over a trailing sub-action to reach it. A
 // secondary-limit doc URL points at the rate-limits page, which carries none of
 // them, so it fails this test and defaults to rate limiting. The check is a
 // positive match on purpose: anything short of a confident correspondence is
@@ -138,18 +139,48 @@ func docURLPointsAtEndpoint(docURL string, endpoint *url.URL) bool {
 	return strings.Contains(docPath, resource)
 }
 
+// subActions are the Actions endpoint segments that name an action rather than the
+// resource it acts on. GitHub documents every one of them on the parent resource's
+// reference page (cancel and re-run on workflow-runs, enable and disable on
+// workflows), so an authorization documentation_url carries the parent's noun and
+// never the segment the request path ends in. Stepping over them is what lets the
+// correspondence be tested against the noun behind the action.
+//
+// Without this, a fine-grained PAT's 403 on any of them cannot match the
+// authorization shape and falls to the rate-limit direction: safe, and bounded by
+// purge R19a, but it spends three backoffs and their waits before the reclassification
+// (run-lifecycle R3, workflow-management R7, purge R13).
+//
+// The list is the sub-actions this product writes to, and a segment missing from it
+// fails the safe way: it stays the terminal resource, matches nothing, and defaults to
+// rate limiting exactly as before.
+var subActions = map[string]bool{
+	"cancel":            true, // POST .../runs/{id}/cancel (run-lifecycle R4)
+	"force-cancel":      true, // POST .../runs/{id}/force-cancel (R6)
+	"rerun":             true, // POST .../runs/{id}/rerun (R8)
+	"rerun-failed-jobs": true, // POST .../runs/{id}/rerun-failed-jobs (R13)
+	"approve":           true, // POST .../runs/{id}/approve
+	"enable":            true, // PUT .../workflows/{id}/enable (workflow-management R5)
+	"disable":           true, // PUT .../workflows/{id}/disable (R5)
+	"dispatches":        true, // POST .../workflows/{id}/dispatches (workflow-dispatch R16)
+}
+
 // terminalResource is the endpoint's last significant path segment, lowercased:
-// the resource being acted on, skipping numeric IDs. It is what a reference
-// page's path echoes (runs -> workflow-runs, permissions -> permissions).
-// Segments shorter than four characters are dropped so a positional owner or
-// repo (o, r, cli) can never stand in for a resource; the shortest real Actions
-// resource nouns (runs, jobs, logs) are four characters.
+// the resource being acted on, skipping numeric IDs and the sub-action segments that
+// name an action instead of a resource. It is what a reference page's path echoes
+// (runs -> workflow-runs, permissions -> permissions, runs/{id}/cancel ->
+// workflow-runs). Segments shorter than four characters are dropped so a positional
+// owner or repo (o, r, cli) can never stand in for a resource; the shortest real
+// Actions resource nouns (runs, jobs, logs) are four characters.
 func terminalResource(path string) string {
 	segs := strings.Split(path, "/")
 	for i := len(segs) - 1; i >= 0; i-- {
 		s := strings.ToLower(segs[i])
 		if len(s) < 4 {
 			continue
+		}
+		if subActions[s] {
+			continue // the action, not the resource: the doc URL names the resource behind it
 		}
 		if _, err := strconv.Atoi(s); err == nil {
 			continue // a numeric ID is never the resource noun

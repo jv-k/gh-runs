@@ -120,6 +120,23 @@ func TestRateLimitBoundThenSkip(t *testing.T) {
 	if h.counting.deletes() != 4 {
 		t.Errorf("issued %d DELETEs, want 4 (Run 1 x3 bounded, Run 2 x1) (R19a, AC14a)", h.counting.deletes())
 	}
+	// AC14a records the skip WITH ITS REASON, and the reason worth keeping is the API's
+	// own words from the last 403, not the reclassification on its own. The Summary
+	// carries it for the surface and the log records it verbatim (R29).
+	if len(sum.Skips) != 1 || !strings.Contains(sum.Skips[0].Reason, "Resource not accessible by personal access token") {
+		t.Errorf("skip groups = %+v, want one carrying the API's own 403 text (R19a, AC14a)", sum.Skips)
+	}
+	for _, f := range h.readLog(t) {
+		if f.id != "1" {
+			continue
+		}
+		if f.outcome != "skipped" {
+			t.Errorf("Run 1's log outcome = %q, want skipped (R19a, AC14a)", f.outcome)
+		}
+		if !strings.Contains(f.reason, "Resource not accessible by personal access token") {
+			t.Errorf("Run 1's log reason = %q, want the API's own 403 text (R29, AC14a)", f.reason)
+		}
+	}
 }
 
 // TestCircuitBreakerStops pins R21 and AC13: with the breaker threshold at 3, three

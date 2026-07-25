@@ -1,0 +1,272 @@
+---
+version: 2
+# The Actions sub-action endpoints: the ones whose last path segment names the action
+# rather than the resource it acts on. Every 403 here carries the measured
+# authorization shape (open question 1): the message a fine-grained PAT gets, no
+# Retry-After, a healthy x-ratelimit-remaining, and a documentation_url pointing at
+# the endpoint's own reference page. That page is the PARENT resource's
+# (workflow-runs, workflows), because GitHub documents cancel, re-run, enable and
+# disable as operations on a Workflow Run or a Workflow rather than as resources of
+# their own, so the doc URL never carries the verb the request path ends in.
+#
+# The last two are the safe direction, unchanged: a verb endpoint answering with the
+# rate-limits page, or with a Retry-After, is rate limiting.
+interactions:
+    # POST cancel: run-lifecycle R3's expected 403 despite push: true.
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs/1/cancel
+        method: POST
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#cancel-a-workflow-run"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4976"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # POST force-cancel: run-lifecycle R6's distinct escalation endpoint.
+    - id: 1
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs/2/force-cancel
+        method: POST
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#force-cancel-a-workflow-run"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4975"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # POST rerun.
+    - id: 2
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs/3/rerun
+        method: POST
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#re-run-a-workflow"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4974"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # POST rerun-failed-jobs: run-lifecycle R13's distinct endpoint. Its last segment
+    # ends in a resource noun (jobs) that the reference page's path does not carry
+    # either, so the whole segment has to be stepped over, not just a bare verb.
+    - id: 3
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs/4/rerun-failed-jobs
+        method: POST
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#re-run-failed-jobs-from-a-workflow-run"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4973"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # POST approve: the deployment-approval write.
+    - id: 4
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs/5/approve
+        method: POST
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#approve-a-workflow-run-for-a-fork-pull-request"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4972"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # PUT enable: workflow-management R7's permission failure, reported with the API's
+    # own reason rather than treated as a bug.
+    - id: 5
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/workflows/9001/enable
+        method: PUT
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflows#enable-a-workflow"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4971"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # PUT disable.
+    - id: 6
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/workflows/9002/disable
+        method: PUT
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflows#disable-a-workflow"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4970"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # POST dispatches: the Dispatch trigger, documented on the Workflow's page.
+    - id: 7
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/workflows/9003/dispatches
+        method: POST
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflows#create-a-workflow-dispatch-event"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4969"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # A secondary-limit 403 on a verb endpoint: the documentation_url points at the
+    # rate-limits page rather than at this endpoint's reference, so the correspondence
+    # fails and it stays rate limiting. Stepping over the verb must not weaken that.
+    - id: 8
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs/6/cancel
+        method: POST
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","documentation_url":"https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4952"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # A verb endpoint's 403 carrying a Retry-After AND its own reference page. R12
+    # sends a Retry-After to rate limiting outright, whatever the body says.
+    - id: 9
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/o/r/actions/runs/7/cancel
+        method: POST
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#cancel-a-workflow-run"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Retry-After:
+                - "60"
+            X-Ratelimit-Remaining:
+                - "4951"
+            X-Ratelimit-Reset:
+                - "1789000060"
+        status: 403 Forbidden
+        code: 403
