@@ -34,6 +34,37 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 )
 
+// Event is one thing the engine learned, carried on the single channel ADR-0015
+// fixes. The catalog is closed and the root broadcasts every member to every tab, so
+// a consumer discriminates on the concrete type rather than on a route.
+//
+// The interface is unexported-method sealed: only this package can add a member, so
+// the catalog cannot be widened from a consumer and a type switch over it stays
+// exhaustive by construction.
+type Event interface{ isSchedulerEvent() }
+
+func (Update) isSchedulerEvent()         {}
+func (RepoPollFailed) isSchedulerEvent() {}
+
+// RepoPollFailed is one repository's failed poll (ADR-0015). It is emitted when a
+// poll never reached a 200 it could read: the transport errored, the status was one
+// the engine cannot use, or the body would not parse. Without it a repository whose
+// polls are failing is indistinguishable from one that has not answered yet, which is
+// the whole reason the catalog names it.
+//
+// A rate-limit 403 or 429 is never a RepoPollFailed. It is an account condition the
+// governor has already folded into the Readout's exhaustion, which the loop acts on
+// and the Feed already states, so surfacing it per repository would report one
+// account-wide condition once per repository (ADR-0018).
+//
+// The event is a report, not a retry signal. The next tick retries on the repository's
+// own cadence exactly as it did before, and a later Update clears the Feed's
+// indicator, so a transient failure heals without anything cancelling it.
+type RepoPollFailed struct {
+	Repo domain.RepoID
+	Err  error
+}
+
 // Update is one repository's fresh Runs, emitted when a poll returns a 200 whose
 // content changed (R19, AC16). A 304 emits nothing: it carries no change and does no
 // re-render work. The Runs are stamped with their Repo (ADR-0018).
@@ -123,11 +154,11 @@ type Scheduler struct {
 	paused       bool      // R16: scheduling is stopped by Budget exhaustion
 	pausedResume time.Time // R16: the instant it resumes, from the Readout
 
-	// updates carries a changed poll's Runs to the Feed (ADR-0018). It is unbuffered:
-	// a send blocked on a busy consumer stalls only that repository's poll goroutine,
-	// which holds its in-flight flag so the next tick skips it, exactly the case the
-	// skip rule already covers (ADR-0018).
-	updates chan Update
+	// updates carries the engine's Events to the Feed (ADR-0015's one channel). It is
+	// unbuffered: a send blocked on a busy consumer stalls only that repository's poll
+	// goroutine, which holds its in-flight flag so the next tick skips it, exactly the
+	// case the skip rule already covers (ADR-0018).
+	updates chan Event
 
 	// wake lets a poll goroutine ask the loop to re-evaluate when it has changed a
 	// repository's tier, so a repository a poll just revealed as live is rescheduled
@@ -164,14 +195,14 @@ func New(opts Options) *Scheduler {
 		lastPoll: make(map[string]time.Time),
 		inFlight: make(map[string]bool),
 		lastETag: make(map[string]string),
-		updates:  make(chan Update),
+		updates:  make(chan Event),
 		wake:     make(chan struct{}, 1),
 	}
 }
 
-// Updates is the stream of changed polls the Feed consumes (ADR-0018). Stop closes
-// it, which ADR-0015 already made the root's quit signal.
-func (s *Scheduler) Updates() <-chan Update {
+// Updates is the stream of Events the Feed consumes (ADR-0015's one channel). Stop
+// closes it, which ADR-0015 already made the root's quit signal.
+func (s *Scheduler) Updates() <-chan Event {
 	return s.updates
 }
 

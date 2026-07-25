@@ -2,10 +2,14 @@ package scheduler
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/cli/go-gh/v2/pkg/api"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
@@ -119,19 +123,37 @@ func (s *Scheduler) poll(id domain.RepoID) {
 	filtered := len(query) > 0
 	resp, err := s.opts.Client.Request(http.MethodGet, runsPath(id, query), nil)
 	if err != nil {
-		return // a transport error is retried on the next tick, not surfaced here
+		// Both failure shapes arrive here. A transport error carries no status. Every
+		// non-2xx also arrives here rather than on a response, because the RESTClient
+		// converts it into an *api.HTTPError and returns a nil response (ghclient.Request's
+		// stated contract), which is why the status test below reads the error and not
+		// resp.StatusCode.
+		if isRateLimitError(err) {
+			// An account condition the governor has already classified into the Readout's
+			// exhaustion, which the loop acts on and the Feed already states. Reporting it
+			// per repository would state one account-wide condition once per repository,
+			// and would mark repositories that are perfectly well (ADR-0018).
+			return
+		}
+		// Everything else is this repository's own: a 404 for one that has gone or lost
+		// visibility, a 401, a 5xx, a refused connection. Each is a transient the next
+		// tick retries, and each is indistinguishable from an unanswered repository
+		// until it is reported (ADR-0015).
+		s.emit(RepoPollFailed{Repo: id, Err: err})
+		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		// A rate-limit 403 or 429 is an account condition the governor has already
-		// classified into the Readout's exhaustion, which the loop acts on; it is
-		// never a per-repository failure (ADR-0018). A 404 or 5xx is a transient the
-		// next tick retries. Neither is a change to emit.
+		// Only a 2xx that is not 200 can reach here, every other status having become
+		// the error above. The Run listing has never answered one, so this is a
+		// defensive report rather than a path with a known trigger.
+		s.emit(RepoPollFailed{Repo: id, Err: statusError(resp.StatusCode)})
 		return
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		s.emit(RepoPollFailed{Repo: id, Err: err})
 		return
 	}
 
@@ -146,6 +168,10 @@ func (s *Scheduler) poll(id domain.RepoID) {
 
 	var page apiRunsPage
 	if err := json.Unmarshal(body, &page); err != nil {
+		// A 200 whose body will not parse is this repository's failure too. Returning
+		// silently here would hold the repository's last-known Runs on screen with
+		// nothing saying they had stopped refreshing.
+		s.emit(RepoPollFailed{Repo: id, Err: err})
 		return
 	}
 	runs := page.WorkflowRuns
@@ -210,14 +236,45 @@ func (s *Scheduler) nextWait(now time.Time) time.Duration {
 	return time.Millisecond
 }
 
-// emit delivers a changed poll to the Feed, or abandons it if the engine is
-// stopping (ADR-0018: responses have no consumer after quit). A blocked emit holds
-// the repository's in-flight flag, so the next tick skips it.
-func (s *Scheduler) emit(u Update) {
+// emit delivers one Event to the Feed, or abandons it if the engine is stopping
+// (ADR-0018: responses have no consumer after quit). A blocked emit holds the
+// repository's in-flight flag, so the next tick skips it.
+func (s *Scheduler) emit(e Event) {
 	select {
-	case s.updates <- u:
+	case s.updates <- e:
 	case <-s.ctx.Done():
 	}
+}
+
+// isRateLimitError reports whether err is the account-wide rate-limit condition the
+// governor owns rather than this repository's own failure. The governor has already
+// folded it into the Readout the loop reads, so the poll reports nothing and the
+// Feed's existing exhaustion state stands (ADR-0018, rate-governor R14).
+//
+// The status is read off the error because that is where it arrives: go-gh's
+// RESTClient turns every non-2xx into an *api.HTTPError, the same type and the same
+// errors.As read the CLI's exit-code mapping already uses (cli-surface R17).
+//
+// A transport error carries no status and is therefore this repository's, which is
+// the right default: nothing else in the process has seen it, so declining to report
+// it would leave it invisible.
+//
+// A fine-grained-PAT authorization 403 shares the rate limit's status and is absorbed
+// here with it. Telling those two apart is the governor's classifier's job, not the
+// poll's, and sharpening it is tracked separately (issue #68).
+func isRateLimitError(err error) bool {
+	var he *api.HTTPError
+	if !errors.As(err, &he) {
+		return false
+	}
+	return he.StatusCode == http.StatusForbidden || he.StatusCode == http.StatusTooManyRequests
+}
+
+// statusError is the error a non-200 becomes on its way into a RepoPollFailed. It
+// carries the code verbatim, because the Feed's indicator is only as useful as what
+// it can say about why: a 404 and a 502 want different things from the operator.
+func statusError(code int) error {
+	return fmt.Errorf("poll returned HTTP %d %s", code, http.StatusText(code))
 }
 
 // untilResume is how long the loop waits out an exhaustion (R16). It waits until the

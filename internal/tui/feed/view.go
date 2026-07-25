@@ -2,6 +2,7 @@ package feed
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -30,6 +31,13 @@ const (
 	truncMarker   = "…"
 	startedLayout = "2006-01-02T15:04:05Z"
 	clockLayout   = "15:04"
+
+	// failedNamesShown bounds how many repository names the failed-poll indicator
+	// spells out before it falls back to a count. The poll set runs to roughly 26
+	// repositories, so an unbounded list would wrap the chrome over several lines and
+	// take the rows with it. Two names fit the width and are enough to recognise a
+	// single failure, which is the common case.
+	failedNamesShown = 2
 )
 
 // Styles. lipgloss v2 renders truecolour regardless of TERM or NO_COLOR, so a golden
@@ -104,6 +112,9 @@ func (m Model) View() string {
 	if b, ok := m.bannerLine(); ok {
 		top = append(top, b)
 	}
+	if f, ok := m.failedLine(); ok {
+		top = append(top, f)
+	}
 	if a, ok := m.approvalBadgeLine(); ok {
 		top = append(top, a)
 	}
@@ -165,6 +176,9 @@ func (m Model) rowCapacity() int {
 func (m Model) chromeLineCount() int {
 	n := 1 // header
 	if _, ok := m.bannerLine(); ok {
+		n++
+	}
+	if _, ok := m.failedLine(); ok {
 		n++
 	}
 	if _, ok := m.approvalBadgeLine(); ok {
@@ -350,7 +364,15 @@ func conclusionText(r domain.Run) string {
 
 // repoLabel is the owning repository as owner/name (R3).
 func repoLabel(r domain.Run) string {
-	return r.Repo.Owner + "/" + r.Repo.Name
+	return repoName(r.Repo)
+}
+
+// repoName is how a repository is spelled anywhere the Feed shows one to the operator:
+// owner and name, without the host. The host is part of the identity (ADR-0009) and of
+// every map key here, but it is not what the rows read, so a second surface spelling it
+// differently would read as a second repository.
+func repoName(id domain.RepoID) string {
+	return id.Owner + "/" + id.Name
 }
 
 // workflowLabel is the Run's Workflow name where the join found one, else its run name,
@@ -419,6 +441,41 @@ func (m Model) approvalBadgeLine() (string, bool) {
 	label := fmt.Sprintf("%d %s awaiting a decision (press %s to filter)",
 		n, plural(n, "run", "runs"), m.profile.ApprovalsFilter.Help().Key)
 	return styleBadge.Render(label), true
+}
+
+// failedLine is the failed-repository indicator, from ADR-0015's RepoPollFailed. It
+// is the one thing that distinguishes a repository whose polls are failing from one
+// that has simply not answered yet, and it clears when that repository's next poll
+// succeeds.
+//
+// It counts first and names second, bounded at failedNamesShown. The poll set runs to
+// roughly 26 repositories, so a wide outage would otherwise paint 26 names across the
+// chrome and push the list off screen. The count is the honest figure, which is the
+// same shape R24's cap label uses.
+//
+// Names are sorted, so the line is stable across repaints rather than reordering with
+// Go's map iteration.
+func (m Model) failedLine() (string, bool) {
+	n := len(m.failed)
+	if n == 0 {
+		return "", false
+	}
+	names := make([]string, 0, n)
+	for _, f := range m.failed {
+		names = append(names, f.label)
+	}
+	sort.Strings(names)
+
+	shown := names
+	if len(shown) > failedNamesShown {
+		shown = shown[:failedNamesShown]
+	}
+	label := fmt.Sprintf("%d %s not responding: %s",
+		n, plural(n, "repository", "repositories"), strings.Join(shown, ", "))
+	if rest := n - len(shown); rest > 0 {
+		label += fmt.Sprintf(" and %d more", rest)
+	}
+	return styleExhausted.Render(label + "."), true
 }
 
 // capLabelLine is R24's honest cap label. It shows the reachable count first and the

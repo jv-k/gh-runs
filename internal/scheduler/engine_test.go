@@ -105,9 +105,7 @@ func TestConditionalPollIsFreeAndSilent(t *testing.T) {
 	if got := h.gov.Revalidations(); got != 0 {
 		t.Errorf("revalidations after the 200 = %d, want 0", got)
 	}
-	h.mu.Lock()
-	first := h.updates[0]
-	h.mu.Unlock()
+	first := h.updates()[0]
 	if first.Repo != live || len(first.Runs) != 1 || first.Runs[0].Status != domain.StatusInProgress {
 		t.Errorf("delivered update = %+v, want live's single in_progress Run", first)
 	}

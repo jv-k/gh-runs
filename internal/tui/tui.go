@@ -79,7 +79,7 @@ type tab interface {
 // scheduler's medium-tier control, SetFilter hands it the Feed's active filter to push
 // server-side (R22), and the profile is the resolved keybinding set.
 type Options struct {
-	Updates     <-chan scheduler.Update
+	Updates     <-chan scheduler.Event
 	Readout     func() governor.Readout
 	Repos       func() []domain.Repo
 	Revalidated func() time.Time
@@ -143,7 +143,7 @@ type Model struct {
 	height  int
 	profile keys.Profile
 
-	updates     <-chan scheduler.Update
+	updates     <-chan scheduler.Event
 	readout     func() governor.Readout
 	repos       func() []domain.Repo
 	revalidated func() time.Time
@@ -261,7 +261,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
-	case scheduler.Update:
+	case scheduler.Event:
+		// Every member of ADR-0015's catalog travels the one channel and takes the one
+		// route: broadcast to every tab, which discriminates on the concrete type. The
+		// root adds no per-event knowledge, so a catalog member added in scheduler needs
+		// no change here.
 		next, cmd := m.broadcast(msg)
 		// Pull the Readout on the engine event too, not only the coarse tick (ADR-0015: the
 		// root pulls whenever an engine event arrives and on the tick), so a pressure or

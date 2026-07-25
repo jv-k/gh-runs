@@ -273,7 +273,7 @@ type harness struct {
 	ps       *fakePollSet
 
 	mu      sync.Mutex
-	updates []Update
+	events  []Event
 	updated chan struct{}
 	drainWG sync.WaitGroup
 }
@@ -315,9 +315,9 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 	h.drainWG.Add(1)
 	go func() {
 		defer h.drainWG.Done()
-		for u := range s.Updates() {
+		for e := range s.Updates() {
 			h.mu.Lock()
-			h.updates = append(h.updates, u)
+			h.events = append(h.events, e)
 			h.mu.Unlock()
 			h.updated <- struct{}{}
 		}
@@ -363,19 +363,57 @@ func (h *harness) blockUntil(n int) {
 // waitUpdates blocks until n more Updates have been delivered to the Feed drainer.
 func (h *harness) waitUpdates(t *testing.T, n int) {
 	t.Helper()
+	h.waitEvents(t, n)
+}
+
+// waitEvents blocks until n more Events of any kind have been delivered to the Feed
+// drainer. A test that cares which kind arrived asserts on updates() or failures().
+func (h *harness) waitEvents(t *testing.T, n int) {
+	t.Helper()
 	for i := 0; i < n; i++ {
 		select {
 		case <-h.updated:
 		case <-time.After(2 * time.Second):
-			t.Fatalf("timed out waiting for update %d of %d (received %d)", i+1, n, h.updateCount())
+			t.Fatalf("timed out waiting for event %d of %d (received %d)", i+1, n, h.eventCount())
 		}
 	}
 }
 
-func (h *harness) updateCount() int {
+func (h *harness) eventCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return len(h.updates)
+	return len(h.events)
+}
+
+// updates is the Updates the drainer received, in order, with any other Event kind
+// filtered out.
+func (h *harness) updates() []Update {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var us []Update
+	for _, e := range h.events {
+		if u, ok := e.(Update); ok {
+			us = append(us, u)
+		}
+	}
+	return us
+}
+
+// failures is the RepoPollFailed events the drainer received, in order.
+func (h *harness) failures() []RepoPollFailed {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var fs []RepoPollFailed
+	for _, e := range h.events {
+		if f, ok := e.(RepoPollFailed); ok {
+			fs = append(fs, f)
+		}
+	}
+	return fs
+}
+
+func (h *harness) updateCount() int {
+	return len(h.updates())
 }
 
 // waitSettle blocks until the loop reports it has chosen the wanted wait, draining
