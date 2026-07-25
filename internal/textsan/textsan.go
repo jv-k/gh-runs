@@ -7,9 +7,14 @@
 // one operation, a spoofable dashboard is a decision-integrity problem, not a cosmetic one.
 //
 // The package is a leaf: it imports nothing of ours, so both surfaces depend on it without a
-// cycle and neither can drift from the other (ADR-0011). The -q and --json data paths are
-// deliberately not routed through it: that output is data a script consumes, not a terminal
-// rendering, and gh treats it the same.
+// cycle and neither can drift from the other (ADR-0011).
+//
+// All three of the list command's data paths are deliberately left raw: --json, -q, and -t.
+// That output is data a script or an operator's own format consumes, not a terminal rendering
+// this tool chose, and gh leaves all three raw too. -t is the one worth naming, because it does
+// reach a terminal: its hyperlink function emits an OSC 8 escape on purpose, and stripping
+// escapes there would break the function while leaving --json and -q emitting the same bytes on
+// the same command anyway (ADR-0023, security review).
 package textsan
 
 import "strings"
