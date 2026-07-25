@@ -245,6 +245,7 @@ func runTUI(cfg config.Config, clk clock.Clock, client *ghclient.Client, gov *go
 		Repos:       func() []domain.Repo { return knownRepos(disc) },
 		Revalidated: func() time.Time { return newestRevalidated(transport, disc.PollSet()) },
 		SetViewport: sched.SetViewport,
+		SetFilter:   sched.SetFilter,
 		Profile:     profile,
 		// The Settings pane opens over the resolved config and writes changed keys back through
 		// config.Save, preserving comments, key order and keys this version does not recognise

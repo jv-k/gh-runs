@@ -30,16 +30,24 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 )
 
 // Update is one repository's fresh Runs, emitted when a poll returns a 200 whose
 // content changed (R19, AC16). A 304 emits nothing: it carries no change and does no
-// re-render work. The Runs are stamped with their Repo (ADR-0018); the Feed is the
-// first consumer, at stage 7.
+// re-render work. The Runs are stamped with their Repo (ADR-0018).
+//
+// When the poll pushed a server-side filter (the active Filter's Query() was
+// non-empty), Filtered is true and ClaimedTotal is the response's total_count, the
+// claimed match count R24's cap label reads (ADR-0015, ADR-0016). An unfiltered poll
+// leaves both zero: its total_count is the repository's whole count, not a claimed
+// match count, so it is never a cap.
 type Update struct {
-	Repo domain.RepoID
-	Runs []domain.Run
+	Repo         domain.RepoID
+	Runs         []domain.Run
+	Filtered     bool
+	ClaimedTotal int
 }
 
 // Requester issues a request through the transport chain and returns the response
@@ -103,6 +111,12 @@ type Scheduler struct {
 	lastPoll map[string]time.Time    // per repo: the injected-clock instant of its last poll
 	inFlight map[string]bool         // per repo: a poll is out, so the next due tick is skipped (R18)
 	lastETag map[string]string       // per repo: the ETag its last 200 carried, to spot a 304 (R19)
+
+	// filt is the Feed's active filter, guarded by mu (ADR-0016). A poll derives its
+	// server-side query from filt.Query() (R22), and a filtered poll carries the
+	// response's total_count back for R24's cap label. The zero Filter is the
+	// unfiltered listing, the cold-start default.
+	filt filter.Filter
 
 	dem demotion // R15's staged demotion, guarded by mu
 
@@ -319,4 +333,32 @@ func (s *Scheduler) SetViewport(ids []domain.RepoID) {
 	// decision, which could be a full slow interval (30s) away while the loop sleeps.
 	// This is symmetric with the poll-driven tier change that wakes the loop (R8).
 	s.signalWake()
+}
+
+// SetFilter publishes the Feed's active filter, whose Query() every subsequent poll
+// pushes server-side (R22, ADR-0016). The Feed calls it when the filter input is
+// accepted or cleared; the zero Filter restores the unfiltered listing.
+//
+// A filter change makes every repository a different resource, so the last-poll
+// stamps and the per-repository ETag memory are cleared: every repository is due at
+// once, and no poll of the new resource is false-skipped against the prior filter's
+// ETag (which the store keys by URL, not by repository, so it never confuses the two;
+// this clears the scheduler's own repository-keyed shortcut). The loop is then woken
+// so the re-poll happens at once rather than waiting out the up-to-30s slow interval,
+// symmetric with the viewport wake (R8).
+func (s *Scheduler) SetFilter(f filter.Filter) {
+	s.mu.Lock()
+	s.filt = f
+	s.lastPoll = make(map[string]time.Time)
+	s.lastETag = make(map[string]string)
+	s.mu.Unlock()
+	s.signalWake()
+}
+
+// activeFilter reads the Feed's active filter under the lock, so a poll goroutine
+// composing its request never races SetFilter.
+func (s *Scheduler) activeFilter() filter.Filter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.filt
 }
