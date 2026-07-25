@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -155,4 +156,25 @@ func TestGoldenNarrowTerminal(t *testing.T) {
 	m := newFeed(99, 20)
 	m = feedRuns(m, repoID("acme", "api"), mkRun(1, "acme", "api", "CI", domain.StatusInProgress, "", t0))
 	goldie.New(t).Assert(t, "narrow_terminal", []byte(m.View()))
+}
+
+// TestGoldenFailedPoll fixes the failed-poll indicator's frame. R36 names four goldens
+// "at minimum", so this is a fifth, and it earns its place on R36's own rationale: the
+// indicator is a property of the painted frame rather than of the model behind it, and
+// it is the only Feed chrome line whose copy nothing else pins byte for byte. R11's
+// "3 new runs" and R24's cap label each have one.
+//
+// The single-failure case is the one with the reason in it, which is the half a
+// Contains assertion is weakest on.
+func TestGoldenFailedPoll(t *testing.T) {
+	m := newFeed(100, 5)
+	live := repoID("home-assistant", "core")
+	m = discovered(m, repo("home-assistant", "core", true, false), repo("cli", "cli", true, false))
+	m = feedRuns(m, live,
+		mkRun(29516338954, "home-assistant", "core", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0),
+	)
+	// One repository's poll failed while the other kept answering: its Runs stay on
+	// screen and the indicator says how old they now are.
+	m = feedFailure(m, repoID("cli", "cli"), errors.New("poll returned HTTP 502 Bad Gateway"))
+	goldie.New(t).Assert(t, "failed_poll", []byte(m.View()))
 }

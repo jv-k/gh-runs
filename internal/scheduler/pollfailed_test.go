@@ -113,6 +113,45 @@ func TestNonOKStatusEmitsRepoPollFailed(t *testing.T) {
 	}
 }
 
+// authorizationBody is the measured shape of a revoked-access 403, taken from the
+// governor's own classification cassette. Its documentation_url points at the
+// reference page for the endpoint the request targets, which is the correspondence
+// open question 1 discriminates on, so the governor classifies it as authorization
+// and publishes no exhaustion.
+const authorizationBody = `{"message":"Resource not accessible by personal access token",` +
+	`"documentation_url":"https://docs.github.com/rest/actions/workflow-runs#list-workflow-runs-for-a-repository"}`
+
+// TestAuthorizationForbiddenEmitsRepoPollFailed is the regression test for the defect
+// this issue exists to remove, reproduced once inside the fix for it.
+//
+// Not every 403 is the governor's. The governor classifies an authorization 403 as
+// NOT rate limiting, so it publishes no exhaustion and the Feed paints no banner.
+// Dropping it on the status alone would leave a repository whose access has been
+// revoked showing no rows, no indicator and no banner, indistinguishable from a
+// repository with no Runs, for this session and every session after.
+//
+// The poll therefore reads the governor's verdict off the response rather than
+// re-deriving it from the status, which is what rate-governor R14 and ADR-0018 assign
+// to the governor in the first place.
+func TestAuthorizationForbiddenEmitsRepoPollFailed(t *testing.T) {
+	id := domain.RepoID{Host: domain.HostGitHub, Owner: "acme", Name: "api"}
+	h := newHarness(t, harnessConfig{
+		base:    statusRT{code: http.StatusForbidden, body: authorizationBody},
+		pollSet: []domain.RepoID{id},
+	})
+	h.start(t)
+	h.waitPolls(t, 1)
+	h.waitEvents(t, 1)
+
+	fails := h.failures()
+	if len(fails) != 1 {
+		t.Fatalf("an authorization 403 produced %d RepoPollFailed events, want 1", len(fails))
+	}
+	if fails[0].Repo != id {
+		t.Errorf("RepoPollFailed carried repo %v, want %v", fails[0].Repo, id)
+	}
+}
+
 // TestRateLimitStatusEmitsNothing pins the exclusion ADR-0018 requires. A 403 or 429
 // is an account-wide condition the governor has already folded into the Readout the
 // loop reads, so reporting it per repository would state one condition once per

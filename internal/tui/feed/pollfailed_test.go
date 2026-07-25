@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 )
@@ -24,14 +26,14 @@ func TestFailedPollIsVisible(t *testing.T) {
 	id := repoID("acme", "api")
 	m = feedRuns(m, id, mkRun(1, "acme", "api", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0))
 
-	if got := m.View(); strings.Contains(got, "not responding") {
+	if got := m.View(); strings.Contains(got, "failed to update") {
 		t.Fatalf("a healthy Feed already claims a repository is failing:\n%s", got)
 	}
 
 	m = feedFailure(m, id, errors.New("HTTP 502: Bad Gateway"))
 
 	got := m.View()
-	if !strings.Contains(got, "not responding") {
+	if !strings.Contains(got, "failed to update") {
 		t.Errorf("the Feed does not surface a failed poll:\n%s", got)
 	}
 	if !strings.Contains(got, "acme/api") {
@@ -47,13 +49,13 @@ func TestFailedPollClearsOnNextSuccess(t *testing.T) {
 	m := newFeed(100, 24)
 	id := repoID("acme", "api")
 	m = feedFailure(m, id, errors.New("HTTP 502: Bad Gateway"))
-	if !strings.Contains(m.View(), "not responding") {
+	if !strings.Contains(m.View(), "failed to update") {
 		t.Fatal("precondition: the indicator did not appear")
 	}
 
 	m = feedRuns(m, id, mkRun(1, "acme", "api", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0))
 
-	if got := m.View(); strings.Contains(got, "not responding") {
+	if got := m.View(); strings.Contains(got, "failed to update") {
 		t.Errorf("the indicator survived a successful poll of the same repository:\n%s", got)
 	}
 }
@@ -70,7 +72,7 @@ func TestFailedPollsAreCountedNotListed(t *testing.T) {
 	}
 
 	got := m.View()
-	if !strings.Contains(got, "5 repositories not responding") {
+	if !strings.Contains(got, "5 repositories failed to update") {
 		t.Errorf("the indicator does not count every failed repository:\n%s", got)
 	}
 	named := 0
@@ -84,6 +86,87 @@ func TestFailedPollsAreCountedNotListed(t *testing.T) {
 	}
 	if named == len(names) {
 		t.Errorf("the indicator listed all %d names instead of bounding them:\n%s", len(names), got)
+	}
+}
+
+// TestSingleFailureNamesItsReason pins that the carried error reaches the operator.
+// A repository that is gone and one whose API had a bad minute want different things
+// done about them, and the status is the only thing that tells them apart. With one
+// failure there is room to say which.
+func TestSingleFailureNamesItsReason(t *testing.T) {
+	m := newFeed(100, 24)
+	m = feedFailure(m, repoID("acme", "api"), errors.New("poll returned HTTP 404 Not Found"))
+
+	if got := m.View(); !strings.Contains(got, "404") {
+		t.Errorf("the indicator does not carry the reason it was given:\n%s", got)
+	}
+}
+
+// TestFailureReasonIsSanitised pins that API text cannot break the frame. The reason
+// is the API's words, so it is untrusted content in a fixed-width line.
+func TestFailureReasonIsSanitised(t *testing.T) {
+	m := newFeed(100, 24)
+	m = feedFailure(m, repoID("acme", "api"), errors.New("bad\r\nInjected: header"))
+
+	got := m.View()
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "Injected:") {
+			t.Fatalf("a control byte in the reason started a new line:\n%s", got)
+		}
+	}
+}
+
+// TestFailureClearsWhenTheRepositoryLeavesDiscovery pins the other way out. A
+// repository deleted or made private upstream fails once, then leaves the poll set, so
+// no Update can ever arrive to clear it. Without this the indicator would assert a
+// live condition nothing is testing anymore, undismissable for the rest of the session.
+func TestFailureClearsWhenTheRepositoryLeavesDiscovery(t *testing.T) {
+	m := newFeed(100, 24)
+	gone, stays := repoID("acme", "gone"), repoID("acme", "stays")
+	m = feedFailure(m, gone, errors.New("poll returned HTTP 404 Not Found"))
+	m = feedFailure(m, stays, errors.New("poll returned HTTP 502 Bad Gateway"))
+
+	// Discovery re-probes and reports only the repository that is still there.
+	m, _ = m.Update(ReposDiscovered{{ID: stays}})
+
+	got := m.View()
+	if strings.Contains(got, "acme/gone") {
+		t.Errorf("a repository that left discovery kept its indicator:\n%s", got)
+	}
+	if !strings.Contains(got, "acme/stays") {
+		t.Errorf("a repository still discovered lost its indicator:\n%s", got)
+	}
+}
+
+// TestEmptyDiscoveryClearsNothing is the guard on the prune above. At cold start
+// nothing is discovered yet, and an empty set is not evidence that a repository has
+// gone.
+func TestEmptyDiscoveryClearsNothing(t *testing.T) {
+	m := newFeed(100, 24)
+	m = feedFailure(m, repoID("acme", "api"), errors.New("poll returned HTTP 502 Bad Gateway"))
+
+	m, _ = m.Update(ReposDiscovered{})
+
+	if got := m.View(); !strings.Contains(got, "acme/api") {
+		t.Errorf("an empty discovery batch cleared a live failure:\n%s", got)
+	}
+}
+
+// TestWideOutageStaysOneLine pins the clamp. chromeLineCount counts this indicator as
+// exactly one line, and its content is repository names and API text, neither of which
+// the Feed chooses the length of. A wrap would overrun the frame by a row.
+func TestWideOutageStaysOneLine(t *testing.T) {
+	m := newFeed(100, 24)
+	for _, n := range []string{"vscode-python-environments", "vscode-jupyter-powertoys", "api"} {
+		m = feedFailure(m, repoID("microsoft", n), errors.New("poll returned HTTP 502 Bad Gateway"))
+	}
+
+	line, ok := m.failedLine()
+	if !ok {
+		t.Fatal("precondition: no indicator")
+	}
+	if w := lipgloss.Width(line); w > 100 {
+		t.Errorf("the indicator rendered %d columns wide at a 100-column frame:\n%s", w, line)
 	}
 }
 

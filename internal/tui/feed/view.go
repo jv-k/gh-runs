@@ -51,8 +51,12 @@ var (
 	stylePressure   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffaf00"))
 	styleAffordance = lipgloss.NewStyle().Foreground(lipgloss.Color("#00afff"))
 	styleCapLabel   = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
-	styleSelected   = lipgloss.NewStyle().Foreground(lipgloss.Color("#5fafff"))
-	styleDim        = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
+	// styleFailed is the failed-poll indicator. It is deliberately not styleExhausted:
+	// exhaustion and a failing repository can be on screen together, and in one weight
+	// and one colour they would read as a single condition.
+	styleFailed   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ff8700"))
+	styleSelected = lipgloss.NewStyle().Foreground(lipgloss.Color("#5fafff"))
+	styleDim      = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
 	// styleBadge is the approvals badge, in the same purple the waiting Status carries, so the
 	// count of Runs awaiting a decision reads as the awaiting hue (approvals R8).
 	styleBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#af87ff"))
@@ -466,16 +470,43 @@ func (m Model) failedLine() (string, bool) {
 	}
 	sort.Strings(names)
 
-	shown := names
-	if len(shown) > failedNamesShown {
-		shown = shown[:failedNamesShown]
+	// One failure has room for its reason, and the reason is the whole difference
+	// between a repository that is gone and one whose API had a bad minute. Past one
+	// there is no room, so the count carries it and the names identify who.
+	label := fmt.Sprintf("%d %s failed to update: ", n, plural(n, "repository", "repositories"))
+	if n == 1 {
+		label += names[0]
+		if why := m.failed[m.failedKeyOf(names[0])].err; why != nil {
+			label += " (" + textsan.Sanitize(why.Error()) + ")"
+		}
+	} else {
+		shown := names
+		if len(shown) > failedNamesShown {
+			shown = shown[:failedNamesShown]
+		}
+		label += strings.Join(shown, ", ")
+		if rest := n - len(shown); rest > 0 {
+			label += fmt.Sprintf(" and %d more", rest)
+		}
 	}
-	label := fmt.Sprintf("%d %s not responding: %s",
-		n, plural(n, "repository", "repositories"), strings.Join(shown, ", "))
-	if rest := n - len(shown); rest > 0 {
-		label += fmt.Sprintf(" and %d more", rest)
+	// The reason is API text and a repository name is API data, so the line is the one
+	// piece of chrome whose length is not ours to bound. Clamp it, because
+	// chromeLineCount counts this as exactly one line and a wrap would overrun the
+	// frame by a row.
+	return styleFailed.Render(truncPad(label+".", m.width)), true
+}
+
+// failedKeyOf finds the host-qualified key whose label is name. The map is keyed by
+// identity and the line is drawn in label order, so the single-failure case needs the
+// one step back. The map holds one entry per repository in a poll set of roughly 26,
+// so the scan is not worth an index.
+func (m Model) failedKeyOf(name string) string {
+	for k, f := range m.failed {
+		if f.label == name {
+			return k
+		}
 	}
-	return styleExhausted.Render(label + "."), true
+	return ""
 }
 
 // capLabelLine is R24's honest cap label. It shows the reachable count first and the

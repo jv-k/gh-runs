@@ -248,26 +248,30 @@ func (s *Scheduler) emit(e Event) {
 
 // isRateLimitError reports whether err is the account-wide rate-limit condition the
 // governor owns rather than this repository's own failure. The governor has already
-// folded it into the Readout the loop reads, so the poll reports nothing and the
-// Feed's existing exhaustion state stands (ADR-0018, rate-governor R14).
+// folded that condition into the Readout the loop reads, so the poll reports nothing
+// and the Feed's existing exhaustion state stands (ADR-0018, rate-governor R14).
 //
-// The status is read off the error because that is where it arrives: go-gh's
-// RESTClient turns every non-2xx into an *api.HTTPError, the same type and the same
-// errors.As read the CLI's exit-code mapping already uses (cli-surface R17).
+// It reads the governor's verdict and does not re-derive it. The status alone cannot
+// decide this: a 403 is rate limiting or authorization depending on its body, only
+// the governor has looked, and it publishes exhaustion for the first and not the
+// second. Dropping every 403 here would leave a repository whose access has been
+// revoked showing no rows, no indicator and no banner, which is the invisibility this
+// event exists to remove.
 //
-// A transport error carries no status and is therefore this repository's, which is
+// The verdict arrives on the error rather than on a response because go-gh's
+// RESTClient turns every non-2xx into an *api.HTTPError, carrying a copy of the
+// response headers, and returns a nil response. The errors.As read is the same one
+// the CLI's exit-code mapping already uses (cli-surface R17).
+//
+// A transport error carries no headers and is therefore this repository's, which is
 // the right default: nothing else in the process has seen it, so declining to report
 // it would leave it invisible.
-//
-// A fine-grained-PAT authorization 403 shares the rate limit's status and is absorbed
-// here with it. Telling those two apart is the governor's classifier's job, not the
-// poll's, and sharpening it is tracked separately (issue #68).
 func isRateLimitError(err error) bool {
 	var he *api.HTTPError
 	if !errors.As(err, &he) {
 		return false
 	}
-	return he.StatusCode == http.StatusForbidden || he.StatusCode == http.StatusTooManyRequests
+	return governor.RateLimitedHeaders(he.Headers)
 }
 
 // statusError is the error a non-200 becomes on its way into a RepoPollFailed. It

@@ -103,12 +103,16 @@ func TestRepoPollFailedReachesThePaintedFrame(t *testing.T) {
 	m, _ = m.Update(ev)
 
 	frame := m.View().Content
-	if !strings.Contains(frame, "not responding") || !strings.Contains(frame, "acme/api") {
+	if !strings.Contains(frame, "failed to update") || !strings.Contains(frame, "acme/api") {
 		t.Fatalf("the failed poll never reached the painted frame:\n%s", frame)
 	}
 	t.Logf("failed frame:\n%s", frame)
 
-	// Recovery: advance to the next due poll, which now answers 200.
+	// Recovery: advance to the next due poll, which now answers 200. Wait for the loop
+	// to be asleep on its timer first, or an advance issued before the timer is armed
+	// is simply missed and the receive below waits out its deadline. The scheduler's
+	// own harness blocks the same way for the same reason.
+	clk.BlockUntil(1)
 	clk.Advance(2 * time.Minute)
 	ev = recv(t, sched.Updates())
 	if _, ok := ev.(scheduler.Update); !ok {
@@ -117,7 +121,7 @@ func TestRepoPollFailedReachesThePaintedFrame(t *testing.T) {
 	m, _ = m.Update(ev)
 
 	frame = m.View().Content
-	if strings.Contains(frame, "not responding") {
+	if strings.Contains(frame, "failed to update") {
 		t.Fatalf("the indicator survived the repository's recovery:\n%s", frame)
 	}
 	if !strings.Contains(frame, "acme/api") {

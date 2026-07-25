@@ -26,7 +26,24 @@ const maxClassifyBody = 64 << 10 // 64 KiB
 // response. Consumers apply purge R13 (never count it as a failure) and open
 // question 1's per-Run bound from this verdict, without re-classifying (R14).
 func RateLimited(resp *http.Response) bool {
-	return resp.Header.Get(rateLimitedHeader) == "true"
+	return RateLimitedHeaders(resp.Header)
+}
+
+// RateLimitedHeaders is RateLimited for a consumer that holds the headers without the
+// response. go-gh's RESTClient converts every non-2xx into an *api.HTTPError carrying
+// a copy of the response headers and returns a nil response, so a consumer above it
+// has the verdict but not the thing it was stamped on.
+//
+// It exists so such a consumer still reads the verdict rather than re-deriving open
+// question 1's discrimination from a status code (R14). A 403 is the case that
+// matters: it is rate limiting or authorization depending on its body, only the
+// governor has looked, and the two want opposite handling.
+//
+// Headers with no stamp report false, which is the safe direction for a consumer
+// deciding whether to surface a failure: an unclassified response is surfaced rather
+// than silently dropped.
+func RateLimitedHeaders(h http.Header) bool {
+	return h.Get(rateLimitedHeader) == "true"
 }
 
 // stampRateLimited records the classification on the response the consumer will
