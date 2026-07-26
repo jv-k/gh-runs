@@ -316,9 +316,9 @@ func TestFilterIsClientSide(t *testing.T) {
 		mkRun(2, "acme", "api", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0.Add(-time.Hour)),
 		mkRun(3, "acme", "api", "CI", domain.StatusInProgress, "", t0.Add(-2*time.Hour)),
 	)
-	f, err := parseFilterQuery("failure")
+	f, err := filter.ParseQuery("failure")
 	if err != nil {
-		t.Fatalf("parseFilterQuery: %v", err)
+		t.Fatalf("filter.ParseQuery: %v", err)
 	}
 	m.filter = f
 	m.applyView(m.liveView())

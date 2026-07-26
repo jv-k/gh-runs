@@ -7,11 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
+	"strconv"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 )
 
@@ -115,13 +118,16 @@ func (s *Scheduler) poll(id domain.RepoID) {
 	defer s.clearInFlight(id)
 
 	// The store sends If-None-Match when it holds an ETag for this resource, so a
-	// steady-state poll is conditional and a 304 is free (R1, AC2, ADR-0004). The
-	// active filter's Query() is pushed server-side, so the response is the newest
-	// matches rather than the newest Runs (R22, ADR-0016). A non-empty query makes
-	// this a filtered listing, whose total_count is the claimed match count R24 reads.
-	query := s.activeFilter().Query()
-	filtered := len(query) > 0
-	resp, err := s.opts.Client.Request(http.MethodGet, runsPath(id, query), nil)
+	// steady-state poll is conditional and a 304 is free (R1, AC2, ADR-0004). The whole
+	// server-side half of the active filter is pushed, so the response is the newest
+	// matches rather than the newest Runs (R22, ADR-0016): that is Query()'s parameters,
+	// plus the endpoint the Workflow field selects, which is the only server-side form
+	// that axis has. Either makes this a filtered listing, whose total_count is the
+	// claimed match count R24 reads.
+	f := s.activeFilter()
+	query := f.Query()
+	resource, filtered := s.runsResource(id, f, query)
+	resp, err := s.opts.Client.Request(http.MethodGet, resource, nil)
 	if err != nil {
 		// Both failure shapes arrive here. A transport error carries no status. Every
 		// non-2xx also arrives here rather than on a response, because the RESTClient
@@ -182,7 +188,7 @@ func (s *Scheduler) poll(id domain.RepoID) {
 	// consumer joins anything (ADR-0015).
 	var wf map[int64]domain.State
 	if len(runs) > 0 {
-		wf = s.workflowStates(id)
+		wf = s.workflowList(id).states
 	}
 	for i := range runs {
 		runs[i].Repo = id
@@ -205,8 +211,8 @@ func (s *Scheduler) poll(id domain.RepoID) {
 	s.emit(Update{Repo: id, Runs: runs, Filtered: filtered, ClaimedTotal: claimed})
 }
 
-// workflowStates is a repository's Workflow ID to State join, read through the injected
-// WorkflowLister the first time it is needed and held for the process (run-detail R8).
+// workflowList is a repository's Workflow list, read through the injected WorkflowLister the
+// first time it is needed and held for the process (run-detail R8, ADR-0016).
 //
 // **The list is read at most once per repository per process, whatever the read returns.**
 // That single rule is the whole cost of the marker, and it is a rule rather than three
@@ -227,40 +233,95 @@ func (s *Scheduler) poll(id domain.RepoID) {
 // the State empty, which reads as not-deleted, so the cost is a marker that does not light
 // and never one that lights wrongly.
 //
-// Reading it lazily, from the poll that has Runs to stamp, means a repository the operator
-// never sees Runs from costs nothing at all. A paused loop spawns no poll, so exhaustion
-// stops this read with everything else (R16).
+// It serves two readers from the one read: the State join above, and the resolution of a
+// Filter's raw Workflow selector to the id its endpoint needs (ADR-0016).
+//
+// **When it is read depends on which reader asks.** The join asks after the response, from
+// the poll that has Runs to stamp, so a repository the operator never sees Runs from costs
+// nothing. The selector resolution asks before the request, and asks for every repository in
+// the poll set while a Workflow filter is active, including repositories that would have
+// returned no Runs at all. That is the price of not asking a repository for a Workflow it
+// does not have (resolveWorkflow says what that costs), and the one read per repository
+// bounds it: a filter active for an hour costs the same as one active for a second. A paused
+// loop spawns no poll, so exhaustion stops this read with everything else (R16).
 //
 // It is called from the poll goroutine, which already holds the repository's single-flight
 // flag, so two reads of one repository never overlap and the wire bound stays the transport
 // limiter's (ADR-0018). A failure emits nothing: the poll itself succeeded, and a
 // RepoPollFailed here would report a repository whose Runs have just arrived as failing to
 // update.
-func (s *Scheduler) workflowStates(id domain.RepoID) map[int64]domain.State {
+func (s *Scheduler) workflowList(id domain.RepoID) workflowList {
 	key := id.String()
 	s.mu.Lock()
-	held, read := s.wfStates[key]
+	held, read := s.wfLists[key]
 	s.mu.Unlock()
 	if read {
 		return held
 	}
 	if s.opts.Workflows == nil {
-		return nil // nothing wired: nothing to remember, and nothing is ever asked
+		return workflowList{} // nothing wired: nothing to remember, and nothing is ever asked
 	}
 	ws, err := s.opts.Workflows(id)
-	var states map[int64]domain.State
+	var list workflowList
 	if err == nil {
-		states = make(map[int64]domain.State, len(ws))
+		list.states = make(map[int64]domain.State, len(ws))
+		list.ids = make(map[string]int64, 2*len(ws))
 		for _, w := range ws {
-			states[w.ID] = w.State
+			list.states[w.ID] = w.State
+			// Both spellings gh's own -w accepts, the name and the filename, resolve to the
+			// same id (ADR-0016). The path is indexed by its base too, because that is what a
+			// person types.
+			list.ids[w.Name] = w.ID
+			list.ids[w.Path] = w.ID
+			list.ids[path.Base(w.Path)] = w.ID
 		}
 	}
 	// The attempt is recorded either way, so a failed read is asked once and not once per
-	// poll. A nil map is a perfectly good memo: every lookup in it answers the empty State.
+	// poll. A zero value is a perfectly good memo: every lookup in it answers the empty
+	// State, and it resolves no selector.
 	s.mu.Lock()
-	s.wfStates[key] = states
+	s.wfLists[key] = list
 	s.mu.Unlock()
-	return states
+	return list
+}
+
+// workflowList is one repository's Workflow list as the engine uses it: the ID to State join
+// the marker reads (run-detail R8), and the selector to ID index a Workflow-filtered poll
+// resolves through (ADR-0016). Both come from the one read.
+type workflowList struct {
+	states map[int64]domain.State
+	ids    map[string]int64 // a Workflow's name, path and filename, each to its id
+}
+
+// resolveWorkflow turns a Filter's raw Workflow selector into the id this repository's
+// server-side listing needs (ADR-0016: the field holds the raw selector, and the consumer
+// holding the Workflow list resolves it). A name or filename resolves through the list the
+// join already reads once per repository. A numeric selector is an id already, but it is
+// checked against the same list, because a Workflow id belongs to one repository.
+//
+// **Every resolution is against this repository's own list, whatever the spelling.** A merged
+// Feed polls every repository in the set under one Filter, and only one of them can own a
+// given Workflow. Trusting a numeric selector unchecked would ask each of the others for a
+// Workflow it does not have, which answers 404 on every tier interval for as long as the
+// filter is active: each repository would stop reporting its own Runs, and the Feed's
+// failed-poll indicator would name them with nothing able to clear it, because clearing it
+// takes an Update that can never arrive.
+//
+// So it reports false for a selector this repository has no Workflow for, which is the
+// ordinary case rather than the exception. The caller then polls the repository listing, where
+// the client-side Match evicts every Run, and the repository stays in the rotation. A
+// repository whose Workflow list could not be read resolves nothing and takes the same path.
+func (s *Scheduler) resolveWorkflow(id domain.RepoID, selector string) (int64, bool) {
+	if selector == "" {
+		return 0, false
+	}
+	list := s.workflowList(id)
+	if n, err := strconv.ParseInt(selector, 10, 64); err == nil {
+		_, owned := list.states[n]
+		return n, owned
+	}
+	wfID, ok := list.ids[selector]
+	return wfID, ok
 }
 
 // nextWait is the duration until the earliest not-in-flight repository is next due
@@ -369,15 +430,67 @@ type apiRunsPage struct {
 	WorkflowRuns []domain.Run `json:"workflow_runs"`
 }
 
-// runsPath is a repository's Run listing, the resource every tier polls. With no
-// active filter q is empty and the path is the unfiltered listing; with a filter the
-// query is url.Values-encoded onto the path, so the request pushes it server-side
-// (R22, ADR-0016) and a cassette can match the URL exactly. The store keys its cache
-// on the whole URL, so a filter change is a new resource with its own ETag.
-func runsPath(id domain.RepoID, q url.Values) string {
-	base := "repos/" + id.Owner + "/" + id.Name + "/actions/runs"
-	if len(q) == 0 {
-		return base
+// runsResource is the resource this poll fetches and whether it is a filtered listing
+// (R22, ADR-0016). A Filter naming a Workflow resolves to that Workflow's own Run listing,
+// the only server-side form the axis has, because there is no workflow query parameter. Any
+// other filter rides the repository listing with Query()'s parameters.
+//
+// A Workflow listing counts as filtered whatever else the Filter carries, so its total_count
+// travels back as the claimed count R24's label reads. That is what the number is: the
+// Workflow's whole match count, against a page that reaches a hundred of them, and a view
+// showing 100 rows of a 4,106-Run Workflow with nothing saying so would be the dishonest one.
+//
+// **Whether this endpoint caps at 1,000 is unmeasured.** The measured cap attaches to the
+// repository listing under the documented filter parameters (PRD), none of which a bare
+// Workflow poll sends, and the unfiltered repository listing reaches far past 1,000. The
+// label degrades safely either way, because it states reachable first and marks claimed
+// approximate. Treating it as capped is the assumption, not an observation.
+func (s *Scheduler) runsResource(id domain.RepoID, f filter.Filter, q url.Values) (string, bool) {
+	if wfID, ok := s.resolveWorkflow(id, f.Workflow); ok {
+		return workflowRunsPath(id, wfID, q), true
 	}
-	return base + "?" + q.Encode()
+	return runsPath(id, q), len(q) > 0
+}
+
+// runsPath is a repository's Run listing, the resource every tier polls. The query is
+// url.Values-encoded onto the path, so the request pushes the filter server-side (R22,
+// ADR-0016) and a cassette can match the URL exactly. The store keys its cache on the whole
+// URL, so a filter change is a new resource with its own ETag.
+func runsPath(id domain.RepoID, q url.Values) string {
+	return "repos/" + id.Owner + "/" + id.Name + "/actions/runs?" + withPageSize(q).Encode()
+}
+
+// workflowRunsPath is one Workflow's Run listing, the server-side half of a Filter's
+// Workflow axis (ADR-0016). It takes the same parameters the repository listing does, so a
+// Workflow filter combines with a branch or a status rather than replacing it.
+func workflowRunsPath(id domain.RepoID, wfID int64, q url.Values) string {
+	return "repos/" + id.Owner + "/" + id.Name +
+		"/actions/workflows/" + strconv.FormatInt(wfID, 10) + "/runs?" + withPageSize(q).Encode()
+}
+
+// pageSize is the API's per-page ceiling, which every other listing in the tool asks for
+// (discovery, the Workflow list, the Storage and Job listings). The Run listing asked for
+// none, so it took the API's default of 30 and the Feed held a third of the Runs one request
+// could have carried, which a client-side axis then filtered over. It is one request either
+// way: a 304 is free and unchanged by the count, and the cap R24 labels is the API's own
+// 1,000, well past a page.
+//
+// **It is not free per minute, because the tier reads the whole page.** hasLiveRun scans
+// every Run the page carried, so a Run stuck in queued or in_progress holds its repository at
+// the fast tier until newer Runs push it off the page, and there are now 100 of those rather
+// than 30. On a busy repository that is a longer residency at ~3s, which is the multiplier
+// polling-scheduler R11's budget table is most sensitive to. The trade is deliberate: a
+// window a third the size made every client-side axis search a third of the Runs, and the
+// stuck-Run case is bounded by the same page it always was.
+const pageSize = "100"
+
+// withPageSize returns q with the page size set, leaving the caller's values untouched: the
+// active filter is shared state, and encoding must not mutate it.
+func withPageSize(q url.Values) url.Values {
+	out := make(url.Values, len(q)+1)
+	for k, v := range q {
+		out[k] = v
+	}
+	out.Set("per_page", pageSize)
+	return out
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/sebdah/goldie/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 )
 
@@ -177,4 +178,39 @@ func TestGoldenFailedPoll(t *testing.T) {
 	// screen and the indicator says how old they now are.
 	m = feedFailure(m, repoID("cli", "cli"), errors.New("poll returned HTTP 502 Bad Gateway"))
 	goldie.New(t).Assert(t, "failed_poll", []byte(m.View()))
+}
+
+// TestGoldenNavigatedToWorkflow fixes the frame the Workflows tab's navigation lands on
+// (workflow-management R13, AC4): the Feed narrowed to one Workflow's Runs, stating the
+// filter it is showing and the keys that edit and clear it. A narrowing nobody can see is
+// the defect this frame exists to prevent, because an unstated filter and a broken tool
+// paint the same thing.
+func TestGoldenNavigatedToWorkflow(t *testing.T) {
+	m := newFeed(100, 6)
+	id := repoID("cli", "cli")
+	m = discovered(m, repo("cli", "cli", true, false))
+	orphan := mkRun(29516338001, "cli", "cli", "Old Deploy", domain.StatusCompleted, domain.ConclusionFailure, t0.Add(-72*time.Hour))
+	orphan.WorkflowID = 9004
+	live := mkRun(29516338954, "cli", "cli", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0)
+	live.WorkflowID = 9001
+	m = feedRuns(m, id, live, orphan)
+
+	m = m.Update2(ShowRuns(filter.Filter{Workflow: "9004"}))
+
+	goldie.New(t).Assert(t, "navigated_to_workflow", []byte(m.View()))
+}
+
+// TestGoldenNavigatedToWorkflowWithNoRuns fixes the same frame when the narrowing matches
+// nothing the Feed holds, which is the state a blank area used to leave unexplained.
+func TestGoldenNavigatedToWorkflowWithNoRuns(t *testing.T) {
+	m := newFeed(100, 6)
+	id := repoID("cli", "cli")
+	m = discovered(m, repo("cli", "cli", true, false))
+	live := mkRun(29516338954, "cli", "cli", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0)
+	live.WorkflowID = 9001
+	m = feedRuns(m, id, live)
+
+	m = m.Update2(ShowRuns(filter.Filter{Workflow: "9004"}))
+
+	goldie.New(t).Assert(t, "navigated_no_runs", []byte(m.View()))
 }

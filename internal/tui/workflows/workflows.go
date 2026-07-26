@@ -1,8 +1,17 @@
-// Package workflows is the Workflows tab (workflow-management R0 to R11). It lists the
-// Workflows across the discovered repositories with their state, and enables or disables one
+// Package workflows is the Workflows tab (workflow-management R0 to R14). It lists the
+// Workflows in the repositories in scope with their state, and enables or disables one
 // from the cursor. Because Runs outlive the Workflow that produced them, this surface is the
 // only honest source of Orphaned Runs, the deleted Workflows whose Runs persist forever (R11,
 // R12).
+//
+// The scope is R0's, and both its code paths are here: all-repos fans one request out over
+// every discovered repository, and this-repo covers the working directory's repository alone,
+// falling back to all-repos and saying so where there is none ([settings] R19). all-repos is
+// the default, and the setting that selects the other is settings R19's, which is not built.
+//
+// A deleted Workflow leads to its Orphaned Runs (R13, AC4), but this tab does not take you
+// there: it emits NavigateToRuns and the root moves focus and narrows the Feed, because a tab
+// may import a pane and never another tab (ADR-0011).
 //
 // A tab is not a tea.Model. It exposes View() string and an Update the root drives, and only
 // the root implements tea.Model (ADR-0011's tab contract). The root routes a tea.KeyPressMsg
@@ -21,11 +30,13 @@ package workflows
 import (
 	"context"
 	"sort"
+	"strconv"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
@@ -40,6 +51,22 @@ type Toggler interface {
 	ToggleWorkflow(ctx context.Context, op ops.Operation, wf domain.Workflow, repos map[domain.RepoID]domain.Repo) (ops.Summary, error)
 }
 
+// Scope is the set of repositories this surface operates over (R0). It is one of two values
+// and no others: all-repos, the whole discovered set, and this-repo, the repository of the
+// working directory ([settings] R19). The zero value reads as all-repos and New resolves it
+// to the constant, so a caller that states no scope gets the default R0 requires, which is
+// what a tool whose thesis is cross-repo should open with.
+type Scope string
+
+const (
+	// ScopeAllRepos fans one Workflow-list request out over every discovered repository, over
+	// ADR-0003's existing client-side fan-out. It is the default (R0).
+	ScopeAllRepos Scope = "all-repos"
+	// ScopeThisRepo covers the working directory's repository alone, which answers "which
+	// Workflows are disabled in the repo I am in", a question a rollup answers badly (R0).
+	ScopeThisRepo Scope = "this-repo"
+)
+
 // Options carries the tab's construction seams. main.go fills them: the profile is the
 // resolved keybinding set (R7a), Fetch reads one repository's Workflow list over the shared
 // client, Repos is the discovered capability data the gate reads (R6) and the fan-out covers
@@ -51,6 +78,20 @@ type Options struct {
 	Repos   func() []domain.Repo
 	Ops     Toggler
 
+	// Scope is the set of repositories the fan-out covers (R0). The zero value is all-repos,
+	// the default R0 fixes. The setting that selects it is [settings] R19's, which is not
+	// built: until it is, main.go states no scope and the tab runs all-repos. The scope is
+	// chosen at construction and does not change while running, because changing it also
+	// means dropping the held list: applyFetched merges each repository's Workflows as they
+	// arrive, so narrowing the scope would leave the wider one's rows on screen.
+	Scope Scope
+	// CurrentRepo resolves the working directory's repository, which is what this-repo means
+	// ([settings] R19). main.go wires it to ghclient.CurrentRepo, the same resolver
+	// discovery's fast path takes. It reports false where there is no such repository, and
+	// the tab then falls back to all-repos and says so rather than painting an empty view. It
+	// is nil in a golden test, which is the same fallback.
+	CurrentRepo func() (domain.RepoID, bool)
+
 	// The dispatch pane's seams, opened over the Workflow under the cursor (workflow-dispatch R2).
 	// DispatchFetch reads the YAML at a ref and the environments, DispatchOps triggers the
 	// workflow_dispatch through the shared write engine, and DispatchStore remembers last-used
@@ -58,6 +99,24 @@ type Options struct {
 	DispatchFetch dispatch.Fetcher
 	DispatchOps   dispatch.Dispatcher
 	DispatchStore dispatch.DocStore
+}
+
+// NavigateToRuns is this tab's request that the Feed be shown, narrowed to one Workflow's
+// Runs (R13, AC4). A deleted Workflow's Runs are Orphaned Runs, the cruft this surface
+// exists to find, and R13 presents them as a Feed filtered to that Workflow.
+//
+// The tab only asks. It returns this as a Cmd and acts on it no further, because the move
+// is a cross-tab one and a tab may import a pane but never another tab (ADR-0011). The root
+// owns focus, so the root receives this, switches to the Feed, and hands the Feed the filter.
+type NavigateToRuns struct {
+	// Filter is the destination as ADR-0016's structured value, the one representation both
+	// sides already speak, so no filter grammar crosses this seam as a string neither package
+	// owns. It names the Workflow by its numeric id, not its name: the id is stamped on every
+	// Run the Workflow produced and stays unique after the YAML is gone, while a name can be
+	// taken by a later Workflow. That is the same reason R12 identifies an Orphaned Run from
+	// Workflow state rather than from a missing file. The id is also what the poll needs to
+	// reach the Workflow's own Run listing, the axis's only server-side form.
+	Filter filter.Filter
 }
 
 // toggleResultMsg carries one toggle's outcome back into the message loop. On an accepted
@@ -83,6 +142,13 @@ type Model struct {
 	fetch   Fetch
 	repos   func() []domain.Repo
 	toggler Toggler
+
+	// scope and currentRepo are R0's two code paths: the discovered set, or the working
+	// directory's repository alone. currentRepo is resolved on each refresh rather than
+	// cached, so a scope change or a directory the resolver answers differently for is picked
+	// up by the same keystroke that reloads the list.
+	scope       Scope
+	currentRepo func() (domain.RepoID, bool)
 
 	// dispatch is the workflow_dispatch form pane, opened over the Workflow under the cursor and
 	// closed by the pane itself (workflow-dispatch R2). A tab may import a pane (ADR-0011).
@@ -111,10 +177,12 @@ type Model struct {
 // WorkflowsFetched arrives, and paints an empty view until then.
 func New(opts Options) Model {
 	return Model{
-		profile: opts.Profile,
-		fetch:   opts.Fetch,
-		repos:   opts.Repos,
-		toggler: opts.Ops,
+		profile:     opts.Profile,
+		fetch:       opts.Fetch,
+		repos:       opts.Repos,
+		toggler:     opts.Ops,
+		scope:       orAllRepos(opts.Scope),
+		currentRepo: opts.CurrentRepo,
 		dispatch: dispatch.New(dispatch.Options{
 			Profile: opts.Profile,
 			Fetch:   opts.DispatchFetch,
@@ -126,6 +194,15 @@ func New(opts Options) Model {
 		errs:       make(map[string]error),
 		capability: make(map[string]domain.Repo),
 	}
+}
+
+// orAllRepos resolves an unstated scope to the default R0 fixes, so the held scope is always
+// one of the two named values and never a third empty one.
+func orAllRepos(s Scope) Scope {
+	if s == ScopeThisRepo {
+		return ScopeThisRepo
+	}
+	return ScopeAllRepos
 }
 
 // SetActive records whether this tab is focused. The list is loaded and refreshed
@@ -215,6 +292,8 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.startToggle()
 	case key.Matches(k, m.profile.Dispatch):
 		return m.openDispatch()
+	case key.Matches(k, m.profile.OpenDetail):
+		return m.viewRuns()
 	case key.Matches(k, m.profile.Refresh):
 		return m.startFetch()
 	case key.Matches(k, m.profile.RowUp):
@@ -264,17 +343,37 @@ func (m Model) startFetch() (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// scopeRepos is the set the fan-out covers: the discovered repositories under all-repos (R0).
-// It reads the capability map the refresh populated, so the fan-out and the gate cover the
-// same set. this-repo resolves to one repository via [settings] R19, which owns the scope
-// setting; until that lands the tab covers the discovered set, the R0 default.
+// scopeRepos is the set the fan-out covers, which is R0's two code paths (R0). Under
+// all-repos it is every discovered repository, read from the capability map the refresh
+// populated so the fan-out and the gate cover the same set. Under this-repo it is the
+// working directory's repository alone, whether or not discovery has reported it: this-repo
+// is the repository the operator is in, not the intersection of that with the enumeration,
+// and a repository the gate has no capability for simply offers no toggle (R6).
+//
+// Where this-repo resolves to nothing it falls back to all-repos, which scopeLabel states in
+// the view. R19 requires the fallback be said rather than answered with an empty view or a
+// picker.
 func (m Model) scopeRepos() []domain.RepoID {
+	if id, ok := m.thisRepo(); ok {
+		return []domain.RepoID{id}
+	}
 	out := make([]domain.RepoID, 0, len(m.capability))
 	for _, r := range m.capability {
 		out = append(out, r.ID)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out
+}
+
+// thisRepo resolves the this-repo scope, and reports false under all-repos and wherever the
+// working directory has no repository (which includes no resolver being wired, the headless
+// case). Both the fan-out and the view read it, so the set fetched and the scope stated
+// cannot disagree.
+func (m Model) thisRepo() (domain.RepoID, bool) {
+	if m.scope != ScopeThisRepo || m.currentRepo == nil {
+		return domain.RepoID{}, false
+	}
+	return m.currentRepo()
 }
 
 // startToggle enables or disables the Workflow under the cursor through ops (R5). It fails
@@ -302,6 +401,26 @@ func (m Model) startToggle() (Model, tea.Cmd) {
 		sum, err := toggler.ToggleWorkflow(context.Background(), op, wf, repos)
 		return toggleResultMsg{repo: repo, op: op, wf: wf, sum: sum, err: err}
 	}
+}
+
+// viewRuns asks the root to show the Runs of the Workflow under the cursor in the Feed
+// (R13, AC4). It issues no request and reads nothing but held state, so identifying a
+// deleted Workflow's Orphaned Runs costs no call against the repository's contents (AC4,
+// R12). It is offered on every row rather than on the deleted ones alone, because a
+// Workflow's Runs stay listable whatever its state: a disabled or deleted Workflow's Runs
+// are ordinary Runs (R14).
+//
+// The binding is OpenDetail (enter), the registry's existing drill-down key, which the log
+// view already reuses to open a Job's log from a row (R7a). Opening a Workflow's Runs from a
+// Workflow row is that same motion, so the tab mints no key for it and stays inside AC18's
+// reach without widening the registry.
+func (m Model) viewRuns() (Model, tea.Cmd) {
+	row, ok := m.rowUnderCursor()
+	if !ok {
+		return m, nil
+	}
+	req := NavigateToRuns{Filter: filter.Filter{Workflow: strconv.FormatInt(row.wf.ID, 10)}}
+	return m, func() tea.Msg { return req }
 }
 
 // openDispatch opens the workflow_dispatch form over the Workflow under the cursor, applying the

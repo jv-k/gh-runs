@@ -452,6 +452,12 @@ func (c clients) tuiOptions(d tuiDeps) tui.Options {
 		// and travels the one write path every other write does (R5).
 		WorkflowFetch: workflows.ClientFetch(client),
 		WorkflowOps:   d.Ops,
+		// The tab's scope is stated by nobody yet, so it runs the all-repos default R0 fixes
+		// (workflow-management R0). Its resolver is wired regardless: this-repo means the
+		// repository of the working directory (settings R19), which is the same resolver
+		// discovery's fast path takes, with the GH_TOKEN-aware error it already translates.
+		// Where there is none, the tab falls back to all-repos and says so.
+		WorkflowCurrentRepo: currentRepoID,
 		// The dispatch form the Workflows tab opens reads the Workflow YAML at a ref and the
 		// repository's environments over the same client (workflow-dispatch R5, R7), triggers the
 		// workflow_dispatch through the same ops engine so it is paced and travels ops's write path
@@ -579,6 +585,19 @@ func downloadDir() string {
 		return dir
 	}
 	return "."
+}
+
+// currentRepoID resolves the working directory's repository for the TUI's this-repo scope
+// (settings R19), reporting false where there is none. It is the same resolver discovery's
+// fast path takes; a scope is a presence question, so the resolver's error is answered as
+// "no repository here" and the tab falls back to all-repos and says so, rather than
+// interrupting a running TUI with a message about the working directory.
+func currentRepoID() (domain.RepoID, bool) {
+	id, err := ghclient.CurrentRepo()
+	if err != nil {
+		return domain.RepoID{}, false
+	}
+	return id, true
 }
 
 // deletionLogPath returns the append-only deletion log's path under the XDG state

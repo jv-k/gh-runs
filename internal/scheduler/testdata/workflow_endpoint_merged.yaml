@@ -1,0 +1,85 @@
+---
+version: 2
+interactions:
+    # Two repositories under one Workflow filter naming id 9004. The id is repository-scoped,
+    # so exactly one repository can own it: acme/legacy does, acme/other does not. The poll
+    # must reach the Workflow listing for the owner and fall back to the repository listing
+    # for the other, rather than asking every repository for a Workflow only one of them has.
+    # Interaction 0: acme/legacy's Workflow list, which resolves the selector and carries the
+    # deleted Workflow, still listed with state deleted.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/legacy/actions/workflows?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":2,"workflows":[{"id":9004,"name":"Old Pipeline","path":".github/workflows/old.yml","state":"deleted"},{"id":9002,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"legacy-workflows-v1"'
+            X-Ratelimit-Remaining:
+                - "5000"
+    # Interaction 1: the owner's Workflow Run listing, the Orphaned Runs the navigation is for.
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/legacy/actions/workflows/9004/runs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":4106,"workflow_runs":[{"id":11,"workflow_id":9004,"status":"completed","conclusion":"failure","name":"Old Pipeline"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"legacy-wf9004-v1"'
+            X-Ratelimit-Remaining:
+                - "5000"
+    # Interaction 2: acme/other's Workflow list, which has no 9004.
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/other/actions/workflows?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":1,"workflows":[{"id":7001,"name":"Lint","path":".github/workflows/lint.yml","state":"active"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"other-workflows-v1"'
+            X-Ratelimit-Remaining:
+                - "5000"
+    # Interaction 3: acme/other's ordinary Run listing, the fallback. Its Runs are evicted by
+    # the client-side Match, and the repository keeps polling rather than failing.
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/other/actions/runs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":1,"workflow_runs":[{"id":21,"workflow_id":7001,"status":"completed","conclusion":"success","name":"Lint"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"other-runs-v1"'
+            X-Ratelimit-Remaining:
+                - "5000"

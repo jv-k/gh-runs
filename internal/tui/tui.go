@@ -11,6 +11,11 @@
 // turned into messages with the canonical receive-one-then-reschedule command. When the
 // engine closes its channel the root quits (ADR-0015).
 //
+// A tab that wants another tab shown asks the root, which is why the Workflows tab's
+// navigation to a deleted Workflow's Orphaned Runs arrives here as a message rather than
+// reaching into the Feed (workflow-management R13, AC4). Focus and cross-tab delivery are
+// the root's, because a tab may import a pane and never another tab.
+//
 // tui imports the tabs, the engine's event and Readout types, keys and domain, and
 // lipgloss for the tab bar. main.go constructs it and wires the channel and the pulls;
 // nothing imports tui (ADR-0011).
@@ -45,6 +50,11 @@ import (
 // tabBarHeight is the one line the root reserves for the tab bar, taken off the height
 // the tabs receive so a tab lays out within the space it actually gets (R4a).
 const tabBarHeight = 1
+
+// feedTabIndex is the Feed's position among the tabs, the Runs tab New builds first and
+// focuses at launch (R2). A cross-tab navigation to the Feed names it here rather than
+// searching for the tab by title, because the order is the root's own construction.
+const feedTabIndex = 0
 
 // readoutTick is the coarse cadence at which the root pulls the Budget Readout, the
 // discovered repositories and the store's last-revalidated time, so exhaustion and the
@@ -120,6 +130,18 @@ type Options struct {
 	// governor and travels the one write path exactly as every other write does.
 	WorkflowFetch workflows.Fetch
 	WorkflowOps   workflows.Toggler
+	// WorkflowScope is the set of repositories the Workflows tab covers, all-repos or
+	// this-repo, and WorkflowCurrentRepo resolves what this-repo means (workflow-management
+	// R0, settings R19). The zero scope is all-repos, the default R0 fixes, and it is what
+	// main.go states: the setting that selects the other is settings R19's and is not built.
+	// The resolver is wired regardless, so the scope is chosen once, here, at construction.
+	//
+	// Making it changeable while running needs two things this does not have: a setter on the
+	// tab, and a reset of the held list when the scope changes, because the tab merges each
+	// repository's Workflows as they arrive and a narrowed scope never removes the rows a
+	// wider one left behind. Both belong with settings R19, which is what will call them.
+	WorkflowScope       workflows.Scope
+	WorkflowCurrentRepo func() (domain.RepoID, bool)
 	// The dispatch form the Workflows tab opens over a Workflow reads its YAML at a ref and the
 	// repository's environments (DispatchFetch), triggers the workflow_dispatch through the shared
 	// ops engine (DispatchOps), and remembers last-used inputs in the local-store (DispatchStore)
@@ -207,6 +229,8 @@ func New(opts Options) Model {
 		Fetch:         opts.WorkflowFetch,
 		Repos:         opts.Repos,
 		Ops:           opts.WorkflowOps,
+		Scope:         opts.WorkflowScope,
+		CurrentRepo:   opts.WorkflowCurrentRepo,
 		DispatchFetch: opts.DispatchFetch,
 		DispatchOps:   opts.DispatchOps,
 		DispatchStore: opts.DispatchStore,
@@ -312,6 +336,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, rcmd := next.pullReadout()
 		return next, tea.Batch(cmd, rcmd, next.listen())
 
+	case workflows.NavigateToRuns:
+		return m.showRuns(msg)
+
 	case schedulerClosedMsg:
 		return m, tea.Quit
 
@@ -379,6 +406,19 @@ func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // that must survive input capture.
 func isInterrupt(k tea.KeyPressMsg) bool {
 	return k.Mod&tea.ModCtrl != 0 && (k.Code == 'c' || k.Code == 'C')
+}
+
+// showRuns carries the Workflows tab's navigation across to the Feed (workflow-management
+// R13, AC4): it moves focus to the Feed and delivers the filter that Workflow's Runs are
+// found under. The tab named the destination and asked; both halves happen here, because a
+// tab may import a pane but never another tab, so no tab can focus or narrow another
+// (ADR-0011's tab contract).
+//
+// The filter travels the ordinary broadcast, the one route every non-key message takes, and
+// only the Feed names its type (ADR-0015's type-visibility targeting), so the root needs no
+// handle on the Feed beyond the tab interface the other three routes use.
+func (m Model) showRuns(req workflows.NavigateToRuns) (tea.Model, tea.Cmd) {
+	return m.switchTab(feedTabIndex).broadcast(feed.ShowRuns(req.Filter))
 }
 
 // switchTab moves focus, wrapping for next and previous. The tab losing focus is told so

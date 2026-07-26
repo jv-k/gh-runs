@@ -8,7 +8,7 @@ interactions:
     - id: 0
       request:
         method: GET
-        url: https://api.github.com/repos/acme/alpha/actions/runs
+        url: https://api.github.com/repos/acme/alpha/actions/runs?per_page=100
       response:
         status: 200 OK
         code: 200
@@ -28,7 +28,7 @@ interactions:
     - id: 1
       request:
         method: GET
-        url: https://api.github.com/repos/acme/alpha/actions/runs
+        url: https://api.github.com/repos/acme/alpha/actions/runs?per_page=100
         headers:
             If-None-Match:
                 - '"alpha-v1"'
@@ -48,7 +48,7 @@ interactions:
     - id: 2
       request:
         method: GET
-        url: https://api.github.com/repos/acme/beta/actions/runs
+        url: https://api.github.com/repos/acme/beta/actions/runs?per_page=100
       response:
         status: 200 OK
         code: 200
@@ -67,7 +67,7 @@ interactions:
     - id: 3
       request:
         method: GET
-        url: https://api.github.com/repos/acme/beta/actions/runs
+        url: https://api.github.com/repos/acme/beta/actions/runs?per_page=100
         headers:
             If-None-Match:
                 - '"beta-v1"'

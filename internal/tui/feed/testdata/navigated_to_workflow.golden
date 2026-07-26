@@ -1,0 +1,4 @@
+[38;2;138;138;138mfilter workflow:9004  (/ edit, then esc clears)                                                     [m
+[1mREPOSITORY           WORKFLOW           STATUS      CONCLUSION      RUN ID      STARTED             [m
+[7mcli/cli             [m [7mOld Deploy        [m [7;38;2;138;138;138mcompleted  [m [7;38;2;255;95;95mfailure        [m [7m29516338001[m [7m2026-07-12T16:39:00Z[m
+[38;2;138;138;138m↓/↑ move  space select  / filter  r refresh  ? help  q quit[m  [38;2;138;138;138mStandard[m

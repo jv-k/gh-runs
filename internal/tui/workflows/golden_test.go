@@ -3,9 +3,11 @@ package workflows_test
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/sebdah/goldie/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
 )
@@ -39,6 +41,49 @@ func TestGoldenList(t *testing.T) {
 	m = send(m, "r") // populate the gate from the discovered repositories
 
 	goldie.New(t).Assert(t, "list", []byte(m.View()))
+}
+
+// TestGoldenThisRepoScope fixes R0's second code path: under this-repo the frame covers the
+// working directory's repository alone and states the scope it ran under, so a list that is
+// deliberately not the cross-repo rollup never reads as one that came up empty.
+func TestGoldenThisRepoScope(t *testing.T) {
+	m := scopedGolden(t, workflows.ScopeThisRepo, here(rid("acme", "infra")),
+		writable("cli", "cli"), writable("acme", "infra"))
+	m = fetched(m, workflows.RepoWorkflows{Repo: rid("acme", "infra"), Complete: true, Workflows: []domain.Workflow{
+		workflow(5001, "Lint", ".github/workflows/lint.yml", domain.StateActive, rid("acme", "infra")),
+		workflow(5002, "Old Nightly", ".github/workflows/nightly.yml", domain.StateDeleted, rid("acme", "infra")),
+	}})
+	m = send(m, "r")
+
+	goldie.New(t).Assert(t, "this_repo", []byte(m.View()))
+}
+
+// TestGoldenThisRepoFallback fixes [settings] R19's fallback: where the working directory is
+// no repository, this-repo falls back to all-repos and the frame says so, rather than painting
+// an empty view or interrupting with a picker.
+func TestGoldenThisRepoFallback(t *testing.T) {
+	m := scopedGolden(t, workflows.ScopeThisRepo, nowhere, writable("cli", "cli"))
+	m = fetched(m, workflows.RepoWorkflows{Repo: rid("cli", "cli"), Complete: true, Workflows: []domain.Workflow{
+		workflow(9001, "CI", ".github/workflows/ci.yml", domain.StateActive, rid("cli", "cli")),
+	}})
+	m = send(m, "r")
+
+	goldie.New(t).Assert(t, "this_repo_fallback", []byte(m.View()))
+}
+
+// scopedGolden builds a 100-column tab under one scope, with no Fetch and no Ops, so the frame
+// is rendered from held state alone.
+func scopedGolden(t *testing.T, scope workflows.Scope, current func() (domain.RepoID, bool), repos ...domain.Repo) workflows.Model {
+	t.Helper()
+	rr := append([]domain.Repo(nil), repos...)
+	m := workflows.New(workflows.Options{
+		Profile:     keys.Standard,
+		Repos:       func() []domain.Repo { return rr },
+		Scope:       scope,
+		CurrentRepo: current,
+	})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
+	return m
 }
 
 // TestGoldenToggleFailure fixes R7 and AC3: a rejected toggle surfaces the API's permission

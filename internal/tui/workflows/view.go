@@ -52,7 +52,7 @@ func (m Model) View() string {
 		return m.dispatch.View()
 	}
 	if len(m.workflows) == 0 && len(m.errs) == 0 {
-		return styleDim.Render("Workflows: press r to load the Workflows across your repositories.")
+		return styleDim.Render(m.loadPrompt())
 	}
 	var lines []string
 	lines = append(lines, m.summaryLine())
@@ -72,6 +72,18 @@ func (m Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
+// loadPrompt invites the refresh that loads the list, naming what that refresh will cover,
+// which is the scope's own set (R0): the whole discovered set under all-repos, or the working
+// directory's repository under this-repo. The key comes from the registry, so the line
+// advertises exactly what the tab matches (R7a).
+func (m Model) loadPrompt() string {
+	press := "Workflows: press " + m.profile.Refresh.Help().Key + " to load the Workflows "
+	if id, ok := m.thisRepo(); ok {
+		return press + "in " + repoName(id) + "."
+	}
+	return press + "across your repositories."
+}
+
 // summaryLine states the scope and the state tallies, leading with the deleted count when any
 // exist because a deleted Workflow's Runs are Orphaned Runs, the cruft this surface exists to
 // find (R11). It uses the API's state vocabulary and never the word Status (R4).
@@ -79,7 +91,7 @@ func (m Model) summaryLine() string {
 	active, disabled, deleted, other := m.stateCounts()
 	scope := strconv.Itoa(len(m.order)) + " repositories"
 	if len(m.order) == 1 {
-		scope = textsan.Sanitize(m.order[0].Owner + "/" + m.order[0].Name)
+		scope = repoName(m.order[0])
 	}
 	parts := []string{
 		styleTitle.Render("Workflows") + " " + styleDim.Render(scope),
@@ -93,10 +105,39 @@ func (m Model) summaryLine() string {
 		parts = append(parts, styleDim.Render(strconv.Itoa(other)+" other"))
 	}
 	line := strings.Join(parts, styleDim.Render("   "))
-	if label := m.incompleteLabel(); label != "" {
-		line += "\n" + styleDim.Render("  "+label)
+	for _, note := range m.notes() {
+		line += "\n" + styleDim.Render("  "+note)
 	}
 	return line
+}
+
+// notes are the qualifying lines under the summary: what scope the list ran under where that
+// is not the default, and where the list is not the whole story. They are counted by
+// listCapacity, so the frame and the row budget agree on how many lines the chrome took.
+func (m Model) notes() []string {
+	var out []string
+	if scope := m.scopeLabel(); scope != "" {
+		out = append(out, scope)
+	}
+	if label := m.incompleteLabel(); label != "" {
+		out = append(out, label)
+	}
+	return out
+}
+
+// scopeLabel states the scope the fan-out ran under, and is empty under all-repos: the
+// default nobody chose says nothing, so an all-repos frame is unchanged (R0). Under this-repo
+// it names the repository the working directory resolved to, and where it resolved to none it
+// states the fallback to all-repos, which [settings] R19 requires be said rather than
+// answered with an empty view or a picker.
+func (m Model) scopeLabel() string {
+	if m.scope != ScopeThisRepo {
+		return ""
+	}
+	if id, ok := m.thisRepo(); ok {
+		return "scope this-repo: " + repoName(id)
+	}
+	return "scope this-repo found no repository in this working directory, showing all-repos"
 }
 
 // stateCounts tallies the in-scope Workflows by state category, keeping the three disabled
@@ -188,7 +229,7 @@ func (m Model) listRow(r wfRow, cursor bool) string {
 	if cursor {
 		lead = styleCursor.Render("> ")
 	}
-	repo := textsan.Sanitize(r.repo.Owner + "/" + r.repo.Name)
+	repo := repoName(r.repo)
 	cells := []string{
 		pad(repo, repoW),
 		pad(textsan.Sanitize(r.wf.Name), m.nameWidth()),
@@ -238,6 +279,7 @@ func (m Model) hintLine() string {
 	tog := m.profile.ToggleWorkflow.Help()
 	dis := m.profile.Dispatch.Help()
 	return "  " + tog.Key + " " + tog.Desc + "   " + dis.Key + " " + dis.Desc +
+		"   " + m.profile.OpenDetail.Help().Key + " view Runs" +
 		"   " + m.profile.Refresh.Help().Key + " refresh"
 }
 
@@ -264,9 +306,7 @@ func (m Model) contentWidth() int {
 // a tiny terminal still pages.
 func (m Model) listCapacity() int {
 	chrome := 1 // summary
-	if m.incompleteLabel() != "" {
-		chrome++
-	}
+	chrome += len(m.notes())
 	if m.status != "" {
 		chrome++
 	}
@@ -294,6 +334,13 @@ func actionPast(op ops.Operation) string {
 		return "Enabled"
 	}
 	return "Disabled"
+}
+
+// repoName is a repository's owner/name, sanitised for paint. An owner and a name are
+// untrusted text an author on a fanned-out repository controls, so every rendering of one
+// goes through here rather than through four hand-built concatenations.
+func repoName(id domain.RepoID) string {
+	return textsan.Sanitize(id.Owner + "/" + id.Name)
 }
 
 // pad right-pads or truncates s to exactly w columns; lpad is unused here. Widths are rune

@@ -25,9 +25,13 @@ type recordingTab struct {
 	readouts int // count of governor.Readout broadcasts, a subset of data
 	active   bool
 	captures bool
+	// msgs is every message the root routed here, in order, so a test can assert on what
+	// arrived rather than only on how many did.
+	msgs []tea.Msg
 }
 
 func (t *recordingTab) Update(msg tea.Msg) (tab, tea.Cmd) {
+	t.msgs = append(t.msgs, msg)
 	switch v := msg.(type) {
 	case tea.KeyPressMsg:
 		t.keys = append(t.keys, v.String())
@@ -54,6 +58,8 @@ func press(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyTab}
 	case "shift+tab":
 		return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+	case "enter":
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "ctrl+c":
 		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	default:
