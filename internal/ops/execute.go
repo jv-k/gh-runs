@@ -264,6 +264,14 @@ func (o *Ops) executeDelete(ctx context.Context, plan Plan, emit progressFunc) (
 // logUnavailable is the Summary a deletion returns when it cannot take exclusive hold of
 // R29's record: zero DELETEs issued, the log named as the reason, and the same LogFailed
 // shape the CLI's exit code and the running surface already read (AC20).
+//
+// LogFailed is reused for both causes it has, an unwritable log and one another deletion
+// is holding, and for the second the surface's headline ("the deletion log failed") is
+// approximate: the correcting words are on the reason line directly below it, and the
+// counts, StoppedEarly and the exit code are all right either way. Splitting them needs a
+// second Summary field for a state nothing can currently reach, because the second
+// deletion caller does not exist yet (see the deleting gate in ops.go). Worth revisiting
+// when storage-reclamation wires its launcher and makes it real.
 func (o *Ops) logUnavailable(plan Plan, reason string) Summary {
 	return Summary{
 		Total:     plan.Total(),
