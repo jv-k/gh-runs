@@ -11,5 +11,5 @@
   Purge breaker threshold   [1;38;2;0;175;255m50[m
   Discovery refresh         [1;38;2;0;175;255m5 min[m
 
-[38;2;138;138;138mLeft out of the dashboard entirely. They are never contacted.[m
+[38;2;138;138;138mKept out of discovery and never polled. Naming one with -R still works.[m
 [38;2;138;138;138menter commit   esc cancel[m

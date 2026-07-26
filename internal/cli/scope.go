@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
@@ -39,6 +38,26 @@ type scope struct {
 //     one (gh's rule, so R2 parity holds).
 //  5. Otherwise a fan-out across the discovered set, rather than gh's dead end
 //     (R22): no repository means all repositories, not an error.
+//
+// Settings R7's exclude list deliberately reaches none of these branches. R7 closes
+// three surfaces by name, discovery, the Feed and all polling, and every branch here is
+// an operator naming a repository in the present tense: -R and GH_REPO spell it, and
+// the working directory is what gh's precedence and R22's MUST both fix as "that
+// repository". Settings R4 puts flags and environment above the config file, so a
+// config list refusing a flag would invert the precedence that document fixes.
+//
+// Two earlier attempts here were wrong in opposite directions, and tests now pin both.
+// Refusing an excluded -R inverted R4 and, together with the working-directory branch,
+// left no path in the tool that could reach an excluded repository at all, which is the
+// wrong end state: the reason to exclude is polling cost, so the excluded set is the
+// noisiest repositories, which are precisely a Purge's targets. Falling an excluded
+// working directory through to the fan-out broke R22's MUST and, because delete uses
+// this scope's repositories without inspecting whether it fanned out, silently rescoped
+// `gh runs delete --all --yes` from one repository to the whole account.
+//
+// The exclusion is still visible here, in the fan-out set alone: Discovered is
+// discovery's poll set, which the exclusion has already been applied to. That is R7's
+// third surface and the only one this function owns.
 func resolveScope(deps Deps, f *listFlags) (scope, error) {
 	if host, ok := deps.Getenv("GH_HOST"); ok && host != "" {
 		if !strings.EqualFold(host, hostGitHub) {
@@ -51,18 +70,12 @@ func resolveScope(deps Deps, f *listFlags) (scope, error) {
 		if err != nil {
 			return scope{}, err
 		}
-		if excluded(deps, id) {
-			return scope{}, excludedRepo(id)
-		}
 		return scope{repos: []domain.RepoID{id}}, nil
 	}
 	if ghRepo, ok := deps.Getenv("GH_REPO"); ok && ghRepo != "" {
 		id, err := parseRepoArg(ghRepo)
 		if err != nil {
 			return scope{}, err
-		}
-		if excluded(deps, id) {
-			return scope{}, excludedRepo(id)
 		}
 		return scope{repos: []domain.RepoID{id}}, nil
 	}
@@ -72,36 +85,14 @@ func resolveScope(deps Deps, f *listFlags) (scope, error) {
 	}
 
 	if deps.Current != nil {
-		if id, err := deps.Current(); err == nil && !excluded(deps, id) {
+		if id, err := deps.Current(); err == nil {
 			return scope{repos: []domain.RepoID{id}}, nil
 		}
 		// A resolver error means the tool was not launched inside a repository (or
 		// its remote is not recognised). That is R22's fan-out trigger, not a
 		// failure: no repository means all repositories.
-		//
-		// An excluded working directory takes the same branch, mirroring discovery's
-		// fast path (settings R7): being launched inside a repository is not an
-		// explicit request for it, so it is not refused either. The fan-out set has
-		// the exclusion applied already, so the account is listed around the hole.
 	}
 	return fanOutScope(deps)
-}
-
-// excluded reports whether id is on settings R7's exclude list, which main.go fills
-// from the loaded config. The list is small, roughly ten entries at reference scale,
-// so a scan beats carrying a set through Deps.
-func excluded(deps Deps, id domain.RepoID) bool {
-	return slices.Contains(deps.Exclude, id)
-}
-
-// excludedRepo is the refusal for a repository the operator named explicitly and also
-// excluded (settings R7). It states which repository and which setting, and how to lift
-// it, because the operator has contradicted themselves and the useful answer names both
-// halves rather than only the one that lost.
-func excludedRepo(id domain.RepoID) error {
-	return fmt.Errorf(
-		"repository %s/%s is in your config's exclude list; remove it from exclude to operate on it",
-		id.Owner, id.Name)
 }
 
 // fanOutScope reads the discovered set through the injected function (cli-surface

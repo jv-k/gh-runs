@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jv-k/gh-runs/v2/internal/discovery"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 )
 
@@ -185,15 +186,40 @@ func TestExclusionIsReversibleOnAWarmCache(t *testing.T) {
 	// is what makes the caller spend a pass and bring the repository back. Without the
 	// staleness check the document still holds beta and gamma, Reload would answer two,
 	// and alpha would be gone until the cache directory was cleared.
+	// The launch is driven exactly as every caller drives it, "if Reload reports nothing
+	// then Pass", so a Reload that wrongly answered warm would skip the pass and leave
+	// the final assertion to catch it. Calling Pass unconditionally would make that
+	// assertion unfailable.
 	third := h.relaunch()
-	if n := third.Reload(); n != 0 {
-		t.Errorf("Reload after the exclude list changed back = %d, want 0", n)
-	}
-	if err := third.Pass(ctx, nil); err != nil {
-		t.Fatalf("third Pass: %v", err)
+	if n := third.Reload(); n == 0 {
+		if err := third.Pass(ctx, nil); err != nil {
+			t.Fatalf("third Pass: %v", err)
+		}
 	}
 	if _, ok := recordsByID(third)["github.com/jv-k/alpha"]; !ok {
 		t.Error("removing the exclusion did not bring the repository back; the setting is a one-way door")
+	}
+}
+
+// TestAbsentMarkerReloadsWarmForAnExistingStore pins the upgrade path. A store written
+// before the exclude marker existed carries no marker, and treating that as a mismatch
+// would make every existing user pay a re-enumeration on first launch of this version.
+// An absent marker matches an empty exclude list, which is what an existing user has.
+func TestAbsentMarkerReloadsWarmForAnExistingStore(t *testing.T) {
+	dir := t.TempDir()
+
+	// A store as an older version left it: the results document alone, no marker.
+	older := newDocStore(t, dir)
+	older.SaveDoc("discovery", []discovery.Record{{
+		Host: "github.com", Owner: "jv-k", Name: "alpha", HasRuns: true, Known: true,
+	}})
+
+	h := newHarness(t, "exclude_reversal", dir)
+	if n := h.disc.Reload(); n != 1 {
+		t.Fatalf("Reload over a marker-less store = %d, want 1: an upgrade must not go cold", n)
+	}
+	if h.counting.count() != 0 {
+		t.Errorf("the upgrade reload issued %d requests, want 0", h.counting.count())
 	}
 }
 

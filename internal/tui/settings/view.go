@@ -195,7 +195,7 @@ func (m Model) description(r row) string {
 	case rowStorageScope:
 		return "Which repositories the Storage tab covers."
 	case rowExclude:
-		return "Left out of the dashboard entirely. They are never contacted."
+		return "Kept out of discovery and never polled. Naming one with -R still works."
 	case rowConfirmThreshold:
 		return "Deletions at or above this many make you type the count."
 	case rowBreakerFailures:

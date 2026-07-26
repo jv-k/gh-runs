@@ -260,6 +260,39 @@ func TestSaveFillsAnExistingEmptyListKey(t *testing.T) {
 	}
 }
 
+// TestSaveKeepsTheCommentOnAHostQualifiedEntry pins R17's "MUST NOT discard comments"
+// for an entry written in the long form. The item nodes are matched by the identity
+// they parse to, not by their literal text, because the file may spell an entry
+// github.com/OWNER/REPO while the marshaller writes OWNER/REPO. Matching on text meant
+// a long-form entry never found its own node, so it was rebuilt from scratch and its
+// comment went with it. TestExcludeReadFromFile documents the long form as supported
+// input, so this was a supported spelling silently losing an operator's note.
+func TestSaveKeepsTheCommentOnAHostQualifiedEntry(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "exclude:\n  - github.com/jv-k/noisy # too chatty\nbudget: normal\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	prev := baseConfig()
+	prev.Exclude = []domain.RepoID{gh("jv-k", "noisy")}
+	next := prev
+	next.Exclude = []domain.RepoID{gh("jv-k", "noisy"), gh("acme", "vendor")}
+
+	if err := config.Save(env, prev, next); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got := readSaved(t, dir)
+	if !strings.Contains(got, "too chatty") {
+		t.Errorf("Save discarded the comment on a host-qualified entry (R17):\n%s", got)
+	}
+	if !strings.Contains(got, "- acme/vendor") {
+		t.Errorf("saved config is missing the added entry:\n%s", got)
+	}
+	cfg, _ := config.Load(env, config.Flags{})
+	if got := ids(cfg.Exclude); !slices.Equal(got, []string{"github.com/jv-k/noisy", "github.com/acme/vendor"}) {
+		t.Errorf("Exclude after round-trip = %v", got)
+	}
+}
+
 // TestSaveClearsARepoListToAnEmptyKey pins the other direction of R17: emptying a list
 // in the view writes an empty sequence rather than leaving the old entries in the file,
 // and the next Load reads an empty list back.

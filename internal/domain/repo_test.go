@@ -89,3 +89,44 @@ func TestRepoCapabilityNeverUnknown(t *testing.T) {
 		t.Fatalf("Capability() returned CapabilityUnknown; it must resolve to a known value")
 	}
 }
+
+// TestParseRepoRefShapesAndWhitespace pins ParseRepoRef's contract, including the one
+// behaviour that differs from the private copy it replaced in cli: surrounding
+// whitespace is trimmed. A YAML list is why, since an entry's leading space is the
+// file's formatting and not the operator's intent, and a flag rejecting what the config
+// file accepts would be exactly the drift one shape home exists to prevent. Whitespace
+// inside a segment is untouched and still fails the charset check.
+func TestParseRepoRefShapesAndWhitespace(t *testing.T) {
+	for _, tc := range []struct {
+		ref  string
+		want string // "" means the parse must fail
+	}{
+		{"o/r", "github.com/o/r"},
+		{"github.com/o/r", "github.com/o/r"},
+		{"  o/r  ", "github.com/o/r"}, // trimmed: the YAML-entry case
+		{"\to/r\n", "github.com/o/r"}, // any surrounding whitespace, not just spaces
+		{"o / r", ""},                 // inner whitespace is a charset failure, not trimmed
+		{"o", ""},                     // too few segments
+		{"a/b/c/d", ""},               // too many
+		{"o/", ""},                    // empty name
+		{"/r", ""},                    // empty owner
+		{"ghe.example.com/o/r", ""},   // an unsupported host
+		{"o/..", ""},                  // a traversal segment
+	} {
+		t.Run(tc.ref, func(t *testing.T) {
+			id, err := domain.ParseRepoRef(tc.ref)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("ParseRepoRef(%q) = %v, want an error", tc.ref, id)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseRepoRef(%q): %v", tc.ref, err)
+			}
+			if got := id.String(); got != tc.want {
+				t.Errorf("ParseRepoRef(%q) = %q, want %q", tc.ref, got, tc.want)
+			}
+		})
+	}
+}

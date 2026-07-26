@@ -44,6 +44,13 @@ func NewRepoID(host, owner, name string) (RepoID, error) {
 // R7's exclude list. Two copies of this switch could drift into accepting different
 // spellings on the flag and in the config file, which is the same class of hole the
 // single validation home closes for the charset.
+//
+// Surrounding whitespace is trimmed, so `-R " o/r"` and a config entry indented past
+// its dash both resolve. A YAML list is the reason: an entry's leading space is the
+// file's formatting rather than the operator's intent, and a flag that rejected what
+// the config file accepted would be the drift this function exists to prevent. Nothing
+// inside the value is trimmed, so a segment carrying a space still fails the charset
+// check in NewRepoID.
 func ParseRepoRef(ref string) (RepoID, error) {
 	parts := strings.Split(strings.TrimSpace(ref), "/")
 	var host, owner, name string

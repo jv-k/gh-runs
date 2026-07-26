@@ -781,12 +781,24 @@ func setScalar(node *yaml.Node, value any) {
 // differently inside a list than beside a key. An empty list writes an empty flow
 // sequence, so clearing a list leaves a key that reads back as empty rather than null.
 func setSequence(node *yaml.Node, values []string) {
+	// Items are matched by the identity they parse to, never by their literal text. The
+	// file may spell an entry github.com/OWNER/REPO where this writes OWNER/REPO, and
+	// both name the same repository (ADR-0009), so matching on text meant a long-form
+	// entry never found its own node: it was rebuilt from scratch and its comment went
+	// with it, which R17 forbids. An item that does not parse keeps its literal text as
+	// its key, so it can still be matched by an equal literal and is otherwise dropped
+	// like any entry the list no longer carries.
 	kept := make(map[string]*yaml.Node, len(node.Content))
 	if node.Kind == yaml.SequenceNode {
 		for _, item := range node.Content {
-			if item.Kind == yaml.ScalarNode {
-				kept[item.Value] = item
+			if item.Kind != yaml.ScalarNode {
+				continue
 			}
+			key := item.Value
+			if id, err := repoRefKey(item.Value); err == nil {
+				key = id
+			}
+			kept[key] = item
 		}
 	}
 	node.Kind = yaml.SequenceNode
@@ -798,12 +810,30 @@ func setSequence(node *yaml.Node, values []string) {
 	}
 	node.Content = make([]*yaml.Node, 0, len(values))
 	for _, v := range values {
-		if item, ok := kept[v]; ok {
+		key := v
+		if id, err := repoRefKey(v); err == nil {
+			key = id
+		}
+		if item, ok := kept[key]; ok {
+			// The node is kept as it stands, comment and spelling both, so an entry the
+			// operator wrote in the long form is not silently rewritten to the short one
+			// (R17: key order and comments survive, and so does what they annotate).
 			node.Content = append(node.Content, item)
 			continue
 		}
 		node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v})
 	}
+}
+
+// repoRefKey renders a repository entry as its canonical host-qualified key, or
+// returns an error when the entry is not one. setSequence matches item nodes by it, so
+// the two spellings of the same repository are one key.
+func repoRefKey(ref string) (string, error) {
+	id, err := domain.ParseRepoRef(ref)
+	if err != nil {
+		return "", err
+	}
+	return id.String(), nil
 }
 
 // writeFileAtomic writes data to path by way of a temporary file in the same directory,

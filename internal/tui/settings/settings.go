@@ -224,14 +224,17 @@ func (m Model) handleNavKey(k tea.KeyPressMsg) Model {
 	switch {
 	case key.Matches(k, m.profile.CloseDetail): // esc: close the pane
 		return m.Close()
+	// Moving off a row clears the last commit's rejected-entry note, which belonged to
+	// that row's edit. Leaving it up while the cursor sits on the Budget row would
+	// attach a complaint about a repository name to a setting that has none.
 	case key.Matches(k, m.profile.RowUp):
-		m.cursor = clampRow(m.cursor - 1)
+		m.cursor, m.editErr = clampRow(m.cursor-1), ""
 	case key.Matches(k, m.profile.RowDown):
-		m.cursor = clampRow(m.cursor + 1)
+		m.cursor, m.editErr = clampRow(m.cursor+1), ""
 	case key.Matches(k, m.profile.FirstRow):
-		m.cursor = 0
+		m.cursor, m.editErr = 0, ""
 	case key.Matches(k, m.profile.LastRow):
-		m.cursor = rowCount - 1
+		m.cursor, m.editErr = rowCount-1, ""
 	case key.Matches(k, m.profile.ToggleSelect): // space: cycle a selector
 		if m.cursor.isSelector() {
 			m = m.applyCycle()

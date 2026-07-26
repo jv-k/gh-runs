@@ -285,6 +285,23 @@ func TestSearchFindsAndMovesBetweenMatches(t *testing.T) {
 	}
 }
 
+// TestSearchAcceptsASpace pins that a multi-word query can be typed at all. The search
+// buffer took a key's String(), and Bubble Tea's String() names the space bar "space"
+// rather than spelling it, so the length-one test refused the one character that
+// separates words: searching for "error: connection refused" was impossible and only
+// single tokens worked. Text is the characters a press actually produced, which is the
+// field a text buffer wants.
+func TestSearchAcceptsASpace(t *testing.T) {
+	raw := []byte(tsA + "error: connection refused\n" + tsA + "connection ok\n")
+	m := loaded(t, raw)
+	m = m.key("/").typeText("connection refused")
+	m, _, _ = m.HandleKey(press("enter"))
+
+	if len(m.matches) != 1 {
+		t.Fatalf("a two-word search found %d matches, want 1; the space never reached the buffer", len(m.matches))
+	}
+}
+
 // TestLongLineWraps pins R22 and AC11: a line wider than the pane wraps rather than being
 // truncated, so no character is hidden. The wrapped rows together carry every character of
 // the line.
