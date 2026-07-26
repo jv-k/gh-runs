@@ -71,6 +71,14 @@ type ReposDiscovered []domain.Repo
 // broadcast the root pulls from the store on its coarse tick.
 type RevalidatedAt time.Time
 
+// ShowRuns is a filter another surface asked the Feed to apply, stated in the filter
+// input's own syntax (R23). The Workflows tab's navigation from a deleted Workflow to its
+// Orphaned Runs arrives this way (workflow-management R13, AC4): that tab may not import
+// this one, so it asks the root and the root broadcasts this. It goes through the parser a
+// typed filter goes through and lands in the same input, so an arriving filter and a typed
+// one are one code path and one displayed state.
+type ShowRuns string
+
 // Options carries the Feed's construction seams. The root fills them: the profile is
 // the resolved keybinding set (R7a), and SetViewport publishes the visible
 // repositories to the scheduler's medium tier (R5, ADR-0021), nil in a golden test.
@@ -379,6 +387,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case RevalidatedAt:
 		m.asOf = time.Time(msg)
 		return m, nil
+
+	case ShowRuns:
+		// Applied through the filter input, so the held filter, the text the operator can
+		// edit and the query published server-side cannot disagree (R22, R23). A query this
+		// Feed's own parser rejects is dropped whole, leaving the last good filter standing
+		// exactly as a half-typed one does.
+		if _, err := parseFilterQuery(string(msg)); err != nil {
+			return m, nil
+		}
+		m.filterInput.SetValue(string(msg))
+		m.applyFilterFromInput()
+		return m, m.publishFilter()
 
 	case governor.Readout:
 		m.readout = msg

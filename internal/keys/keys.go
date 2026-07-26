@@ -98,6 +98,14 @@
 // modal's abort, but the two never fire in the same context: the modal captures input while
 // a search is not open, exactly as enter and esc are shared across the detail and the modal.
 //
+// The Workflows tab's navigation to a Workflow's Runs mints no binding: it reuses OpenDetail
+// (enter), the registry's drill-down key (workflow-management R13, AC4). The log view already
+// reuses that key to open a Job's log from a row, and opening a Workflow's Runs from a
+// Workflow row is the same motion, so a new literal would buy nothing and spend one of the
+// few unclaimed keys left. It is the tab's key while the dispatch form is closed and the
+// form's while it is open, exactly as x is shared between opening and submitting that form:
+// the pane captures input while open, so the two never fire at once.
+//
 // Approve and ApprovalsFilter are the approvals stage (BUILD-ORDER stage 12) added the same
 // way: the Feed keys that act on a Run blocked on a human decision, and that apply the saved
 // filter behind the badge (approvals R9, R11, R12). The canon names no literal for either, so
