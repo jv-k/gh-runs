@@ -1,0 +1,48 @@
+---
+version: 2
+# One Run named by id, then the 201 a re-run returns: an Attempt was added to the Run that
+# already exists, and no Run was created (run-lifecycle R8). Both re-run endpoints are
+# taped, because re-run and re-run-failed-jobs are distinct operations against distinct
+# endpoints (R13) and only the URL tells them apart. The cancel endpoints are absent, so a
+# command that sent the wrong verb would find nothing to play.
+#
+# The debug-logging opt-in is not in these URLs by design: enable_debug_logging rides in
+# the request body (R14, AC14), which the matcher does not compare, so the test that pins
+# it reads the body the transport recorded rather than which interaction was matched.
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/runs/31
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"id":31,"status":"completed","conclusion":"failure","name":"CI","run_attempt":1,"run_started_at":"2026-07-22T10:00:00Z","created_at":"2026-07-22T10:00:00Z"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            Etag: ['"rerun-run-31"']
+            X-Ratelimit-Remaining: ["4990"]
+    - id: 1
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/31/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: "{}"
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4989"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 2
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/31/rerun-failed-jobs
+      response:
+        status: 201 Created
+        code: 201
+        body: "{}"
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4988"]
+            X-Ratelimit-Reset: ["1789000000"]

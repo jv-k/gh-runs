@@ -1,0 +1,44 @@
+---
+version: 2
+# A match-all cancel over o/r: one crawl page of two Runs still going (no rel="next", so
+# the crawl stops), then the accepted 202 each cancel returns. A 202 says the request was
+# accepted, not that the Run was cancelled (run-lifecycle R4), so the body carries no
+# conclusion and there is nothing here for a surface to read one from. The same cassette
+# serves the --dry-run test, which consumes only the crawl and issues no POST.
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/runs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"workflow_runs":[{"id":11,"status":"in_progress","conclusion":null,"name":"CI","run_started_at":"2026-07-22T10:00:00Z","created_at":"2026-07-22T10:00:00Z"},{"id":12,"status":"queued","conclusion":null,"name":"Release","run_started_at":"2026-07-22T09:00:00Z","created_at":"2026-07-22T09:00:00Z"}]}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            Etag: ['"cancel-crawl-1"']
+            X-Ratelimit-Remaining: ["4990"]
+    - id: 1
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/11/cancel
+      response:
+        status: 202 Accepted
+        code: 202
+        body: "{}"
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4989"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 2
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/12/cancel
+      response:
+        status: 202 Accepted
+        code: 202
+        body: "{}"
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4988"]
+            X-Ratelimit-Reset: ["1789000000"]

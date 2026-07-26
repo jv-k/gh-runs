@@ -121,6 +121,35 @@ func firstPath(repo domain.RepoID, query url.Values, limit int) string {
 	return fmt.Sprintf("repos/%s/%s/actions/runs?%s", repo.Owner, repo.Name, q.Encode())
 }
 
+// getRun reads one Run by its own endpoint, the request a Run named by id costs. It is
+// the read half of `gh runs cancel <id>` and `gh runs rerun <id>`, and it goes through the
+// same injected transport every other request does, so it replays from a cassette with no
+// live network (cli-surface R19). The caller owns the identity stamp: this decodes the
+// payload, which does not carry the owning repository.
+func getRun(client Requester, path string) (domain.Run, error) {
+	resp, err := client.Request(http.MethodGet, path, nil)
+	if err != nil {
+		return domain.Run{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return domain.Run{}, fmt.Errorf("read %s: no such Run in this repository", path)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return domain.Run{}, fmt.Errorf("read %s: status %d", path, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return domain.Run{}, fmt.Errorf("read %s: read body: %w", path, err)
+	}
+	var run domain.Run
+	if err := json.Unmarshal(body, &run); err != nil {
+		return domain.Run{}, fmt.Errorf("read %s: decode: %w", path, err)
+	}
+	return run, nil
+}
+
 // getRunsPage issues one listing request through the chain and returns its Runs
 // and the next page's URL, empty when the listing is exhausted (cli-surface R19).
 // The caller owns the body and this closes it. A conditional request the store

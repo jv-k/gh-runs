@@ -1,0 +1,44 @@
+---
+version: 2
+# A cancel the API refuses with 409: the Run is not cancelable (run-lifecycle R5). It is a
+# fact about the Run's Status rather than an error, so it is recorded as a skip that does
+# not advance the breaker (R20, AC12), and the recorded reason names force-cancel as the
+# escalation (R5, AC6). The second Run cancels cleanly, so the pass is a mixed one and the
+# 409 cannot be mistaken for the whole outcome.
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/runs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"workflow_runs":[{"id":21,"status":"in_progress","conclusion":null,"name":"CI","run_started_at":"2026-07-22T10:00:00Z","created_at":"2026-07-22T10:00:00Z"},{"id":22,"status":"in_progress","conclusion":null,"name":"Release","run_started_at":"2026-07-22T09:00:00Z","created_at":"2026-07-22T09:00:00Z"}]}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            Etag: ['"conflict-crawl-1"']
+            X-Ratelimit-Remaining: ["4990"]
+    - id: 1
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/21/cancel
+      response:
+        status: 409 Conflict
+        code: 409
+        body: '{"message":"Cannot cancel a workflow run that is completed.","documentation_url":"https://docs.github.com/rest"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4989"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 2
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/22/cancel
+      response:
+        status: 202 Accepted
+        code: 202
+        body: "{}"
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4988"]
+            X-Ratelimit-Reset: ["1789000000"]

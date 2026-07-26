@@ -92,6 +92,18 @@
 
 **R27.** `--all-repos` MUST work on `delete` with the same semantics as on `list`, so a cross-repository Purge is expressible non-interactively. The rails are the existing ones: `--yes` (R11), `--all` for match-all (R26), `--dry-run`'s per-repository rows (R10), and the deletion log ([purge](../purge/requirements.md) R29). The widest expressible command, `gh runs delete --all-repos --all --yes`, is three explicit opt-ins, and no default or working directory reaches it by accident.
 
+### The lifecycle operations, non-interactively
+
+**R28.** `gh runs cancel` and `gh runs rerun` MUST be the non-interactive form of [run-lifecycle](../run-lifecycle/requirements.md)'s four operations, and MUST accept gh's own flags with gh's own names and semantics (verified, gh 2.96.0): `gh run cancel [<run-id>] --force`, and `gh run rerun [<run-id>] --failed -d/--debug`. `--force` MUST send force-cancel, which is a distinct operation against a distinct endpoint and MUST NOT be substituted for plain cancel ([run-lifecycle](../run-lifecycle/requirements.md) R6). `--failed` MUST send re-run failed Jobs (R13), and `-d/--debug` MUST send `enable_debug_logging`, defaulting to off (R14).
+
+**gh's `-j/--job` is the one flag not carried, and it is a deferral rather than a divergence.** It re-runs a single Job against a Job endpoint, which is a fifth operation the write engine does not have ([#106](https://github.com/jv-k/gh-runs/issues/106)). Accepting the flag and re-running the whole Run instead would be the class of dishonesty R16 forbids about counts, applied to a write.
+
+**R29.** Both commands MUST take the same filter axes, scope flags, `--all`, `--dry-run` and `--yes` that `delete` takes, and MUST resolve their affected set through the same crawl and the same `Plan`/`Confirm`/`Execute` chain (R10, R20, R26, [ADR-0019](../../adr/0019-ops-plan-and-confirmed.md)). `--yes` is required on every shape but one: re-running Runs named by id, which [run-lifecycle](../run-lifecycle/requirements.md) R18 exempts from confirmation. Every cancel takes it, which is R18's other half, and a filter-driven re-run takes it whatever it turns out to match, because a filter is a bulk shape and R17's bulk re-run still confirms.
+
+**A Run named by id MUST resolve against exactly one repository.** Under fan-out a bare id belongs to no repository in particular, so the command MUST refuse and name the flag that resolves it rather than guess at a discovered repository. gh imposes the same rule. Naming Run IDs and passing a filter in one invocation MUST also be refused, rather than resolved by a precedence rule: an id is an exact set and a filter is a query, and which one wins must not be left to a rule nobody reads on a command that mutates Runs.
+
+**Neither command reports an outcome it has not observed.** A cancel's summary states that cancellation was requested, never that a Run was cancelled, because a 202 is an accepted request ([run-lifecycle](../run-lifecycle/requirements.md) R4). A re-run's states that a re-run was requested, because a 201 proves an Attempt was added and nothing about how it ends (R8). R17's resume line is a Purge's alone: a Purge's filter is its job state, but re-running a cancel or a re-run over the same filter would act twice on the Runs it already acted on.
+
 ## Acceptance criteria
 
 **AC1: The TUI needs a TTY.** `gh runs` with no arguments, on a TTY, opens the TUI. The same command with stdout redirected to a file exits non-zero with a diagnostic and writes no escape sequences.
@@ -135,6 +147,8 @@
 **AC20: Purge exit codes.** Against R19's fixtures, a Purge whose deletes all succeed exits 0. A Purge with any real failure (a 403 among the deletes) exits 1. A Purge whose filter matches zero Runs exits 0 and prints a summary saying so.
 
 **AC21: `-t` runs gh's pure funcs and names the dropped four.** `gh runs list --json createdAt -t '{{range .}}{{timeago .createdAt}}{{"\n"}}{{end}}'` renders gh's wording (`3 hours ago`), computed off the injected clock. `{{truncate 10 .displayTitle}}` shortens to display width with gh's `"..."` ellipsis. A template calling `{{color "green" .status}}`, `autocolor`, `tablerow` or `tablerender` fails with an error naming the func as unsupported, not the standard library's bare `function "color" not defined`. ([ADR-0023](../../adr/0023-the-template-function-subset.md))
+
+**AC22: the lifecycle commands act, and name what they asked for.** Against R19's fixtures, `gh runs cancel --all --yes` issues one cancel per crawled Run and exits 0, and its summary reports a requested cancellation with no `cancelled` in it. `--force` issues force-cancel against its own endpoint and no plain cancel. A 409 is reported as a skip whose reason states the Run is not cancelable and names force-cancel, and the command still exits 0. `gh runs rerun <id>` issues one re-run with no `--yes` and no `enable_debug_logging`. `--debug` sends it. `--failed` addresses the re-run-failed-jobs endpoint and not the re-run one. `gh runs rerun --all` without `--yes` exits non-zero having issued zero requests. A re-run whose Run 404s exits 1 and a cancel of the same Run exits 0 with a skip. No invocation writes a line to the deletion log.
 
 ## Constraints
 

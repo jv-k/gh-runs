@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -59,17 +60,67 @@ type countingRT struct {
 	n    int
 	del  int
 	urls []string
+	// posts is every POST that reached the wire, path and body together. The lifecycle
+	// commands are POSTs, and one of them turns on a request-body flag no URL carries:
+	// run-lifecycle AC14 asserts that a re-run with the debug option sends
+	// enable_debug_logging and that the default path does not, which is a claim about
+	// bytes the cassette matcher never compares.
+	posts []wireCall
+}
+
+// wireCall is one write the transport saw: where it went and what it carried.
+type wireCall struct {
+	url  string
+	body string
 }
 
 func (c *countingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	body := ""
+	if req.Method == http.MethodPost && req.Body != nil {
+		raw, err := io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		body = string(raw)
+		// The body is consumed by reading it, so the request is handed on with a fresh
+		// reader over the same bytes. Anything less would send an empty body downstream and
+		// the observation would have changed what it observed.
+		req.Body = io.NopCloser(bytes.NewReader(raw))
+	}
 	c.mu.Lock()
 	c.n++
 	if req.Method == http.MethodDelete {
 		c.del++
 	}
 	c.urls = append(c.urls, req.URL.String())
+	if req.Method == http.MethodPost {
+		c.posts = append(c.posts, wireCall{url: req.URL.String(), body: body})
+	}
 	c.mu.Unlock()
 	return c.base.RoundTrip(req)
+}
+
+// writes returns every POST that reached the wire, so a lifecycle test proves which
+// endpoint was addressed and what the body carried.
+func (c *countingRT) writes() []wireCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]wireCall(nil), c.posts...)
+}
+
+// postsMatching counts the POSTs whose URL ends in suffix, which is how a test tells
+// cancel from force-cancel and rerun from rerun-failed-jobs: the four are distinct
+// endpoints and the URL is the only thing that says which was asked for (run-lifecycle
+// R6, R13).
+func (c *countingRT) postsMatching(suffix string) int {
+	n := 0
+	for _, w := range c.writes() {
+		if strings.HasSuffix(w.url, suffix) {
+			n++
+		}
+	}
+	return n
 }
 
 func (c *countingRT) count() int {

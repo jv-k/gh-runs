@@ -3,8 +3,10 @@
 // up together end to end (BUILD-ORDER stage 6). It is a drop-in superset of
 // gh run's flags (ADR-0008), so gh run list to gh runs list is muscle memory,
 // and it fans out across the discovered repositories where gh would fail
-// (ADR-0022). This stage builds the read half, the list command; the write flags
-// wait for the Purge at stage 9 (cli-surface R10, BUILD-ORDER).
+// (ADR-0022). It carries four commands: list is the read half, and delete, cancel
+// and rerun are the writes, each resolving its affected set through one crawl and
+// executing it through ops's one Plan/Confirm/Execute chain (cli-surface R10, R11,
+// R20, R28, R29, ADR-0019).
 //
 // The flags are a thin adapter over internal/filter, never a second filter
 // implementation: a value is validated by the same code with the same message
@@ -170,5 +172,11 @@ func newRootCmd(deps Deps) *cobra.Command {
 	}
 	root.AddCommand(newListCmd(deps))
 	root.AddCommand(newDeleteCmd(deps))
+	// The four lifecycle operations, the non-interactive form run-lifecycle's Related
+	// section names and ADR-0008 anticipates. cancel carries --force for the distinct
+	// force-cancel endpoint (run-lifecycle R6) and rerun carries --failed and --debug
+	// (R13, R14), which are gh's own spellings on `gh run cancel` and `gh run rerun`.
+	root.AddCommand(newCancelCmd(deps))
+	root.AddCommand(newRerunCmd(deps))
 	return root
 }

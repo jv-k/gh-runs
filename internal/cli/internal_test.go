@@ -66,7 +66,7 @@ func TestPrintSummarySanitisesControlBytes(t *testing.T) {
 			{Reason: "HTTP 403: \x1b[31mForbidden\x1b[0m\x1b[2K", Count: 1},
 		},
 	}
-	printSummary(deps, sum)
+	printSummary(deps, ops.OpDelete, sum)
 	got := out.String()
 	if strings.ContainsRune(got, 0x1b) {
 		t.Errorf("summary output still carries an ESC byte: %q", got)

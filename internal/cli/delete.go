@@ -118,7 +118,7 @@ func runDelete(deps Deps, f *deleteFlags) error {
 	}
 
 	if f.dryRun {
-		return printDryRun(deps, plan) // R10: report, delete nothing, exit 0, write no log
+		return printDryRun(deps, ops.OpDelete, plan) // R10: report, delete nothing, exit 0, write no log
 	}
 
 	confirmed, err := deps.Purge.Confirm(plan, ops.NonInteractiveYes()) // R11
@@ -129,8 +129,8 @@ func runDelete(deps Deps, f *deleteFlags) error {
 	if err != nil {
 		return err
 	}
-	printSummary(deps, sum)
-	return exitFromSummary(sum)
+	printSummary(deps, ops.OpDelete, sum)
+	return exitFromSummary(ops.OpDelete, sum)
 }
 
 // hasFilter reports whether any filter axis was set, which is R26's test for whether
@@ -142,11 +142,12 @@ func (f *deleteFlags) hasFilter() bool {
 		l.status != "" || l.user != "" || l.workflow != ""
 }
 
-// printDryRun reports exactly what would be deleted: one row per Run in the resolved
+// printDryRun reports exactly what would be acted on: one row per Run in the resolved
 // set, each naming its repository and Run ID, so `grep` and `wc -l` answer questions
-// about it (cli-surface R10, AC9). A skipped Run carries its reason. It writes no line
-// to the deletion log and requires no writable log, because it issues no DELETE.
-func printDryRun(deps Deps, plan ops.Plan) error {
+// about it (cli-surface R10, AC9). A skipped Run carries its reason. A Purge's dry run
+// writes no line to the deletion log and requires no writable log, because it issues no
+// DELETE; a lifecycle operation has no log to write either way (run-lifecycle R24).
+func printDryRun(deps Deps, op ops.Operation, plan ops.Plan) error {
 	items := plan.Items()
 	for _, it := range items {
 		row := it.Repo.String() + "\t" + strconv.FormatInt(it.ID, 10)
@@ -155,21 +156,38 @@ func printDryRun(deps Deps, plan ops.Plan) error {
 		}
 		_, _ = fmt.Fprintln(deps.Stdout, row)
 	}
-	note := fmt.Sprintf("gh-runs: dry run: %d Runs would be deleted", plan.Total()-plan.Skipped())
+	verb := "would be deleted"
+	trailer := " (no DELETE issued, no log written)"
+	if op != ops.OpDelete {
+		verb = "would be acted on by " + string(op)
+		trailer = " (no request issued)"
+	}
+	note := fmt.Sprintf("gh-runs: dry run: %d Runs %s", plan.Total()-plan.Skipped(), verb)
 	if plan.Skipped() > 0 {
 		note += fmt.Sprintf(", %d skipped", plan.Skipped())
 	}
-	_, _ = fmt.Fprintln(deps.Stderr, note+" (no DELETE issued, no log written)")
+	_, _ = fmt.Fprintln(deps.Stderr, note+trailer)
 	return nil
 }
 
-// printSummary reports what this pass did, and only this pass (purge R25): the
-// deletions, the successes-by-being-gone, the skips, and the failures grouped by
-// reason (R22, AC18). It is the terminal account the CLI prints; the live progress a
-// TUI shows is the running-Purge surface's.
-func printSummary(deps Deps, sum ops.Summary) {
-	_, _ = fmt.Fprintf(deps.Stdout, "Deleted %d, gone %d, skipped %d, failed %d of %d Runs.\n",
-		sum.Deleted, sum.Gone, sum.Skipped, sum.FailedCount(), sum.Total)
+// printSummary reports what this pass did, and only this pass (purge R25): what landed,
+// the skips, and the failures grouped by reason (R22, AC18). It is the terminal account
+// the CLI prints; the live progress a TUI shows is the running-operation surface's.
+//
+// The headline is the operation's, because a Purge and a lifecycle mutation count
+// different things. A Purge reports its deletions and its successes-by-being-gone. A
+// cancel reports a requested cancellation and never a cancelled one, because a 202 means
+// the request was accepted and only a later poll can say what became of the Run
+// (run-lifecycle R4, AC5). A re-run reports a requested re-run for the same reason: what
+// the 201 proves is that an Attempt was added, not that it has finished.
+func printSummary(deps Deps, op ops.Operation, sum ops.Summary) {
+	if op == ops.OpDelete {
+		_, _ = fmt.Fprintf(deps.Stdout, "Deleted %d, gone %d, skipped %d, failed %d of %d Runs.\n",
+			sum.Deleted, sum.Gone, sum.Skipped, sum.FailedCount(), sum.Total)
+	} else {
+		_, _ = fmt.Fprintf(deps.Stdout, "%s %d, skipped %d, failed %d of %d Runs.\n",
+			requestedHeadline(op), sum.Acted, sum.Skipped, sum.FailedCount(), sum.Total)
+	}
 	// Both lists are labelled, and neither by omission. They print into one flat list, so
 	// an unlabelled group would be read as whichever kind the reader assumed, and the
 	// reasons carry API text this command does not author.
@@ -198,20 +216,51 @@ func printGroups(deps Deps, groups []ops.FailureGroup, label string) {
 	}
 }
 
-// exitFromSummary maps the pass to gh's exit codes (cli-surface R17): a cancelled Purge
-// exits 2 and states that re-running resumes it, a circuit-break or a log failure or
-// any real failure exits 1, and everything else (including zero matches and a Purge
-// that deleted nothing because all were skipped) exits 0.
-func exitFromSummary(sum ops.Summary) error {
+// requestedHeadline names what a lifecycle pass asked for, in the words the requirements
+// use. Every one of them is a request that was accepted, never an outcome observed: R4
+// says so of cancel outright, and R8 says a re-run adds an Attempt whose result is a later
+// poll's to report. The wording is what keeps the headline from claiming the thing the
+// product exists to stop conflating.
+func requestedHeadline(op ops.Operation) string {
+	switch op {
+	case ops.OpCancel:
+		return "Cancellation requested for"
+	case ops.OpForceCancel:
+		return "Force-cancellation requested for"
+	case ops.OpRerun:
+		return "Re-run requested for"
+	case ops.OpRerunFailed:
+		return "Re-run of failed jobs requested for"
+	default:
+		return "Acted on"
+	}
+}
+
+// exitFromSummary maps the pass to gh's exit codes (cli-surface R17): an interrupted pass
+// exits 2 and states that re-running resumes it, a circuit-break or a log failure or any
+// real failure exits 1, and everything else (including zero matches and a pass that acted
+// on nothing because all were skipped) exits 0.
+//
+// The resume line is a Purge's alone. A Purge's filter is its job state and re-running the
+// same command picks up where it stopped (ADR-0006), but a cancel or a re-run over the
+// same filter would act again on the Runs it already acted on, so telling an operator to
+// re-run one would be advice to spend Actions minutes twice.
+func exitFromSummary(op ops.Operation, sum ops.Summary) error {
+	noun := string(op)
+	if op == ops.OpDelete {
+		noun = "purge"
+	}
 	switch {
-	case sum.Cancelled:
+	case sum.Cancelled && op == ops.OpDelete:
 		return &exitError{code: exitCancelled, msg: "purge interrupted; re-run the same command to resume it"}
+	case sum.Cancelled:
+		return &exitError{code: exitCancelled, msg: noun + " interrupted; the Runs it had not reached were not touched"}
 	case sum.LogFailed:
-		return &exitError{code: exitFailure, msg: "purge stopped: " + sum.Reason}
+		return &exitError{code: exitFailure, msg: noun + " stopped: " + sum.Reason}
 	case sum.CircuitBroke:
-		return &exitError{code: exitFailure, msg: "purge circuit-broke: " + sum.Reason}
+		return &exitError{code: exitFailure, msg: noun + " circuit-broke: " + sum.Reason}
 	case sum.FailedCount() > 0:
-		return &exitError{code: exitFailure, msg: fmt.Sprintf("purge completed with %d failures", sum.FailedCount())}
+		return &exitError{code: exitFailure, msg: fmt.Sprintf("%s completed with %d failures", noun, sum.FailedCount())}
 	default:
 		return nil
 	}
