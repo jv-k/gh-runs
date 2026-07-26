@@ -377,9 +377,29 @@ func TestConcurrentDeletionsCannotBothHoldTheLog(t *testing.T) {
 	<-landed // the Purge is under way and holds the log
 
 	before := h.counting.deletes()
-	sum, err := h.ops.Execute(context.Background(), logs)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
+	// The refusal is a decision, not a wait, so it returns without touching the wire and
+	// without needing virtual time to move. Bounding the call is what turns a regression
+	// into a named failure: a second deletion that queued behind the running one instead
+	// would park on the governor's pacing timer, which nothing is advancing here, and the
+	// test would hang rather than say what broke.
+	type result struct {
+		sum ops.Summary
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		s, e := h.ops.Execute(context.Background(), logs)
+		done <- result{s, e}
+	}()
+	var sum ops.Summary
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("Execute: %v", r.err)
+		}
+		sum = r.sum
+	case <-time.After(5 * time.Second):
+		t.Fatalf("a second deletion did not return while one was running; it queued behind it rather than refusing (R29)")
 	}
 	if !sum.LogFailed {
 		t.Errorf("a second deletion started beside a running one; two handles to one log split R29's record")
