@@ -231,25 +231,86 @@ func TestProgressCarriesTheGovernorsWriteBounds(t *testing.T) {
 // divides by: an Item stamped ineligible at Plan time concludes instantly and costs no
 // wall clock, so counting it would make every remaining-time figure too long by the size
 // of the skip set (AC15).
+// The opening frame is read through the stepping Pacer rather than off the channel,
+// because offer() replaces a superseded frame by design (ADR-0015: the operation's pace
+// is the governor's, not the repaint loop's). Reading the channel and taking the first
+// value received is therefore a race with the walk, and the walk wins whenever it builds
+// its second frame before the drainer is scheduled. That reproduced at roughly 4 in 900
+// under -race across -cpu=1,2,8, reporting 1 or even 0 outstanding.
 func TestOutstandingExcludesTheItemsThatIssueNoRequest(t *testing.T) {
 	h := newHarness(t, "delete_ok", 50, 50)
+	pacer := newStepPacer()
+	o := ops.New(ops.Options{
+		Client: h.client, Clock: h.clk, LogPath: h.logPath,
+		ConfirmThreshold: 50, BreakerFailures: 50, Pacing: pacer,
+	})
+
 	sel := items("o", "r", 1, 2)
 	sel = append(sel, ops.RunItem(completedRun(3, "o", "readonly"))) // ineligible: read-only
 	repos := snapshot(
 		writableRepo("o", "r"),
 		domain.Repo{ID: repoID("o", "readonly"), Permissions: domain.Permissions{Push: false}},
 	)
-	c := h.confirmed(t, ops.OpDelete, sel, repos)
-	st, err := h.ops.Start(context.Background(), c)
+	p, err := o.Plan(ops.OpDelete, sel, repos)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	c, err := o.Confirm(p, ops.NonInteractiveYes())
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	st, err := o.Start(context.Background(), c)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	got := drainProgress(t, h, st)
-	if got[0].Outstanding != 2 {
-		t.Errorf("the opening frame reports %d Items to request, want the 2 eligible of 3 (AC15)", got[0].Outstanding)
+
+	// Park the walk inside its opening frame, release just that one, and take it off the
+	// channel while the walk is parked again inside the next. Every frame reads the write
+	// bounds through the Pacer, so the walk cannot reach offer() a second time until the
+	// test lets it, and the frame in the buffer is the opening one by construction.
+	pacer.hold()
+	pacer.letGo()
+	opening := <-st.Progress
+
+	// Let the rest of the walk run so the stream closes and the operation unwinds. The
+	// Pacer has to keep being serviced or the walk parks in it forever, and virtual time
+	// has to keep moving or it parks on the governor's pacing timer instead, so both run
+	// alongside the drain exactly as drainProgress drives the clock on its own.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range st.Progress {
+		}
+	}()
+	go func() {
+		for {
+			select {
+			case <-pacer.hit:
+				select {
+				case pacer.resume <- struct{}{}:
+				case <-done:
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+	runCtx, cancel := context.WithCancel(context.Background())
+	go func() { <-done; cancel() }()
+	for {
+		if err := h.clk.BlockUntilContext(runCtx, 1); err != nil {
+			break
+		}
+		h.clk.Advance(200 * time.Millisecond)
 	}
-	if got[0].Sum.Total != 3 {
-		t.Errorf("the opening frame reports a frozen total of %d, want 3; the skipped Item is inside the total (AC15)", got[0].Sum.Total)
+	<-done
+
+	if opening.Outstanding != 2 {
+		t.Errorf("the opening frame reports %d Items to request, want the 2 eligible of 3 (AC15)", opening.Outstanding)
+	}
+	if opening.Sum.Total != 3 {
+		t.Errorf("the opening frame reports a frozen total of %d, want 3; the skipped Item is inside the total (AC15)", opening.Sum.Total)
 	}
 }
 
