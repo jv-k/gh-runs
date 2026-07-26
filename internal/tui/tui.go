@@ -352,6 +352,18 @@ func (m Model) listenProgress() tea.Cmd {
 	}
 }
 
+// stripSize is the space the running surface lays out in: the terminal less the tab bar's
+// line, which is all it can occupy. Handing it the whole terminal instead lets its share
+// exceed what is left once the tab bar is drawn, on a terminal short enough that the
+// difference is most of the screen.
+func (m Model) stripSize() tea.WindowSizeMsg {
+	h := m.height - tabBarHeight
+	if h < 0 {
+		h = 0
+	}
+	return tea.WindowSizeMsg{Width: m.width, Height: h}
+}
+
 // innerSize is the space the tabs are laid out in: the terminal less the tab bar's line
 // and the running surface's rows, so a Purge's indicator never overlaps the list it sits
 // above (R4a, R14).
@@ -395,8 +407,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		// The running surface lays out first, because its height is what the tabs' is
-		// computed from.
-		m.running, _ = m.running.Update(msg)
+		// computed from. It is given the space below the tab bar rather than the whole
+		// terminal, so the share it takes is a share of what it can actually occupy.
+		m.running, _ = m.running.Update(m.stripSize())
 		m.stripHeight = m.running.Height()
 		inner := m.innerSize()
 		// The Settings pane lays out within the same inner size the tabs get, so it is sized
@@ -683,6 +696,13 @@ func (m Model) View() tea.View {
 		parts = append(parts, m.running.View())
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, append(parts, body)...)
+	// The root paints at most the terminal it was given, whatever its children returned.
+	// Every component lays out within the size it is handed, so on any usable terminal this
+	// changes nothing; it is the floor that keeps a short one from being painted past its
+	// bottom edge, where the tab bar and the strip's own floor are already most of it.
+	if m.height > 0 {
+		content = lipgloss.NewStyle().MaxHeight(m.height).Render(content)
+	}
 	return tea.View{
 		Content:     content,
 		AltScreen:   true,

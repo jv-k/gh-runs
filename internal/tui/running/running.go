@@ -156,18 +156,14 @@ func (m Model) Fail(f ops.LaunchFailed) Model {
 		m.err = f.Err
 		return m
 	}
-	prevOp, prevKind := m.op, m.kind
 	m.phase = failed
 	m.op = f.Op
+	// The Kind is taken from the refusal and never carried over from what was on screen.
+	// The empty Kind is a real value, the mixed Cache-and-Artifact set that is
+	// Reclamation's ordinary list, so it cannot also mean unknown: a carry-over would
+	// relabel a genuine Reclamation refusal with whatever the strip was showing. Every
+	// launcher stamps the Kind, which is the fix that does the work.
 	m.kind = f.Kind
-	// A refusal that names no Kind for the operation already on screen keeps the one the
-	// surface holds. The empty Kind is a real value, the mixed Cache-and-Artifact set that
-	// is Reclamation's ordinary list, so it cannot also mean unknown: without this a
-	// refused Purge retry falls through to the Reclamation label, which is the one
-	// distinction CONTEXT.md makes binding.
-	if f.Kind == "" && f.Op == prevOp {
-		m.kind = prevKind
-	}
 	m.err = f.Err
 	m.cancel = nil
 	m.last = ops.Progress{}

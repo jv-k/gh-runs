@@ -29,14 +29,17 @@ const (
 	// breaker counts consecutive failures and one success resets it, so a flaky link
 	// produces hundreds of groups and stops nothing.
 	//
-	// stripShare is the denominator, maxStripRows a ceiling on a tall terminal, and
-	// minStripRows the floor that keeps the account and the keystrokes on screen even when
-	// a share of the terminal is less than they need.
+	// stripShare is the denominator and maxStripRows a ceiling on a tall terminal.
 	stripShare   = 3
 	maxStripRows = 12
-	minStripRows = 2
-	// defaultStripRows is the budget before a size has arrived, which is the running line
-	// and its timing line.
+	// minStripRows is the floor, and it is derived rather than picked: the summary's fixed
+	// lines are the tally, the reason it stopped (AC20) and the keystrokes on offer, and
+	// one more row is what leaves the failure groups something to be disclosed in. Below
+	// this the strip starts dropping things a person needs rather than things they can
+	// look up, so a short terminal takes more than its share instead.
+	minStripRows = 4
+	// defaultStripRows is the budget before a size has arrived: the running line, its
+	// timing line and a refusal note.
 	defaultStripRows = 3
 )
 
@@ -91,9 +94,7 @@ func (m Model) View() string {
 // summary already fits itself to the budget, and this guarantees the invariant whichever
 // builder produced the lines.
 func (m Model) frame(lines []string) string {
-	if max := m.rowBudget(); len(lines) > max {
-		lines = lines[:max]
-	}
+	lines = clampRows(lines, m.rowBudget())
 	w := m.width
 	if w <= 0 {
 		return strings.Join(lines, "\n")
@@ -112,11 +113,30 @@ func (m Model) frame(lines []string) string {
 	return strings.Join(out, "\n")
 }
 
+// clampRows cuts a line list to at most max rows, keeping the last line. The last line is
+// the affordance in every frame this pane builds: the keystrokes on a summary, and the
+// refusal note on a running one. Cutting the tail instead loses the way out of a strip
+// that persists until it is dismissed, and loses the report of a launch that was refused,
+// which is the "keystroke that silently does nothing" this whole surface exists to fix.
+func clampRows(lines []string, max int) []string {
+	if max < 1 || len(lines) <= max {
+		return lines
+	}
+	if max == 1 {
+		return lines[len(lines)-1:]
+	}
+	out := make([]string, 0, max)
+	out = append(out, lines[:max-1]...)
+	return append(out, lines[len(lines)-1])
+}
+
 // rowBudget is the most rows the strip may take. A Purge is not modal (R14), and a strip
 // covering the screen is a modal wearing a different name, so it takes at most a share of
-// the terminal. The floor keeps the account and the keystrokes on screen on a terminal too
-// short for even that, which is the one case where taking more than the share is right:
-// the alternative is a strip that says nothing.
+// the terminal. The floor is the one case where taking more than the share is right,
+// because below it the strip drops things a person needs rather than things they can look
+// up. The whole terminal bounds both, so the budget can never exceed the screen: at four
+// rows or fewer the strip and the tab bar are the screen, which is a terminal nothing is
+// usable in rather than a case to design for.
 func (m Model) rowBudget() int {
 	if m.height <= 0 {
 		return defaultStripRows
@@ -127,6 +147,9 @@ func (m Model) rowBudget() int {
 	}
 	if rows < minStripRows {
 		rows = minStripRows
+	}
+	if rows > m.height {
+		rows = m.height
 	}
 	return rows
 }
@@ -272,14 +295,20 @@ func (m Model) summaryLines() []string {
 	// rows that fit are stated in full and the rest are counted, so a capped list never
 	// reads as a complete one. The whole list is not lost: the CLI prints every group from
 	// the same Summary, and R29's log carries every attempt with its reason.
+	// The order things are given up in, tightest budget last: individual reasons, then the
+	// count of the reasons that did not fit, then the group block entirely. The count goes
+	// before the reasons because it is the only thing that keeps a capped list from reading
+	// as a complete one, and the whole block goes before the reason it stopped, because
+	// AC20 requires that one and the head already carries the failure count. minStripRows
+	// is derived so that a terminal of four rows or more never reaches the last step.
 	budget := m.rowBudget() - len(kept) - len(tail)
-	if len(groups) > budget {
-		if budget > 0 {
-			dropped := len(groups) - budget + 1
-			groups = append(groups[:budget-1], styleDim.Render(fmt.Sprintf("%sand %d more reasons", groupIndent, dropped)))
-		} else {
-			groups = nil
-		}
+	switch {
+	case budget < 1:
+		groups = nil
+	case len(groups) > budget:
+		shown := make([]string, 0, budget)
+		shown = append(shown, groups[:budget-1]...)
+		groups = append(shown, styleDim.Render(fmt.Sprintf("%sand %d more reasons", groupIndent, len(groups)-budget+1)))
 	}
 	return append(append(kept, groups...), tail...)
 }

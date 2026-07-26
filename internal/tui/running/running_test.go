@@ -447,7 +447,10 @@ func TestSummaryStatesEveryFailureGroup(t *testing.T) {
 // breaker counts consecutive failures so an interleaved success resets it. One flaky link
 // mid-Purge is hundreds of groups.
 func TestStripNeverTakesMoreThanItsShareOfTheTerminal(t *testing.T) {
-	for _, h := range []int{10, 24, 40, 60} {
+	// 8 is the height where a share of the terminal falls below what the summary's own
+	// fixed lines need, so it is where the budget's floor takes over from its share. An
+	// 8-row split pane is a state people have.
+	for _, h := range []int{8, 10, 24, 40, 60} {
 		for _, n := range []int{5, 40, 200} {
 			m := sizedTo(running.New(keys.Standard).WithRetrier(&retrier{}), 100, h).
 				Start(started(ops.OpDelete, 5000, func() {}))
@@ -481,15 +484,76 @@ func TestStripNeverTakesMoreThanItsShareOfTheTerminal(t *testing.T) {
 
 // TestAnOverflowingSummarySaysSo pins that a capped list does not read as a complete one.
 // The reasons that did not fit are stated as a count rather than dropped in silence.
+//
+// The short heights are where a stop reason takes a row of its own, squeezing the group
+// block to nothing: at those heights the count is the only thing left saying that R22's
+// per-reason breakdown exists at all, so it is the last line to go rather than the first.
 func TestAnOverflowingSummarySaysSo(t *testing.T) {
-	m := sizedTo(running.New(keys.Standard).WithRetrier(&retrier{}), 100, 24).
-		Start(started(ops.OpDelete, 5000, func() {}))
-	m, _ = m.Update(ops.Progress{
-		Op: ops.OpDelete, Kind: ops.KindRun, Done: true,
-		Sum: ops.Summary{Total: 5000, Deleted: 4000, Failures: manyGroups(60)},
-	})
-	if got := plain(m.View()); !strings.Contains(got, "more reasons") {
-		t.Errorf("a capped list did not say how many reasons it dropped:\n%s", got)
+	for _, h := range []int{8, 10, 16, 24, 40} {
+		for _, reason := range []string{"", "stopped by the operator"} {
+			m := sizedTo(running.New(keys.Standard).WithRetrier(&retrier{}), 100, h).
+				Start(started(ops.OpDelete, 5000, func() {}))
+			m, _ = m.Update(ops.Progress{
+				Op: ops.OpDelete, Kind: ops.KindRun, Done: true,
+				Sum: ops.Summary{
+					Total: 5000, Deleted: 4000,
+					Failures:  manyGroups(60),
+					Cancelled: reason != "",
+					Reason:    reason,
+				},
+			})
+			got := plain(m.View())
+			if !strings.Contains(got, "more reasons") {
+				t.Errorf("at %d rows with reason %q, a capped list did not say how many reasons it dropped:\n%s", h, reason, got)
+			}
+			if reason != "" && !strings.Contains(got, reason) {
+				t.Errorf("at %d rows the summary dropped the reason it stopped (AC20):\n%s", h, got)
+			}
+		}
+	}
+}
+
+// TestTheStripKeepsItsAffordancesAtEveryHeight pins D1's harm. The strip persists until it
+// is dismissed, so a summary without its keystroke hints leaves the operator with a banner
+// and no visible way to clear it or retry. And a launch refused while one runs is reported
+// on the last line of the running phase: dropping that line is the "a keystroke that
+// silently does nothing" defect this whole surface exists to fix, reintroduced at small
+// heights. A blind cut of the row budget takes the tail, which is exactly these lines.
+func TestTheStripKeepsItsAffordancesAtEveryHeight(t *testing.T) {
+	// 2 is below anything the row budget's floor allows, so it is the height that forces
+	// the backstop cut and proves it keeps the tail rather than the head. 3 is where the
+	// stop reason still fits but the failure groups no longer do.
+	for _, h := range []int{2, 3, 4, 6, 8, 10, 24, 40} {
+		// A finished summary that stopped early keeps its hints.
+		m := sizedTo(running.New(keys.Standard).WithRetrier(&retrier{}), 100, h).
+			Start(started(ops.OpDelete, 5000, func() {}))
+		m, _ = m.Update(ops.Progress{
+			Op: ops.OpDelete, Kind: ops.KindRun, Done: true,
+			Sum: ops.Summary{
+				Total: 5000, Deleted: 4000,
+				Failures:  manyGroups(12),
+				LogFailed: true,
+				Reason:    "append to deletions.log: no space left on device",
+			},
+		})
+		got := plain(m.View())
+		if !strings.Contains(got, "dismiss") {
+			t.Errorf("at %d rows the summary lost its keystroke hints; the strip cannot be cleared:\n%s", h, got)
+		}
+		// The reason it stopped survives wherever three rows are available, which is every
+		// height the row budget's floor covers. Below that the head's tally and the way out
+		// are all that fit, and a two-row terminal is not a state to design for.
+		if h >= 3 && !strings.Contains(got, "no space left on device") {
+			t.Errorf("at %d rows the summary lost the reason it stopped (AC20):\n%s", h, got)
+		}
+
+		// A running operation that refused a second launch keeps the refusal note.
+		r := sizedTo(running.New(keys.Standard), 100, h).Start(started(ops.OpDelete, 5000, func() {}))
+		r, _ = r.Update(frame(5000, 400, 4600, time.Minute, 1.0, 2.0, 0.5))
+		r = r.Fail(ops.LaunchFailed{Op: ops.OpDelete, Kind: ops.KindRun, Err: ops.ErrBusy})
+		if got := plain(r.View()); !strings.Contains(got, "already running") {
+			t.Errorf("at %d rows the refusal note was dropped; the keystroke looks like it did nothing:\n%s", h, got)
+		}
 	}
 }
 
@@ -523,6 +587,31 @@ func TestARefusedRetryKeepsTheOperationsName(t *testing.T) {
 	}
 	if strings.Contains(got, "Reclaim") {
 		t.Errorf("a refused Purge retry is labelled a Reclamation; the glossary holds those apart (CONTEXT.md):\n%s", got)
+	}
+}
+
+// TestARefusalNamesItsOwnKindNotTheStripsPreviousOne pins the inverse of the same rule. A
+// Reclamation's frozen set mixes Caches and Artifacts, so its Kind is legitimately empty:
+// the empty Kind is a real value and cannot double as unknown. A refusal must therefore be
+// named from what it carries and never from what the strip happened to be showing, or a
+// Reclamation refused on a finished Purge's strip is labelled a Purge. That is the case
+// storage-reclamation reaches the moment it wires its launcher and a busy gate refuses it
+// (#64), and it is why carrying the previous Kind over would be wrong rather than merely
+// redundant.
+func TestARefusalNamesItsOwnKindNotTheStripsPreviousOne(t *testing.T) {
+	m := sizedTo(running.New(keys.Standard).WithRetrier(&retrier{}), 100, 40).Start(started(ops.OpDelete, 10, func() {}))
+	m, _ = m.Update(ops.Progress{
+		Op: ops.OpDelete, Kind: ops.KindRun, Done: true,
+		Sum: ops.Summary{Total: 10, Deleted: 10},
+	})
+	// A Reclamation over a mixed Cache-and-Artifact set, refused because one is running.
+	m = m.Fail(ops.LaunchFailed{Op: ops.OpDelete, Kind: "", Err: ops.ErrBusy})
+	got := plain(m.View())
+	if !strings.Contains(got, "Reclaim did not start") {
+		t.Errorf("a refused Reclamation is not named one; it took its label from the Purge on screen (CONTEXT.md):\n%s", got)
+	}
+	if strings.Contains(got, "Purge did not start") {
+		t.Errorf("a refused Reclamation is labelled a Purge:\n%s", got)
 	}
 }
 
