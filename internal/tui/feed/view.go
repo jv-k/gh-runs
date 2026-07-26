@@ -214,6 +214,9 @@ func (m Model) chromeLineCount() int {
 	if _, ok := m.approvalBadgeLine(); ok {
 		n++
 	}
+	if _, ok := m.cancelRequestedLine(); ok {
+		n++
+	}
 	if _, ok := m.filterLine(); ok {
 		n++
 	}

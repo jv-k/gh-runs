@@ -242,3 +242,48 @@ func TestCancelRequestedSurvivesAnEmptyDiscovery(t *testing.T) {
 		t.Errorf("an empty discovery cleared the mark; absence is only meaningful in a full set")
 	}
 }
+
+// TestLegendIsCountedInTheChrome pins that the legend is accounted for in the row budget.
+// View sizes its rows from the lines it is about to paint, so the frame is self-consistent
+// whatever the chrome; rowCapacity recomputes the same number from chromeLineCount, and it
+// is what pageSize and the viewport published to the scheduler's medium tier read. A line
+// View paints and chromeLineCount does not know about puts those two out of step by one, so
+// a page moves one row further than a screen and the viewport claims a row that is not on it.
+func TestLegendIsCountedInTheChrome(t *testing.T) {
+	id := repoID("o", "r")
+	var runs []domain.Run
+	for i := int64(1); i <= 12; i++ {
+		runs = append(runs, runningRun(i, t0.Add(-time.Duration(i)*time.Minute)))
+	}
+	m := newFeed(100, 10) // deliberately shorter than the run count, so the budget binds
+	m = feedRuns(m, id, runs...)
+
+	before := m.rowCapacity()
+	if got := paintedRows(t, m); got != before {
+		t.Fatalf("precondition: painted %d rows against a capacity of %d", got, before)
+	}
+
+	m = m.Update2(cancelFrame(ops.OpCancel, true, runs[0]))
+
+	if got, want := paintedRows(t, m), m.rowCapacity(); got != want {
+		t.Errorf("with the legend up, View paints %d rows and rowCapacity says %d; paging and the "+
+			"published viewport read the second number", got, want)
+	}
+	if m.rowCapacity() != before-1 {
+		t.Errorf("rowCapacity = %d after the legend appeared, want %d: the legend costs one row",
+			m.rowCapacity(), before-1)
+	}
+}
+
+// paintedRows counts the Run rows in the frame. A row is the only line carrying the
+// repository cell, so the chrome, the legend and the status line are all excluded.
+func paintedRows(t *testing.T, m Model) int {
+	t.Helper()
+	n := 0
+	for _, line := range strings.Split(ansiRE.ReplaceAllString(m.View(), ""), "\n") {
+		if strings.Contains(line, "o/r ") {
+			n++
+		}
+	}
+	return n
+}
