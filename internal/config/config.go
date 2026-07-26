@@ -26,6 +26,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/jv-k/gh-runs/v2/internal/domain"
 )
 
 // Env is an injected environment lookup, matching the shape of os.LookupEnv.
@@ -251,6 +253,16 @@ type Config struct {
 	// default stands.
 	WorkflowsScope Scope
 	StorageScope   Scope
+	// Exclude and Pin are the repository lists settings R7 makes settable, each of
+	// host-qualified identity (ADR-0009). Exclusion removes a repository from
+	// discovery, the Feed and all polling; a pin prioritises one. Where a repository
+	// is in both, exclusion wins and the pin has no effect (R7, AC14), which the
+	// consumer enforces because only it can: this type carries what was configured,
+	// not what it resolves to. Both default to empty, so a config file with neither
+	// key leaves discovery exactly as it was (R3, AC1). Pin's order is the file's,
+	// because a pin list's order is the priority it expresses.
+	Exclude []domain.RepoID
+	Pin     []domain.RepoID
 }
 
 // Diagnostic is a non-fatal message about the configuration: an unknown key, a
@@ -400,6 +412,10 @@ func resolveFile(cfg Config, data []byte, diags []Diagnostic) (Config, []Diagnos
 			cfg.WorkflowsScope, diags = resolveScope(key, node, cfg.WorkflowsScope, diags)
 		case "storage_scope":
 			cfg.StorageScope, diags = resolveScope(key, node, cfg.StorageScope, diags)
+		case "exclude":
+			cfg.Exclude, diags = resolveRepoList(key, node, diags)
+		case "pin":
+			cfg.Pin, diags = resolveRepoList(key, node, diags)
 		default:
 			// Not a key this version applies. A key R13 refuses gets its specific
 			// reason; anything else gets the generic unknown-key message (R14).
@@ -465,6 +481,62 @@ func resolveScope(key string, node yaml.Node, current Scope, diags []Diagnostic)
 	return current, append(diags, Diagnostic{Message: fmt.Sprintf(
 		"%s: %q is not a valid scope; using %q. Valid scopes: %s",
 		key, string(s), current, scopeList())})
+}
+
+// resolveRepoList decodes a repository list key (exclude, pin) into host-qualified
+// identity (settings R7, ADR-0009). It mirrors resolveScope's shape: a node of the
+// wrong type falls that one setting back to its default, an empty list, and says so
+// (R14), leaving every other key alone. A list whose individual entry is malformed
+// keeps the entries that parsed and names the one that did not, because dropping a
+// person's whole exclude list over one typo would poll repositories they told the
+// tool to leave alone, which is the precise cost R7 exists to avoid.
+//
+// It returns a nil slice for an empty result rather than an allocated one, so an
+// absent key and a present-but-empty key are indistinguishable downstream, which is
+// what R3 asks of every key.
+func resolveRepoList(key string, node yaml.Node, diags []Diagnostic) ([]domain.RepoID, []Diagnostic) {
+	var refs []string
+	if node.Decode(&refs) != nil {
+		return nil, append(diags, typeErr(key, "a list of OWNER/REPO entries", node))
+	}
+	var out []domain.RepoID
+	for _, ref := range refs {
+		id, err := parseRepoRef(ref)
+		if err != nil {
+			// The entry as written is named first, because the underlying error names
+			// only the component it rejected, and a person scanning a list of twenty
+			// wants the line they typed rather than its parsed pieces.
+			diags = append(diags, Diagnostic{Message: fmt.Sprintf(
+				"%s: ignoring %q (line %d): %v", key, ref, node.Line, err)})
+			continue
+		}
+		out = append(out, id)
+	}
+	return out, diags
+}
+
+// parseRepoRef parses one [HOST/]OWNER/REPO entry into a host-qualified identity. The
+// bare OWNER/REPO form defaults to github.com and an explicit github.com/OWNER/REPO
+// means the same repository, matching gh's own selector and the CLI's -R (ADR-0009,
+// cli-surface R8). The shape check is here and the host check and the charset
+// validation are domain.NewRepoID's, so a config entry reaches no request URL path or
+// filesystem key without passing the one validation home every identity passes
+// through (security consolidation).
+func parseRepoRef(ref string) (domain.RepoID, error) {
+	parts := strings.Split(strings.TrimSpace(ref), "/")
+	var host, owner, name string
+	switch len(parts) {
+	case 2:
+		host, owner, name = domain.HostGitHub, parts[0], parts[1]
+	case 3:
+		host, owner, name = parts[0], parts[1], parts[2]
+	default:
+		return domain.RepoID{}, fmt.Errorf("invalid repository %q: expected the [HOST/]OWNER/REPO format", ref)
+	}
+	if owner == "" || name == "" {
+		return domain.RepoID{}, fmt.Errorf("invalid repository %q: expected the [HOST/]OWNER/REPO format", ref)
+	}
+	return domain.NewRepoID(host, owner, name)
 }
 
 // ClampConfirmThreshold, ClampBreakerFailures and ClampDiscoveryRefresh apply the same
@@ -596,7 +668,45 @@ func changedKeys(prev, next Config) []change {
 	add(prev.Theme != next.Theme, "theme", string(next.Theme))
 	add(prev.WorkflowsScope != next.WorkflowsScope, "workflows_scope", string(next.WorkflowsScope))
 	add(prev.StorageScope != next.StorageScope, "storage_scope", string(next.StorageScope))
+	// R7's two lists are written as a sequence of the bare OWNER/REPO spelling, the
+	// form parseRepoRef reads back. They are compared by value and by order, because
+	// the pin list's order is the priority it expresses, so reordering it is a change.
+	add(!sameRepos(prev.Exclude, next.Exclude), "exclude", repoRefs(next.Exclude))
+	add(!sameRepos(prev.Pin, next.Pin), "pin", repoRefs(next.Pin))
 	return changes
+}
+
+// sameRepos reports whether two identity lists carry the same repositories in the same
+// order, the comparison changedKeys needs because a slice is not comparable with ==
+// and because order is meaningful for the pin list.
+func sameRepos(a, b []domain.RepoID) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// repoRefs renders identities as the OWNER/REPO strings the file carries. The host is
+// dropped where it is github.com, which is every identity 2.0.0 admits, so a config a
+// person hand-edits keeps the short form they wrote (ADR-0009: the host is qualified
+// in the model, and spelled only where it is not the default). It returns an empty
+// non-nil slice for an empty list, so clearing a list writes an empty sequence rather
+// than a null.
+func repoRefs(ids []domain.RepoID) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id.Host == domain.HostGitHub {
+			out = append(out, id.Owner+"/"+id.Name)
+			continue
+		}
+		out = append(out, id.String())
+	}
+	return out
 }
 
 // applyChanges edits the config document in place, rewriting each changed key's value node
@@ -653,21 +763,32 @@ func documentMapping(doc *yaml.Node) *yaml.Node {
 func setMappingKey(mapping *yaml.Node, key string, value any) {
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
 		if mapping.Content[i].Value == key {
-			setScalar(mapping.Content[i+1], value)
+			setValue(mapping.Content[i+1], value)
 			return
 		}
 	}
 	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
 	valueNode := &yaml.Node{}
-	setScalar(valueNode, value)
+	setValue(valueNode, value)
 	mapping.Content = append(mapping.Content, keyNode, valueNode)
 }
 
-// setScalar writes value into node as a plain scalar, preserving any comments the node
-// carried so an inline note on the edited line survives the change (R17). Every settings
-// value is a plain string or a whole number, so the node needs no quoting style.
-func setScalar(node *yaml.Node, value any) {
+// setValue writes value into node, preserving any comments the node carried so an
+// inline note on the edited key survives the change (R17). A []string becomes a block
+// sequence (R7's repository lists), anything else a plain scalar.
+func setValue(node *yaml.Node, value any) {
 	head, line, foot := node.HeadComment, node.LineComment, node.FootComment
+	if list, ok := value.([]string); ok {
+		setSequence(node, list)
+	} else {
+		setScalar(node, value)
+	}
+	node.HeadComment, node.LineComment, node.FootComment = head, line, foot
+}
+
+// setScalar writes value into node as a plain scalar. Every settings value but R7's two
+// lists is a plain string or a whole number, so the node needs no quoting style.
+func setScalar(node *yaml.Node, value any) {
 	node.Kind = yaml.ScalarNode
 	node.Style = 0
 	node.Content = nil
@@ -682,7 +803,39 @@ func setScalar(node *yaml.Node, value any) {
 		node.Tag = "!!str"
 		node.Value = fmt.Sprint(v)
 	}
-	node.HeadComment, node.LineComment, node.FootComment = head, line, foot
+}
+
+// setSequence writes a list of strings into node as a block sequence, the form R7's
+// exclude and pin keys take. Membership and order are the view's, which holds the
+// authoritative list for the running instance (R17), so an entry the operator removed
+// is gone rather than merged back. An item the list still carries keeps its own node,
+// and therefore the comment sitting on it: R17's "must not discard comments" reads no
+// differently inside a list than beside a key. An empty list writes an empty flow
+// sequence, so clearing a list leaves a key that reads back as empty rather than null.
+func setSequence(node *yaml.Node, values []string) {
+	kept := make(map[string]*yaml.Node, len(node.Content))
+	if node.Kind == yaml.SequenceNode {
+		for _, item := range node.Content {
+			if item.Kind == yaml.ScalarNode {
+				kept[item.Value] = item
+			}
+		}
+	}
+	node.Kind = yaml.SequenceNode
+	node.Tag = "!!seq"
+	node.Value = ""
+	node.Style = 0
+	if len(values) == 0 {
+		node.Style = yaml.FlowStyle
+	}
+	node.Content = make([]*yaml.Node, 0, len(values))
+	for _, v := range values {
+		if item, ok := kept[v]; ok {
+			node.Content = append(node.Content, item)
+			continue
+		}
+		node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v})
+	}
 }
 
 // writeFileAtomic writes data to path by way of a temporary file in the same directory,

@@ -140,6 +140,17 @@ func withCurrent(f func() (domain.RepoID, error)) harnessOption {
 	return func(o *discovery.Options) { o.Current = f }
 }
 
+// withExclude and withPin set the two resolved repository lists settings R7 makes
+// settable, which main.go fills from the loaded config (discovery may not import
+// config, ADR-0011, so it takes the resolved identities).
+func withExclude(ids ...domain.RepoID) harnessOption {
+	return func(o *discovery.Options) { o.Exclude = ids }
+}
+
+func withPin(ids ...domain.RepoID) harnessOption {
+	return func(o *discovery.Options) { o.Pin = ids }
+}
+
 // newHarness assembles the chain over the named cassette. The store's directory is
 // a fresh temp dir unless the test reuses one to simulate a restart (AC7).
 func newHarness(t *testing.T, cassetteName string, dir string, opts ...harnessOption) *harness {

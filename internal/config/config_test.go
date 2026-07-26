@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -593,7 +594,10 @@ func TestEmptyFileChangesNothing(t *testing.T) {
 		if len(diags) != 0 {
 			t.Fatalf("empty/comment-only config returned diagnostics: %v", diags)
 		}
-		if cfg != noFile {
+		// reflect.DeepEqual rather than !=: Config carries R7's two repository slices,
+		// so it is no longer a comparable struct. The property is unchanged, and a deep
+		// comparison covers the slices an == never would have.
+		if !reflect.DeepEqual(cfg, noFile) {
 			t.Fatalf("empty config = %+v, want identical to no file %+v (AC1)", cfg, noFile)
 		}
 	}

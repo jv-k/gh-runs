@@ -6,6 +6,8 @@
 [1m> [m[1mTheme                     [m[1;38;2;0;95;175mauto[m  [38;2;108;108;108m(auto / dark / light)[m
   Workflows scope           [1;38;2;0;95;175mall-repos[m
   Storage scope             [1;38;2;0;95;175mall-repos[m
+  Excluded repositories     [1;38;2;0;95;175mnone[m
+  Pinned repositories       [1;38;2;0;95;175mnone[m
   Confirmation threshold    [1;38;2;0;95;175m50[m
   Purge breaker threshold   [1;38;2;0;95;175m50[m
   Discovery refresh         [1;38;2;0;95;175m5 min[m

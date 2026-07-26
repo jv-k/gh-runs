@@ -128,6 +128,12 @@ func run() int {
 	// main.go is the one place that knows all three, exactly as it is for the
 	// transport chain itself (ADR-0011). CurrentRepo is the fast-path resolver with
 	// the GH_TOKEN-aware error R14 requires.
+	//
+	// Exclude and Pin are settings R7's two repository lists, resolved by config and
+	// handed over the same seam as the refresh interval: discovery may not import
+	// config (ADR-0011), so main.go is where a setting becomes an argument. Exclusion
+	// removes a repository from discovery, the Feed and all polling, a pin prioritises
+	// one, and where a repository is in both, exclusion wins (settings AC5, AC14).
 	disc := discovery.New(discovery.Options{
 		Client:  client,
 		Store:   transport,
@@ -135,6 +141,8 @@ func run() int {
 		Clock:   clk,
 		Refresh: time.Duration(cfg.DiscoveryRefreshMinutes) * time.Minute,
 		Current: ghclient.CurrentRepo,
+		Exclude: cfg.Exclude,
+		Pin:     cfg.Pin,
 	})
 
 	// The write engine. It is the only DELETE path and the only writer of the deletion

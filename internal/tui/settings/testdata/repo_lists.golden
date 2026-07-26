@@ -1,16 +1,16 @@
 [1mSettings[m
 [38;2;138;138;138mChanges are saved to your config file.[m
 
-[1m> [m[1mBudget                    [m[1;38;2;0;175;255mnormal[m  [38;2;138;138;138m(background / normal / greedy)[m
+  Budget                    [1;38;2;0;175;255mnormal[m
   Keybinding profile        [1;38;2;0;175;255mstandard[m
   Theme                     [1;38;2;0;175;255mauto[m
   Workflows scope           [1;38;2;0;175;255mall-repos[m
   Storage scope             [1;38;2;0;175;255mall-repos[m
-  Excluded repositories     [1;38;2;0;175;255mnone[m
-  Pinned repositories       [1;38;2;0;175;255mnone[m
+[1m> [m[1mExcluded repositories     [m[1;38;2;0;175;255mjv-k/dotfiles, jv-k/scratch, acme/vendored-fork, and 1 more[m
+  Pinned repositories       [1;38;2;0;175;255mjv-k/gh-runs[m
   Confirmation threshold    [1;38;2;0;175;255m50[m
   Purge breaker threshold   [1;38;2;0;175;255m50[m
   Discovery refresh         [1;38;2;0;175;255m5 min[m
 
-[38;2;138;138;138mShare of your API allowance the background refresh may spend.[m
+[38;2;138;138;138mLeft out of the dashboard and never contacted. Edit in your config file.[m
 [38;2;138;138;138m↑/↓ move   space change   enter edit number   esc close[m

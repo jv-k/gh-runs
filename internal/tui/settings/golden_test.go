@@ -7,6 +7,7 @@ import (
 	"github.com/sebdah/goldie/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
+	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/tui/settings"
@@ -75,4 +76,29 @@ func TestGoldenEditingNumber(t *testing.T) {
 	m = send(m, "1")
 	m = send(m, "5")
 	goldie.New(t).Assert(t, "editing_number", []byte(m.View()))
+}
+
+// TestGoldenRepoLists fixes the frame R7's two rows paint when they are actually set:
+// the exclude row focused with its description, a list short enough to name in full,
+// and a list long enough to be summarised. It is the reference account's shape, where
+// 163 repositories are discovered and roughly 10 are wanted, so the summarised form is
+// the one a real config produces rather than a corner.
+func TestGoldenRepoLists(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Exclude = []domain.RepoID{
+		repoID("jv-k", "dotfiles"),
+		repoID("jv-k", "scratch"),
+		repoID("acme", "vendored-fork"),
+		repoID("acme", "archive"),
+	}
+	cfg.Pin = []domain.RepoID{repoID("jv-k", "gh-runs")}
+	m := settings.New(keys.Standard, cfg, nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "exclude")
+	goldie.New(t).Assert(t, "repo_lists", []byte(m.View()))
+}
+
+// repoID builds a github.com-qualified identity for the goldens above (ADR-0009).
+func repoID(owner, name string) domain.RepoID {
+	return domain.RepoID{Host: domain.HostGitHub, Owner: owner, Name: name}
 }

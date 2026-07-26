@@ -47,6 +47,8 @@ const (
 	rowTheme
 	rowWorkflowsScope
 	rowStorageScope
+	rowExclude
+	rowPin
 	rowConfirmThreshold
 	rowBreakerFailures
 	rowDiscoveryRefresh
@@ -54,7 +56,12 @@ const (
 )
 
 // isSelector reports whether the row cycles through a small fixed set (space changes it),
-// as opposed to a numeric row that opens an editor (enter).
+// as opposed to a numeric row that opens an editor (enter). The two repository-list rows
+// (R7) are neither: a list of host-qualified identities is not a fixed set to cycle and
+// not a bounded number to type, so they report what the config file holds and take no
+// edit gesture. That keeps a stray press on the exclude row from emptying the list a
+// person with 163 repositories relies on, and an editing surface for them is out of
+// 2.0.0's scope.
 func (r row) isSelector() bool {
 	switch r {
 	case rowBudget, rowProfile, rowTheme, rowWorkflowsScope, rowStorageScope:
@@ -89,6 +96,10 @@ func (r row) configKey() string {
 		return "workflows_scope"
 	case rowStorageScope:
 		return "storage_scope"
+	case rowExclude:
+		return "exclude"
+	case rowPin:
+		return "pin"
 	case rowConfirmThreshold:
 		return "confirm_threshold"
 	case rowBreakerFailures:

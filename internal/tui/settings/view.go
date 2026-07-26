@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
+	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
@@ -108,6 +109,10 @@ func (m Model) rawValue(r row) string {
 		return string(m.cfg.WorkflowsScope)
 	case rowStorageScope:
 		return string(m.cfg.StorageScope)
+	case rowExclude:
+		return repoList(m.cfg.Exclude)
+	case rowPin:
+		return repoList(m.cfg.Pin)
 	case rowConfirmThreshold:
 		return strconv.Itoa(m.cfg.ConfirmThreshold)
 	case rowBreakerFailures:
@@ -133,6 +138,10 @@ func (m Model) label(r row) string {
 		return "Workflows scope"
 	case rowStorageScope:
 		return "Storage scope"
+	case rowExclude:
+		return "Excluded repositories"
+	case rowPin:
+		return "Pinned repositories"
 	case rowConfirmThreshold:
 		return "Confirmation threshold"
 	case rowBreakerFailures:
@@ -159,6 +168,10 @@ func (m Model) description(r row) string {
 		return "Which repositories the Workflows tab covers."
 	case rowStorageScope:
 		return "Which repositories the Storage tab covers."
+	case rowExclude:
+		return "Left out of the dashboard and never contacted. Edit in your config file."
+	case rowPin:
+		return "Shown and refreshed first. An excluded repository stays excluded."
 	case rowConfirmThreshold:
 		return "Deletions at or above this many make you type the count."
 	case rowBreakerFailures:
@@ -221,6 +234,36 @@ func padLabel(s string) string {
 		return s
 	}
 	return s + strings.Repeat(" ", labelWidth-len(s))
+}
+
+// listPreview is how many repositories a list row names before it summarises the rest.
+// Three fits the value column at the golden's 100 columns; a person with ten excluded
+// repositories reads the count and opens their config file, which is where the list is
+// edited anyway.
+const listPreview = 3
+
+// repoList renders one of R7's repository lists as text (R16: meaning never rides on
+// colour). An empty list reads "none" rather than blank, because a blank cell reads as
+// broken where "none" reads as a setting nobody has used. Each entry is spelled
+// OWNER/REPO, the same short form the config file carries for a github.com repository,
+// and a longer list names the first few and counts the remainder.
+func repoList(ids []domain.RepoID) string {
+	if len(ids) == 0 {
+		return "none"
+	}
+	shown := ids
+	if len(shown) > listPreview {
+		shown = shown[:listPreview]
+	}
+	names := make([]string, len(shown))
+	for i, id := range shown {
+		names[i] = id.Owner + "/" + id.Name
+	}
+	out := strings.Join(names, ", ")
+	if rest := len(ids) - len(shown); rest > 0 {
+		out += ", and " + strconv.Itoa(rest) + " more"
+	}
+	return out
 }
 
 func joinTiers(ts []config.Tier) string {

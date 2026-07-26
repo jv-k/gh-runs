@@ -134,6 +134,13 @@ func (d *Discovery) fanOut(ctx context.Context, ids []domain.RepoID, build func(
 		if ctx.Err() != nil || d.exhausted() {
 			break
 		}
+		if d.excluded(id) {
+			// settings R7: an excluded repository is removed from discovery and all
+			// polling, so it is never probed. fanOut is the one door every probe but the
+			// fast path's and adoption's passes through, so the rule holds for a pass and
+			// a re-probe alike (AC5).
+			continue
+		}
 		wg.Add(1)
 		go func(id domain.RepoID) {
 			defer wg.Done()
@@ -214,6 +221,13 @@ func (d *Discovery) Reload() int {
 		if err != nil {
 			// A persisted key without a github.com host is rejected rather than
 			// trusted (AC14). It contributes no entry.
+			continue
+		}
+		if d.excluded(id) {
+			// settings R7: a repository excluded since the session that wrote this
+			// document is not re-admitted from it, and is not counted as reloaded. put
+			// would refuse it anyway; refusing it here keeps the count honest, and a
+			// caller reads that count to tell a warm start from a cold one.
 			continue
 		}
 		if r.Adopted {

@@ -24,6 +24,7 @@ package discovery
 import (
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -98,6 +99,21 @@ type Options struct {
 	Clock   clock.Clock
 	Refresh time.Duration
 	Current func() (domain.RepoID, error)
+
+	// Exclude and Pin are the two repository lists settings R7 makes settable, as
+	// resolved host-qualified identity. discovery may not import config (ADR-0011), so
+	// main.go passes config.Exclude and config.Pin through here the same way it passes
+	// discovery_refresh_minutes through Refresh.
+	//
+	// Exclusion removes a repository from discovery, the Feed and all polling, so an
+	// excluded repository is never enumerated into the set, never probed, never
+	// reloaded from the store and never adopted: it receives zero requests (settings
+	// AC5). A pin prioritises a repository, which at this layer means it leads the poll
+	// set, in the pin list's own order. Where a repository is in both, exclusion wins
+	// and the pin has no effect (R7, AC14): New drops such a pin outright, so nothing
+	// downstream re-decides the precedence.
+	Exclude []domain.RepoID
+	Pin     []domain.RepoID
 }
 
 // Discovery is the stateful engine. It holds the classified set and the recorded
@@ -107,6 +123,13 @@ type Options struct {
 // throughout.
 type Discovery struct {
 	opts Options
+
+	// exclude is Options.Exclude as a set, and pin is Options.Pin with every excluded
+	// entry already dropped (settings R7, AC14). Both are fixed at New and never
+	// written after it, so they are read without the lock: the config is read once at
+	// startup and is not watched while running (settings R17).
+	exclude map[string]bool
+	pin     []domain.RepoID
 
 	mu      sync.Mutex
 	records map[string]Record    // keyed by RepoID.String(); the classified set
@@ -121,13 +144,41 @@ type Discovery struct {
 
 // New returns a Discovery over opts. It reads nothing and issues no request: a
 // caller reloads the persisted set with Reload and runs a pass with Pass.
+//
+// It resolves R7's precedence once, here: the exclude list becomes a set, and the
+// pin list is filtered through it, so a repository named in both arrives at every
+// consumer as excluded and not pinned (AC14). Deciding it once is what makes "the pin
+// has no effect" a property of the type rather than a rule each call site has to
+// remember.
 func New(opts Options) *Discovery {
+	exclude := make(map[string]bool, len(opts.Exclude))
+	for _, id := range opts.Exclude {
+		exclude[id.String()] = true
+	}
+	pin := make([]domain.RepoID, 0, len(opts.Pin))
+	for _, id := range opts.Pin {
+		if exclude[id.String()] {
+			continue // exclusion wins (R7, AC14)
+		}
+		pin = append(pin, id)
+	}
 	return &Discovery{
 		opts:    opts,
+		exclude: exclude,
+		pin:     pin,
 		records: make(map[string]Record),
 		probed:  make(map[string]time.Time),
 		etagged: make(map[string]bool),
 	}
+}
+
+// excluded reports whether id is on the exclude list (settings R7). It is the one
+// predicate every admission and every probe consults, so "removed from discovery, the
+// Feed and all polling" holds at each door rather than at one of them: put and
+// putProbed refuse the record, fanOut refuses the probe, and FastPath and adopt refuse
+// the two requests that do not travel through fanOut.
+func (d *Discovery) excluded(id domain.RepoID) bool {
+	return d.exclude[id.String()]
 }
 
 // Record is discovery's persisted per-repository result: the classification
@@ -226,16 +277,38 @@ func recordFrom(id domain.RepoID, repo apiRepo, hasRuns bool) Record {
 
 // PollSet is the repositories classified as having Runs, the ~26 the Feed polls
 // (R13). It is never the ~163-repository probe set: a scheduler that inherited the
-// probe set would exceed the secondary limit outright (R13). The order is
-// unspecified; a consumer that needs one sorts.
+// probe set would exceed the secondary limit outright (R13).
+//
+// Pinned repositories lead, in the pin list's own order, which is how settings R7's
+// "pinning MUST prioritise it" reaches the wire: the scheduler polls this set in
+// order, so a pin is what a person with 163 repositories and ~10 they care about
+// actually gets for setting one. The rest follow sorted by host-qualified key, so the
+// set is deterministic rather than map-ordered. An excluded repository is in no
+// record, so it is in no poll set at any tier, and an excluded pin was already
+// dropped at New (AC14).
 func (d *Discovery) PollSet() []domain.RepoID {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	ids := make([]domain.RepoID, 0)
-	for _, r := range d.records {
-		if r.HasRuns {
+
+	ids := make([]domain.RepoID, 0, len(d.records))
+	pinned := make(map[string]bool, len(d.pin))
+	for _, p := range d.pin {
+		key := p.String()
+		if r, ok := d.records[key]; ok && r.HasRuns && !pinned[key] {
+			pinned[key] = true
 			ids = append(ids, r.ID())
 		}
+	}
+
+	rest := make([]string, 0, len(d.records))
+	for key, r := range d.records {
+		if r.HasRuns && !pinned[key] {
+			rest = append(rest, key)
+		}
+	}
+	sort.Strings(rest)
+	for _, key := range rest {
+		ids = append(ids, d.records[key].ID())
 	}
 	return ids
 }
@@ -272,16 +345,24 @@ func (d *Discovery) Capability(id domain.RepoID) domain.Capability {
 // bookkeeping. It is the timing-free store: a reload admits a persisted record with
 // it, and adoption admits an enumerated one, neither of which is a fresh probe. A
 // probe records its clock instant and ETag state through putProbed instead, which
-// the two-tier refresh cadence reads (R11, R12).
+// the two-tier refresh cadence reads (R11, R12). An excluded repository is refused
+// here, so no admission path can leave one in the set (settings R7).
 func (d *Discovery) put(r Record) {
+	if d.excluded(r.ID()) {
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.records[r.ID().String()] = r
 }
 
 // putProbed stores a probed record together with the probe's timing, under one
-// lock so a reader never sees the record without its cadence bookkeeping.
+// lock so a reader never sees the record without its cadence bookkeeping. It refuses
+// an excluded repository on the same terms as put.
 func (d *Discovery) putProbed(r Record, now time.Time, hasETag bool) {
+	if d.excluded(r.ID()) {
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	key := r.ID().String()

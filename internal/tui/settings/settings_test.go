@@ -3,12 +3,14 @@ package settings_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
+	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/tui/settings"
 )
@@ -394,7 +396,9 @@ func TestEditKeysComeFromRegistry(t *testing.T) {
 	m := focus(t, open(r), "budget")
 	before := m.Config()
 	m, cmd := sent(m, "z") // unbound
-	if m.Config() != before {
+	// reflect.DeepEqual rather than !=: Config carries R7's two repository slices, so it
+	// is no longer a comparable struct. The property is unchanged.
+	if !reflect.DeepEqual(m.Config(), before) {
 		t.Errorf("an unbound key changed a setting")
 	}
 	if cmd != nil {
@@ -402,5 +406,68 @@ func TestEditKeysComeFromRegistry(t *testing.T) {
 	}
 	if len(r.saved) != 0 {
 		t.Errorf("an unbound key persisted a change")
+	}
+}
+
+// TestRepoListRowsShowTheConfiguredLists pins settings R17's first sentence for R7's
+// two keys: the view and the config file are the same settings, so a config carrying
+// an exclude list and a pin list shows both, named and reachable by the cursor. They
+// are read-only rows in 2.0.0. The pane's two edit gestures are cycling a fixed set
+// and typing a bounded number, and a repository list is neither, so the list is edited
+// in the config file and the view reports it.
+func TestRepoListRowsShowTheConfiguredLists(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Exclude = []domain.RepoID{
+		{Host: domain.HostGitHub, Owner: "jv-k", Name: "noisy"},
+		{Host: domain.HostGitHub, Owner: "acme", Name: "vendor"},
+	}
+	cfg.Pin = []domain.RepoID{{Host: domain.HostGitHub, Owner: "jv-k", Name: "main-project"}}
+	m := settings.New(keys.Standard, cfg, nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	view := m.View()
+	for _, want := range []string{"Excluded repositories", "jv-k/noisy", "acme/vendor", "Pinned repositories", "jv-k/main-project"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the Settings view does not show %q:\n%s", want, view)
+		}
+	}
+
+	// Both rows are reachable and name their config.yml key, so the view and the file
+	// agree on what each row is (R17).
+	for _, key := range []string{"exclude", "pin"} {
+		if got := focus(t, m, key).CursorKey(); got != key {
+			t.Errorf("CursorKey after focusing %q = %q", key, got)
+		}
+	}
+}
+
+// TestEmptyRepoListRowsReadAsNone pins the fresh-install frame for R7's two rows: with
+// no config file both lists are empty (R3, AC1), and the view says so in text rather
+// than painting a blank cell, because a blank reads as broken where "none" reads as a
+// setting nobody has used.
+func TestEmptyRepoListRowsReadAsNone(t *testing.T) {
+	m := settings.New(keys.Standard, defaultConfig(), nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	if view := m.View(); strings.Count(view, "none") != 2 {
+		t.Errorf("the two empty repository lists do not both read as none:\n%s", view)
+	}
+}
+
+// TestRepoListRowsIgnoreTheEditGestures pins that the display rows stay display rows: the
+// selector key and the number-editor key do nothing on them and persist nothing, so a
+// stray press on the exclude row cannot empty a person's exclude list.
+func TestRepoListRowsIgnoreTheEditGestures(t *testing.T) {
+	r := &recorder{}
+	m := focus(t, open(r), "exclude")
+	before := m.Config()
+	for _, k := range []string{"space", "enter"} {
+		m = send(m, k)
+	}
+	if !reflect.DeepEqual(m.Config(), before) {
+		t.Error("an edit gesture on the exclude row changed a setting")
+	}
+	if len(r.saved) != 0 {
+		t.Error("an edit gesture on the exclude row persisted a change")
 	}
 }
