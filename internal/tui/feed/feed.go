@@ -157,18 +157,24 @@ type Model struct {
 	// (R13, R13a, AC5). The persistent count keeps an off-filter selection visible.
 	selected map[int64]bool
 
-	// cancelRequested is keyed by Run ID: a cancel or force-cancel the API accepted and
-	// whose transition no poll has observed yet (run-lifecycle R4, AC5). Cancel is
-	// asynchronous, so a 202 licenses exactly this and nothing about the Conclusion, which
-	// stays whatever the API last said until a poll moves it.
+	// cancelRequested maps a Run ID to its repository: a cancel or force-cancel the API
+	// accepted and whose transition no poll has observed yet (run-lifecycle R4, R4a, AC5).
+	// Cancel is asynchronous, so an accepted request licenses exactly this and nothing about
+	// the Conclusion, which stays whatever the API last said until a poll moves it.
 	//
 	// It is the Feed's own state rather than a field on the Run, because it is not a
 	// property of the Run at all: it is a property of a request this process made, it is
-	// true of no Run the API describes, and it dies with the session. An entry is cleared
-	// by recompute the moment a polled Run reaches Status completed, which is R4's "a
-	// subsequent poll observing the Run's actual transition" and the only authority the
+	// true of no Run the API describes, and it dies with the session (R4b). An entry is
+	// cleared by recompute the moment a polled Run reaches Status completed, which is R4's
+	// "a subsequent poll observing the Run's actual transition" and the only authority the
 	// requirement grants.
-	cancelRequested map[int64]bool
+	//
+	// The repository rides along so a mark can be pruned when that repository leaves the
+	// poll set, which is the same hole the failed map closes and closes for the same reason:
+	// a repository deleted or made private upstream fails once and then leaves, so no Update
+	// can ever carry its Runs again, and a mark waiting on a transition nothing will observe
+	// would report a live request for the rest of the session.
+	cancelRequested map[int64]domain.RepoID
 
 	cursor int // index into displayedIDs
 	top    int // first visible row, scrolled to keep the cursor on screen
@@ -293,7 +299,7 @@ func New(opts Options) Model {
 		live:            make(map[string][]domain.Run),
 		current:         make(map[int64]domain.Run),
 		selected:        make(map[int64]bool),
-		cancelRequested: make(map[int64]bool),
+		cancelRequested: make(map[int64]domain.RepoID),
 		repos:           make(map[string]domain.Repo),
 		totals:          make(map[string]capTotal),
 		failed:          make(map[string]repoFailure),
@@ -419,6 +425,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					delete(m.failed, key)
 				}
 			}
+			// A cancellation-requested mark waits on a poll of its repository, so it has the
+			// same undismissable failure mode and takes the same prune (R4a). It prunes
+			// against the arriving set rather than against m.repos, which is the accumulated
+			// union and so reports every repository ever discovered as still known.
+			m.pruneCancelRequested(msg)
 		}
 		return m, nil
 
@@ -1062,11 +1073,33 @@ func (m *Model) markCancelRequested(p ops.Progress) {
 		return
 	}
 	if m.cancelRequested == nil {
-		m.cancelRequested = make(map[int64]bool)
+		m.cancelRequested = make(map[int64]domain.RepoID)
 	}
 	for _, it := range p.Sum.Succeeded {
 		if it.Kind == ops.KindRun {
-			m.cancelRequested[it.ID] = true
+			m.cancelRequested[it.ID] = it.Repo
+		}
+	}
+}
+
+// pruneCancelRequested drops a mark whose repository is absent from the discovered set, so
+// a mark cannot outlive the poll set that was going to clear it (R4a). The caller has
+// already established that the set is non-empty, because an empty one is a cold start
+// rather than an account with no repositories.
+//
+// It reads the arriving set and not m.repos. m.repos is the accumulated union of every
+// discovery this session, kept that way because the capability gate must still answer for a
+// repository whose Runs are held from an earlier poll, so a repository that has left the
+// poll set is still "known" there. Pruning against it would therefore never drop anything,
+// which is the trap the failed map beside it is still in.
+func (m *Model) pruneCancelRequested(discovered ReposDiscovered) {
+	live := make(map[domain.RepoID]bool, len(discovered))
+	for _, r := range discovered {
+		live[r.ID] = true
+	}
+	for id, repo := range m.cancelRequested {
+		if !live[repo] {
+			delete(m.cancelRequested, id)
 		}
 	}
 }

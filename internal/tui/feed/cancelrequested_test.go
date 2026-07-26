@@ -69,10 +69,10 @@ func TestCancelRequestedMarksOnlyTheAcceptedRows(t *testing.T) {
 
 	m = m.Update2(cancelFrame(ops.OpCancel, true, accepted))
 
-	if !m.cancelRequested[1] {
+	if _, marked := m.cancelRequested[1]; !marked {
 		t.Errorf("Run 1 answered 202 and is not marked as cancellation-requested (R4, AC5)")
 	}
-	if m.cancelRequested[2] {
+	if _, marked := m.cancelRequested[2]; marked {
 		t.Errorf("Run 2 was never accepted and is marked; only an accepted request is outstanding")
 	}
 
@@ -115,7 +115,7 @@ func TestForceCancelAlsoMarksTheRow(t *testing.T) {
 	r := runningRun(1, t0)
 	m = feedRuns(m, repoID("o", "r"), r)
 	m = m.Update2(cancelFrame(ops.OpForceCancel, true, r))
-	if !m.cancelRequested[1] {
+	if _, marked := m.cancelRequested[1]; !marked {
 		t.Errorf("a force-cancel the API accepted left no cancellation-requested mark (R6, AC5)")
 	}
 }
@@ -129,7 +129,7 @@ func TestRerunDoesNotMarkACancellation(t *testing.T) {
 		r := runningRun(1, t0)
 		m = feedRuns(m, repoID("o", "r"), r)
 		m = m.Update2(cancelFrame(op, true, r))
-		if m.cancelRequested[1] {
+		if _, marked := m.cancelRequested[1]; marked {
 			t.Errorf("%s marked the row as cancellation-requested; only cancel and force-cancel may (R4)", op)
 		}
 	}
@@ -144,7 +144,7 @@ func TestCancelRequestedClearsWhenThePollObservesTheTransition(t *testing.T) {
 	r := runningRun(1, t0)
 	m = feedRuns(m, repoID("o", "r"), r)
 	m = m.Update2(cancelFrame(ops.OpCancel, true, r))
-	if !m.cancelRequested[1] {
+	if _, marked := m.cancelRequested[1]; !marked {
 		t.Fatalf("precondition: the row was not marked")
 	}
 
@@ -153,7 +153,7 @@ func TestCancelRequestedClearsWhenThePollObservesTheTransition(t *testing.T) {
 	settled := mkRun(1, "o", "r", "CI", domain.StatusCompleted, domain.ConclusionCancelled, t0)
 	m = feedRuns(m, repoID("o", "r"), settled)
 
-	if m.cancelRequested[1] {
+	if _, marked := m.cancelRequested[1]; marked {
 		t.Errorf("the indicator survived the poll that observed the transition (R4, AC5)")
 	}
 	if got := gutterOf(t, m, 1); got != blankMarker {
@@ -186,7 +186,59 @@ func TestCancelRequestedSurvivesAPollThatShowsNoTransitionYet(t *testing.T) {
 
 	m = feedRuns(m, repoID("o", "r"), runningRun(1, t0)) // still in_progress
 
-	if !m.cancelRequested[1] {
+	if _, marked := m.cancelRequested[1]; !marked {
 		t.Errorf("the indicator cleared on a poll that observed no transition; cancel is asynchronous (R4)")
+	}
+}
+
+// TestCancelRequestedClearsWhenTheRepositoryLeavesThePollSet closes the hole the Feed's
+// failed-poll map already closes for the same reason. A repository deleted or made private
+// upstream fails its next poll once and then leaves the poll set, so no Update can ever
+// arrive carrying its Runs, so the transition that clears a mark can never be observed. The
+// legend would then report a request outstanding for the rest of the session, against a
+// repository the tool is no longer even asking about.
+//
+// The prune is against the discovered set, which arrives as a full set, so absence is
+// meaningful. The empty case is not: at cold start nothing is discovered yet.
+func TestCancelRequestedClearsWhenTheRepositoryLeavesThePollSet(t *testing.T) {
+	gone := repoID("o", "gone")
+	m := newFeed(100, 24)
+	m, _ = m.Update(ReposDiscovered{
+		{ID: repoID("o", "r"), Permissions: domain.Permissions{Push: true}},
+		{ID: gone, Permissions: domain.Permissions{Push: true}},
+	})
+	r := mkRun(1, "o", "gone", "CI", domain.StatusInProgress, "", t0)
+	m = feedRuns(m, gone, r)
+	m = m.Update2(cancelFrame(ops.OpCancel, true, r))
+	if _, marked := m.cancelRequested[1]; !marked {
+		t.Fatalf("precondition: the Run was not marked")
+	}
+
+	// The next discovery no longer carries the repository.
+	m, _ = m.Update(ReposDiscovered{{ID: repoID("o", "r"), Permissions: domain.Permissions{Push: true}}})
+
+	if _, marked := m.cancelRequested[1]; marked {
+		t.Errorf("the mark survived its repository leaving the poll set; nothing can ever clear it (R4)")
+	}
+	if strings.Contains(m.View(), "cancellation requested for") {
+		t.Errorf("the legend still reports a request nothing is testing anymore:\n%s", m.View())
+	}
+}
+
+// TestCancelRequestedSurvivesAnEmptyDiscovery pins the other side of that prune: a cold
+// start discovers nothing, and pruning against an empty set would clear a mark whose
+// repository the poll set still holds.
+func TestCancelRequestedSurvivesAnEmptyDiscovery(t *testing.T) {
+	id := repoID("o", "r")
+	m := newFeed(100, 24)
+	m, _ = m.Update(ReposDiscovered{{ID: id, Permissions: domain.Permissions{Push: true}}})
+	r := runningRun(1, t0)
+	m = feedRuns(m, id, r)
+	m = m.Update2(cancelFrame(ops.OpCancel, true, r))
+
+	m, _ = m.Update(ReposDiscovered{})
+
+	if _, marked := m.cancelRequested[1]; !marked {
+		t.Errorf("an empty discovery cleared the mark; absence is only meaningful in a full set")
 	}
 }

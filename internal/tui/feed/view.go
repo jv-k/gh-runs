@@ -388,7 +388,7 @@ func (m Model) renderRow(r domain.Run, isCursor, isSelected bool) string {
 	// Run still running means an empty Conclusion, and the mark disappears the moment a poll
 	// moves the Run to completed.
 	gutter := blankMarker
-	if m.cancelRequested[r.ID] {
+	if _, requested := m.cancelRequested[r.ID]; requested {
 		gutter = decorate(styleCancelRequested).Render(cancelRequestedMarker) + " "
 	}
 
