@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,23 +19,10 @@ func ids(list []domain.RepoID) []string {
 	return out
 }
 
-// equal reports whether two string slices carry the same values in the same order.
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// TestExcludeAndPinDefaultToEmpty pins settings R3 and AC1 for R7's two lists: with
-// no config file both are empty and no diagnostic is emitted, so discovery is
-// unchanged from the state before either key existed.
-func TestExcludeAndPinDefaultToEmpty(t *testing.T) {
+// TestExcludeDefaultsToEmpty pins settings R3 and AC1 for R7's exclude key: with no
+// config file it is empty and no diagnostic is emitted, so discovery is unchanged from
+// the state before the key existed.
+func TestExcludeDefaultsToEmpty(t *testing.T) {
 	dir := t.TempDir() // empty: no config.yml inside
 	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
 
@@ -46,25 +34,19 @@ func TestExcludeAndPinDefaultToEmpty(t *testing.T) {
 	if len(cfg.Exclude) != 0 {
 		t.Errorf("Exclude = %v, want empty", ids(cfg.Exclude))
 	}
-	if len(cfg.Pin) != 0 {
-		t.Errorf("Pin = %v, want empty", ids(cfg.Pin))
-	}
 }
 
-// TestExcludeAndPinReadFromFile pins settings R7's two keys at the loader. Both hold
-// host-qualified identity (ADR-0009): the bare OWNER/REPO form defaults to
-// github.com and an explicit github.com/OWNER/REPO is accepted and means the same
-// repository, exactly as the CLI's -R parses its selector. The list order is the
-// file's, because the pin list's order is what prioritises one repository over
-// another.
-func TestExcludeAndPinReadFromFile(t *testing.T) {
+// TestExcludeReadFromFile pins settings R7's exclude key at the loader. It holds
+// host-qualified identity (ADR-0009): the bare OWNER/REPO form defaults to github.com
+// and an explicit github.com/OWNER/REPO is accepted and means the same repository,
+// exactly as the CLI's -R parses its selector, because both now route through
+// domain.ParseRepoRef.
+func TestExcludeReadFromFile(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, ""+
 		"exclude:\n"+
 		"  - jv-k/noisy\n"+
-		"  - github.com/acme/vendor\n"+
-		"pin:\n"+
-		"  - jv-k/main-project\n")
+		"  - github.com/acme/vendor\n")
 	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
 
 	cfg, diags := config.Load(env, config.Flags{})
@@ -72,29 +54,45 @@ func TestExcludeAndPinReadFromFile(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("Load returned diagnostics: %v", diags)
 	}
-	wantExclude := []string{"github.com/jv-k/noisy", "github.com/acme/vendor"}
-	if got := ids(cfg.Exclude); !equal(got, wantExclude) {
-		t.Errorf("Exclude = %v, want %v", got, wantExclude)
-	}
-	wantPin := []string{"github.com/jv-k/main-project"}
-	if got := ids(cfg.Pin); !equal(got, wantPin) {
-		t.Errorf("Pin = %v, want %v", got, wantPin)
+	want := []string{"github.com/jv-k/noisy", "github.com/acme/vendor"}
+	if got := ids(cfg.Exclude); !slices.Equal(got, want) {
+		t.Errorf("Exclude = %v, want %v", got, want)
 	}
 }
 
-// TestRepoListWrongTypeFallsBackToEmpty pins settings R14 for R7's two keys, in the
+// TestPinKeyIsNotRecognised pins R7's pin half as deferred rather than half-built. The
+// key warns as an unrecognised setting and changes nothing, which is settings R11's
+// ruling applied here: a key with no subsystem behind it defers with the subsystem
+// rather than shipping inert, and R14 means a config carrying one still starts. Issue
+// #97 carries the pin, and R3 plus R14 mean adding the key later needs no migration.
+func TestPinKeyIsNotRecognised(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "pin:\n  - jv-k/main-project\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	_, diags := config.Load(env, config.Flags{})
+
+	if len(diags) != 1 || !strings.Contains(diags[0].Message, "pin") {
+		t.Fatalf("diagnostics = %v, want one naming the unrecognised pin key", diags)
+	}
+	if !strings.Contains(diags[0].Message, "unrecognised") {
+		t.Errorf("diagnostic %q is not the generic unknown-key message", diags[0].Message)
+	}
+}
+
+// TestRepoListWrongTypeFallsBackToEmpty pins settings R14 for R7's exclude key, in the
 // shape the selector settings already use: a value that is not a list falls that one
 // setting back to its default, an empty list, with a diagnostic naming the key and
-// what it wanted. The sibling key is untouched, because each key is decoded from its
+// what it wanted. The unrelated key is untouched, because each key is decoded from its
 // own node.
 func TestRepoListWrongTypeFallsBackToEmpty(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		contents string
 	}{
-		{"scalar number", "exclude: 5\npin:\n  - jv-k/kept\n"},
-		{"scalar string", "exclude: jv-k/noisy\npin:\n  - jv-k/kept\n"},
-		{"mapping", "exclude:\n  jv-k: noisy\npin:\n  - jv-k/kept\n"},
+		{"scalar number", "exclude: 5\nbudget: greedy\n"},
+		{"scalar string", "exclude: jv-k/noisy\nbudget: greedy\n"},
+		{"mapping", "exclude:\n  jv-k: noisy\nbudget: greedy\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -106,16 +104,16 @@ func TestRepoListWrongTypeFallsBackToEmpty(t *testing.T) {
 			if len(cfg.Exclude) != 0 {
 				t.Errorf("Exclude = %v, want the empty default to stand", ids(cfg.Exclude))
 			}
-			if len(diags) == 0 {
-				t.Fatal("a wrong-typed exclude produced no diagnostic")
+			if len(diags) != 1 {
+				t.Fatalf("diagnostics = %v, want exactly one for the wrong-typed exclude", diags)
 			}
 			if msg := diags[0].Message; !strings.Contains(msg, "exclude") {
 				t.Errorf("diagnostic %q does not name the exclude key", msg)
 			}
-			// The sibling key is resolved from its own node, so one bad value cannot
+			// The unrelated key is resolved from its own node, so one bad value cannot
 			// discard the rest of the file.
-			if got := ids(cfg.Pin); !equal(got, []string{"github.com/jv-k/kept"}) {
-				t.Errorf("Pin = %v, want the valid sibling key kept", got)
+			if cfg.Budget != config.TierGreedy {
+				t.Errorf("Budget = %q, want the valid sibling key kept", cfg.Budget)
 			}
 		})
 	}
@@ -138,29 +136,41 @@ func TestRepoListRejectsUnsupportedHostAndBadShape(t *testing.T) {
 
 	cfg, diags := config.Load(env, config.Flags{})
 
-	if got := ids(cfg.Exclude); !equal(got, []string{"github.com/jv-k/good"}) {
+	if got := ids(cfg.Exclude); !slices.Equal(got, []string{"github.com/jv-k/good"}) {
 		t.Errorf("Exclude = %v, want only the entry that parsed", got)
 	}
 	if len(diags) != 3 {
 		t.Fatalf("diagnostics = %d, want one per rejected entry: %v", len(diags), diags)
 	}
-	for _, want := range []string{"ghe.example.com", "just-an-owner", "escape"} {
+	// Each diagnostic names the entry as written and the line that entry sits on, not
+	// the line the sequence starts at. A twenty-entry list is exactly the case this
+	// message exists for, and a message that points at line 3 for an entry on line 12
+	// misleads the person it was written for.
+	for _, want := range []struct{ entry, line string }{
+		{"ghe.example.com/acme/internal", "line 3"},
+		{"just-an-owner", "line 4"},
+		{"jv-k/../escape", "line 5"},
+	} {
 		found := false
 		for _, d := range diags {
-			if strings.Contains(d.Message, want) {
+			if strings.Contains(d.Message, want.entry) {
 				found = true
+				if !strings.Contains(d.Message, want.line) {
+					t.Errorf("diagnostic %q does not name %q", d.Message, want.line)
+				}
 			}
 		}
 		if !found {
-			t.Errorf("no diagnostic names the rejected entry %q: %v", want, diags)
+			t.Errorf("no diagnostic names the rejected entry %q: %v", want.entry, diags)
 		}
 	}
 }
 
-// TestSaveWritesRepoListsWithoutDamage pins settings R17 and AC11 for R7's two keys:
-// editing the lists changes those keys only, and unrelated comments, key order and
-// keys this version does not recognise all survive. The values are written as YAML
-// sequences of the bare OWNER/REPO spelling, which is the form the loader reads back.
+// TestSaveWritesRepoListsWithoutDamage pins settings R17 and AC11 for R7's exclude key
+// at the marshaller: editing the list changes that key only, and unrelated comments, key
+// order and keys this version does not recognise all survive. The value is written as a
+// YAML sequence of the bare OWNER/REPO spelling, which is the form the loader reads back.
+// The gesture that reaches this from the view is pinned in tui/settings.
 func TestSaveWritesRepoListsWithoutDamage(t *testing.T) {
 	dir := t.TempDir()
 	original := "# My gh-runs config\n" +
@@ -181,14 +191,13 @@ func TestSaveWritesRepoListsWithoutDamage(t *testing.T) {
 
 	next := prev
 	next.Exclude = []domain.RepoID{gh("jv-k", "noisy"), gh("acme", "vendor")}
-	next.Pin = []domain.RepoID{gh("jv-k", "main-project")}
 
 	if err := config.Save(env, prev, next); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
 	got := readSaved(t, dir)
-	for _, want := range []string{"- jv-k/noisy", "- acme/vendor", "pin:", "- jv-k/main-project"} {
+	for _, want := range []string{"- jv-k/noisy", "- acme/vendor"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("saved config is missing %q:\n%s", want, got)
 		}
@@ -218,11 +227,36 @@ func TestSaveWritesRepoListsWithoutDamage(t *testing.T) {
 	if len(diags) != 1 || !strings.Contains(diags[0].Message, "future_thing") {
 		t.Fatalf("round-trip diagnostics = %v, want only the unknown-key warning", diags)
 	}
-	if got := ids(cfg.Exclude); !equal(got, []string{"github.com/jv-k/noisy", "github.com/acme/vendor"}) {
+	if got := ids(cfg.Exclude); !slices.Equal(got, []string{"github.com/jv-k/noisy", "github.com/acme/vendor"}) {
 		t.Errorf("Exclude after round-trip = %v", got)
 	}
-	if got := ids(cfg.Pin); !equal(got, []string{"github.com/jv-k/main-project"}) {
-		t.Errorf("Pin after round-trip = %v", got)
+}
+
+// TestSaveFillsAnExistingEmptyListKey pins the marshaller case a config file reaches
+// after the list has been emptied once: the key is already there as an empty sequence,
+// and gaining entries must turn it back into a block list rather than leave the flow
+// style the empty form carries.
+func TestSaveFillsAnExistingEmptyListKey(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "exclude: []\nbudget: normal\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	prev := baseConfig()
+	next := prev
+	next.Exclude = []domain.RepoID{gh("jv-k", "noisy"), gh("acme", "vendor")}
+
+	if err := config.Save(env, prev, next); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got := readSaved(t, dir)
+	for _, want := range []string{"- jv-k/noisy", "- acme/vendor", "budget: normal"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("saved config is missing %q:\n%s", want, got)
+		}
+	}
+	cfg, _ := config.Load(env, config.Flags{})
+	if got := ids(cfg.Exclude); !slices.Equal(got, []string{"github.com/jv-k/noisy", "github.com/acme/vendor"}) {
+		t.Errorf("Exclude after filling an empty key = %v", got)
 	}
 }
 

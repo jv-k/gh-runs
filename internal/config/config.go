@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -253,16 +254,19 @@ type Config struct {
 	// default stands.
 	WorkflowsScope Scope
 	StorageScope   Scope
-	// Exclude and Pin are the repository lists settings R7 makes settable, each of
-	// host-qualified identity (ADR-0009). Exclusion removes a repository from
-	// discovery, the Feed and all polling; a pin prioritises one. Where a repository
-	// is in both, exclusion wins and the pin has no effect (R7, AC14), which the
-	// consumer enforces because only it can: this type carries what was configured,
-	// not what it resolves to. Both default to empty, so a config file with neither
-	// key leaves discovery exactly as it was (R3, AC1). Pin's order is the file's,
-	// because a pin list's order is the priority it expresses.
+	// Exclude is settings R7's exclude list, of host-qualified identity (ADR-0009).
+	// Exclusion removes a repository from discovery, the Feed and all polling. It
+	// defaults to empty, so a config file without the key leaves discovery exactly as
+	// it was (R3, AC1).
+	//
+	// R7's pin half has no field here, and that is deliberate rather than an omission.
+	// Prioritising a repository is a cadence decision, cadence is the scheduler's tier
+	// policy (ADR-0021), and nothing this tool currently publishes is consumed for
+	// order, so a pin key would be a setting a person could write and never observe.
+	// Settings R11 already ruled on that shape for the notification options: a key with
+	// no subsystem behind it defers with the subsystem rather than shipping inert, and
+	// R3 plus R14 mean adding it later needs no migration. Issue #97 carries it.
 	Exclude []domain.RepoID
-	Pin     []domain.RepoID
 }
 
 // Diagnostic is a non-fatal message about the configuration: an unknown key, a
@@ -414,8 +418,6 @@ func resolveFile(cfg Config, data []byte, diags []Diagnostic) (Config, []Diagnos
 			cfg.StorageScope, diags = resolveScope(key, node, cfg.StorageScope, diags)
 		case "exclude":
 			cfg.Exclude, diags = resolveRepoList(key, node, diags)
-		case "pin":
-			cfg.Pin, diags = resolveRepoList(key, node, diags)
 		default:
 			// Not a key this version applies. A key R13 refuses gets its specific
 			// reason; anything else gets the generic unknown-key message (R14).
@@ -494,49 +496,36 @@ func resolveScope(key string, node yaml.Node, current Scope, diags []Diagnostic)
 // It returns a nil slice for an empty result rather than an allocated one, so an
 // absent key and a present-but-empty key are indistinguishable downstream, which is
 // what R3 asks of every key.
+// It decodes into per-item nodes rather than into strings, because a sequence node
+// reports the line its first item sits on and nothing else: a twenty-entry list would
+// point every diagnostic at the same line, misleading exactly the person the message
+// was written for. Each item carries its own Line, so the message names the line the
+// operator typed.
 func resolveRepoList(key string, node yaml.Node, diags []Diagnostic) ([]domain.RepoID, []Diagnostic) {
-	var refs []string
-	if node.Decode(&refs) != nil {
+	var items []yaml.Node
+	if node.Decode(&items) != nil {
 		return nil, append(diags, typeErr(key, "a list of OWNER/REPO entries", node))
 	}
 	var out []domain.RepoID
-	for _, ref := range refs {
-		id, err := parseRepoRef(ref)
+	for _, item := range items {
+		var ref string
+		if err := item.Decode(&ref); err != nil {
+			diags = append(diags, Diagnostic{Message: fmt.Sprintf(
+				"%s: ignoring the entry on line %d: expected an OWNER/REPO string", key, item.Line)})
+			continue
+		}
+		id, err := domain.ParseRepoRef(ref)
 		if err != nil {
 			// The entry as written is named first, because the underlying error names
 			// only the component it rejected, and a person scanning a list of twenty
 			// wants the line they typed rather than its parsed pieces.
 			diags = append(diags, Diagnostic{Message: fmt.Sprintf(
-				"%s: ignoring %q (line %d): %v", key, ref, node.Line, err)})
+				"%s: ignoring %q (line %d): %v", key, ref, item.Line, err)})
 			continue
 		}
 		out = append(out, id)
 	}
 	return out, diags
-}
-
-// parseRepoRef parses one [HOST/]OWNER/REPO entry into a host-qualified identity. The
-// bare OWNER/REPO form defaults to github.com and an explicit github.com/OWNER/REPO
-// means the same repository, matching gh's own selector and the CLI's -R (ADR-0009,
-// cli-surface R8). The shape check is here and the host check and the charset
-// validation are domain.NewRepoID's, so a config entry reaches no request URL path or
-// filesystem key without passing the one validation home every identity passes
-// through (security consolidation).
-func parseRepoRef(ref string) (domain.RepoID, error) {
-	parts := strings.Split(strings.TrimSpace(ref), "/")
-	var host, owner, name string
-	switch len(parts) {
-	case 2:
-		host, owner, name = domain.HostGitHub, parts[0], parts[1]
-	case 3:
-		host, owner, name = parts[0], parts[1], parts[2]
-	default:
-		return domain.RepoID{}, fmt.Errorf("invalid repository %q: expected the [HOST/]OWNER/REPO format", ref)
-	}
-	if owner == "" || name == "" {
-		return domain.RepoID{}, fmt.Errorf("invalid repository %q: expected the [HOST/]OWNER/REPO format", ref)
-	}
-	return domain.NewRepoID(host, owner, name)
 }
 
 // ClampConfirmThreshold, ClampBreakerFailures and ClampDiscoveryRefresh apply the same
@@ -668,43 +657,22 @@ func changedKeys(prev, next Config) []change {
 	add(prev.Theme != next.Theme, "theme", string(next.Theme))
 	add(prev.WorkflowsScope != next.WorkflowsScope, "workflows_scope", string(next.WorkflowsScope))
 	add(prev.StorageScope != next.StorageScope, "storage_scope", string(next.StorageScope))
-	// R7's two lists are written as a sequence of the bare OWNER/REPO spelling, the
-	// form parseRepoRef reads back. They are compared by value and by order, because
-	// the pin list's order is the priority it expresses, so reordering it is a change.
-	add(!sameRepos(prev.Exclude, next.Exclude), "exclude", repoRefs(next.Exclude))
-	add(!sameRepos(prev.Pin, next.Pin), "pin", repoRefs(next.Pin))
+	// R7's exclude list is written as a sequence of the bare OWNER/REPO spelling, the
+	// form domain.ParseRepoRef reads back. slices.Equal compares it by value and by
+	// order, so reordering the list is a change and rewrites the key.
+	add(!slices.Equal(prev.Exclude, next.Exclude), "exclude", repoRefs(next.Exclude))
 	return changes
 }
 
-// sameRepos reports whether two identity lists carry the same repositories in the same
-// order, the comparison changedKeys needs because a slice is not comparable with ==
-// and because order is meaningful for the pin list.
-func sameRepos(a, b []domain.RepoID) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// repoRefs renders identities as the OWNER/REPO strings the file carries. The host is
-// dropped where it is github.com, which is every identity 2.0.0 admits, so a config a
-// person hand-edits keeps the short form they wrote (ADR-0009: the host is qualified
-// in the model, and spelled only where it is not the default). It returns an empty
-// non-nil slice for an empty list, so clearing a list writes an empty sequence rather
-// than a null.
+// repoRefs renders identities as the OWNER/REPO strings the file carries. Every
+// identity 2.0.0 admits is a github.com one (ADR-0009), which is why the host is not
+// spelled: NewRepoID rejects every other host, so a branch for one would be a branch
+// nothing can reach. It returns an empty non-nil slice for an empty list, so clearing
+// the list writes an empty sequence rather than a null.
 func repoRefs(ids []domain.RepoID) []string {
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
-		if id.Host == domain.HostGitHub {
-			out = append(out, id.Owner+"/"+id.Name)
-			continue
-		}
-		out = append(out, id.String())
+		out = append(out, id.Owner+"/"+id.Name)
 	}
 	return out
 }

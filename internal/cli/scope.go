@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
@@ -50,12 +51,18 @@ func resolveScope(deps Deps, f *listFlags) (scope, error) {
 		if err != nil {
 			return scope{}, err
 		}
+		if excluded(deps, id) {
+			return scope{}, excludedRepo(id)
+		}
 		return scope{repos: []domain.RepoID{id}}, nil
 	}
 	if ghRepo, ok := deps.Getenv("GH_REPO"); ok && ghRepo != "" {
 		id, err := parseRepoArg(ghRepo)
 		if err != nil {
 			return scope{}, err
+		}
+		if excluded(deps, id) {
+			return scope{}, excludedRepo(id)
 		}
 		return scope{repos: []domain.RepoID{id}}, nil
 	}
@@ -65,14 +72,36 @@ func resolveScope(deps Deps, f *listFlags) (scope, error) {
 	}
 
 	if deps.Current != nil {
-		if id, err := deps.Current(); err == nil {
+		if id, err := deps.Current(); err == nil && !excluded(deps, id) {
 			return scope{repos: []domain.RepoID{id}}, nil
 		}
 		// A resolver error means the tool was not launched inside a repository (or
 		// its remote is not recognised). That is R22's fan-out trigger, not a
 		// failure: no repository means all repositories.
+		//
+		// An excluded working directory takes the same branch, mirroring discovery's
+		// fast path (settings R7): being launched inside a repository is not an
+		// explicit request for it, so it is not refused either. The fan-out set has
+		// the exclusion applied already, so the account is listed around the hole.
 	}
 	return fanOutScope(deps)
+}
+
+// excluded reports whether id is on settings R7's exclude list, which main.go fills
+// from the loaded config. The list is small, roughly ten entries at reference scale,
+// so a scan beats carrying a set through Deps.
+func excluded(deps Deps, id domain.RepoID) bool {
+	return slices.Contains(deps.Exclude, id)
+}
+
+// excludedRepo is the refusal for a repository the operator named explicitly and also
+// excluded (settings R7). It states which repository and which setting, and how to lift
+// it, because the operator has contradicted themselves and the useful answer names both
+// halves rather than only the one that lost.
+func excludedRepo(id domain.RepoID) error {
+	return fmt.Errorf(
+		"repository %s/%s is in your config's exclude list; remove it from exclude to operate on it",
+		id.Owner, id.Name)
 }
 
 // fanOutScope reads the discovered set through the injected function (cli-surface
@@ -92,30 +121,14 @@ func fanOutScope(deps Deps) (scope, error) {
 
 // parseRepoArg parses a [HOST/]OWNER/REPO selector into a host-qualified identity
 // (cli-surface R8, R9). The bare OWNER/REPO form defaults to github.com, and an
-// explicit github.com/OWNER/REPO is accepted and treated identically (AC7). A host
-// segment carrying a dot is how the three-part and two-part forms are told apart,
-// matching gh's own parse. The split shape is checked here, then domain.NewRepoID
-// does the host-check and the charset validation, so -R and GH_REPO cannot
-// interpolate an owner or name outside GitHub's charset into the request URL path
-// (security hardening, R18). That is the one validation home discovery also uses,
-// so the invariant has no second construction site.
+// explicit github.com/OWNER/REPO is accepted and treated identically (AC7).
+//
+// Both the shape parse and the validation live in domain, so -R, GH_REPO and settings
+// R7's exclude list accept exactly the same spellings and reject exactly the same ones.
+// Keeping a private copy of the switch here left the charset with one home and the
+// shape with two, which is the same class of hole one home closes.
 func parseRepoArg(arg string) (domain.RepoID, error) {
-	parts := strings.Split(arg, "/")
-	var host, owner, name string
-	switch len(parts) {
-	case 2:
-		host, owner, name = hostGitHub, parts[0], parts[1]
-	case 3:
-		host, owner, name = parts[0], parts[1], parts[2]
-	default:
-		return domain.RepoID{}, fmt.Errorf(
-			"invalid repository %q: expected the [HOST/]OWNER/REPO format", arg)
-	}
-	if owner == "" || name == "" {
-		return domain.RepoID{}, fmt.Errorf(
-			"invalid repository %q: expected the [HOST/]OWNER/REPO format", arg)
-	}
-	return domain.NewRepoID(host, owner, name)
+	return domain.ParseRepoRef(arg)
 }
 
 // unsupportedHost is the class-neutral rejection for the GH_HOST route (cli-surface

@@ -78,27 +78,39 @@ func TestGoldenEditingNumber(t *testing.T) {
 	goldie.New(t).Assert(t, "editing_number", []byte(m.View()))
 }
 
-// TestGoldenRepoLists fixes the frame R7's two rows paint when they are actually set:
-// the exclude row focused with its description, a list short enough to name in full,
-// and a list long enough to be summarised. It is the reference account's shape, where
-// 163 repositories are discovered and roughly 10 are wanted, so the summarised form is
-// the one a real config produces rather than a corner.
-func TestGoldenRepoLists(t *testing.T) {
+// TestGoldenExcludeList fixes the frame R7's exclude row paints when it is set: the row
+// focused with its description and its edit hint, naming as many repositories as the
+// value column holds and counting the rest. It is the reference account's shape, where
+// 163 repositories are discovered and roughly 10 are wanted, so a list that overflows the
+// column is what a real config produces rather than a corner.
+func TestGoldenExcludeList(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Exclude = []domain.RepoID{
-		repoID("jv-k", "dotfiles"),
-		repoID("jv-k", "scratch"),
-		repoID("acme", "vendored-fork"),
-		repoID("acme", "archive"),
+		repo("jv-k", "dotfiles"),
+		repo("jv-k", "scratch"),
+		repo("acme", "vendored-fork"),
+		repo("acme", "archive"),
+		repo("acme", "legacy-pipeline"),
 	}
-	cfg.Pin = []domain.RepoID{repoID("jv-k", "gh-runs")}
 	m := settings.New(keys.Standard, cfg, nil).Open()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = focus(t, m, "exclude")
-	goldie.New(t).Assert(t, "repo_lists", []byte(m.View()))
+	goldie.New(t).Assert(t, "exclude_list", []byte(m.View()))
 }
 
-// repoID builds a github.com-qualified identity for the goldens above (ADR-0009).
-func repoID(owner, name string) domain.RepoID {
-	return domain.RepoID{Host: domain.HostGitHub, Owner: owner, Name: name}
+// TestGoldenEditingExcludeList fixes the exclude editor mid-entry (R7, R17): the row is
+// open on the list as written with a new entry being typed, showing the buffer and the
+// caret. This is the frame AC11's gesture goes through, so it is the one worth pinning
+// byte for byte.
+func TestGoldenEditingExcludeList(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Exclude = []domain.RepoID{repo("jv-k", "dotfiles")}
+	m := settings.New(keys.Standard, cfg, nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "exclude")
+	m = send(m, "enter")
+	for _, k := range []string{",", " ", "a", "c", "m", "e", "/", "x"} {
+		m = send(m, k)
+	}
+	goldie.New(t).Assert(t, "editing_exclude_list", []byte(m.View()))
 }

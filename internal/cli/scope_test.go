@@ -104,3 +104,62 @@ func TestExplicitGitHubHostEqualsBareForm(t *testing.T) {
 		t.Errorf("expected Run 301 in output\n%s", bare.stdout.String())
 	}
 }
+
+// TestExcludedRepositoryRefusedOffline pins that an explicitly named excluded
+// repository is refused before any request, naming the exclusion (settings R7). It
+// used to crawl the repository the person told the tool to leave alone and then fail
+// at Plan with a capability message, which named the wrong cause: the capability is
+// unknown precisely because the exclusion kept the repository out of discovery.
+//
+// The refusal is deliberate rather than a silent skip. -R and GH_REPO are explicit
+// requests, so an explicit answer beats listing nothing and leaving the operator to
+// guess why.
+func TestExcludedRepositoryRefusedOffline(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		env  map[string]string
+	}{
+		{"repo flag on list", []string{"list", "-R", "o/excluded"}, nil},
+		{"repo flag on delete", []string{"delete", "-R", "o/excluded", "--all", "--yes"}, nil},
+		{"GH_REPO", []string{"list"}, map[string]string{"GH_REPO": "o/excluded"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessOffline(t).withExclude(gh("o", "excluded"))
+			for k, v := range tc.env {
+				h.env[k] = v
+			}
+			code := h.run(tc.args...)
+			if code == 0 {
+				t.Fatalf("exit = 0, want non-zero for an excluded repository")
+			}
+			if n := h.counting.count(); n != 0 {
+				t.Errorf("wire requests = %d, want 0 (the exclusion is honoured before the network)", n)
+			}
+			msg := h.stderr.String()
+			if !strings.Contains(msg, "o/excluded") || !strings.Contains(msg, "exclude") {
+				t.Errorf("refusal does not name the repository and the exclusion; stderr=%q", msg)
+			}
+		})
+	}
+}
+
+// TestExcludedWorkingDirectoryFallsBackToFanOut pins the other limb, which mirrors
+// discovery's fast path exactly: being launched inside an excluded repository is not
+// an explicit request for it, so it is not a refusal either. The invocation falls out
+// to the discovered set, which the exclusion has already been applied to, and the
+// account is listed around the hole.
+func TestExcludedWorkingDirectoryFallsBackToFanOut(t *testing.T) {
+	h := newHarnessOffline(t).
+		withCurrent(gh("o", "excluded")).
+		withExclude(gh("o", "excluded")).
+		withDiscovered()
+
+	if code := h.run("list"); code != 0 {
+		t.Fatalf("exit = %d, want 0: an excluded working directory falls out to a fan-out", code)
+	}
+	if n := h.counting.count(); n != 0 {
+		t.Errorf("wire requests = %d, want 0 over an empty discovered set", n)
+	}
+}

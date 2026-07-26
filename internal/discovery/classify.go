@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sync"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
@@ -199,6 +200,11 @@ func (d *Discovery) persist() {
 	}
 	d.mu.Unlock()
 	d.opts.Store.SaveDoc(docName, records)
+	// The exclude list that shaped this document is written with it, so a later session
+	// can tell whether the omissions in it are still the ones the operator asked for
+	// (settings R7). Without it, removing an exclude line would never bring the
+	// repository back on a warm cache.
+	d.opts.Store.SaveDoc(excludeDocName, d.excludeFingerprint())
 }
 
 // Reload loads the persisted classification and capability from the store, so a
@@ -207,8 +213,19 @@ func (d *Discovery) persist() {
 // wrong-schema document reads as absent and leaves the set empty, which a
 // subsequent pass rebuilds (local-store R11, R13). It reports how many records it
 // admitted, so a caller can tell a warm start from a cold one.
+//
+// A document written under a different exclude list is stale and reads as absent
+// (settings R7). Every caller spends a Pass when Reload reports nothing, so this is
+// what makes an exclusion reversible: a Pass under an exclusion writes a document that
+// omits the repository, and without the check, deleting the config line would leave a
+// warm cache answering non-zero forever and the repository gone until the cache
+// directory was cleared. The check fires on a membership change and on nothing else,
+// so the ordinary launch stays warm and costs no re-enumeration.
 func (d *Discovery) Reload() int {
 	if d.opts.Store == nil {
+		return 0
+	}
+	if !d.excludeFingerprintMatches() {
 		return 0
 	}
 	var records []Record
@@ -224,9 +241,13 @@ func (d *Discovery) Reload() int {
 			continue
 		}
 		if d.excluded(id) {
-			// settings R7: a repository excluded since the session that wrote this
-			// document is not re-admitted from it, and is not counted as reloaded. put
-			// would refuse it anyway; refusing it here keeps the count honest, and a
+			// settings R7, defence in depth. The staleness check above already sends a
+			// session whose exclude list changed down the cold path, so a document
+			// reaching here should hold no excluded repository. It can hold one anyway
+			// when the marker write was dropped and the record write was not, which the
+			// store's best-effort contract permits (local-store R11, R21), and this is
+			// what keeps the exclusion holding in that case. put would refuse the record
+			// regardless; refusing it here also keeps the returned count honest, and a
 			// caller reads that count to tell a warm start from a cold one.
 			continue
 		}
@@ -241,4 +262,16 @@ func (d *Discovery) Reload() int {
 		n++
 	}
 	return n
+}
+
+// excludeFingerprintMatches reports whether the persisted results were shaped by the
+// exclude list this session holds. An absent marker matches an empty list, so a store
+// written before this key existed keeps loading warm and nobody pays a re-enumeration
+// for the upgrade. Any other disagreement makes the document stale.
+func (d *Discovery) excludeFingerprintMatches() bool {
+	var persisted []string
+	if !d.opts.Store.LoadDoc(excludeDocName, &persisted) {
+		return len(d.exclude) == 0
+	}
+	return slices.Equal(persisted, d.excludeFingerprint())
 }

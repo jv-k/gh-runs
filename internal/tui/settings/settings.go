@@ -19,12 +19,15 @@
 package settings
 
 import (
+	"slices"
 	"strconv"
+	"strings"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
+	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 )
 
@@ -48,7 +51,6 @@ const (
 	rowWorkflowsScope
 	rowStorageScope
 	rowExclude
-	rowPin
 	rowConfirmThreshold
 	rowBreakerFailures
 	rowDiscoveryRefresh
@@ -56,12 +58,7 @@ const (
 )
 
 // isSelector reports whether the row cycles through a small fixed set (space changes it),
-// as opposed to a numeric row that opens an editor (enter). The two repository-list rows
-// (R7) are neither: a list of host-qualified identities is not a fixed set to cycle and
-// not a bounded number to type, so they report what the config file holds and take no
-// edit gesture. That keeps a stray press on the exclude row from emptying the list a
-// person with 163 repositories relies on, and an editing surface for them is out of
-// 2.0.0's scope.
+// as opposed to a row that opens an editor (enter).
 func (r row) isSelector() bool {
 	switch r {
 	case rowBudget, rowProfile, rowTheme, rowWorkflowsScope, rowStorageScope:
@@ -82,6 +79,20 @@ func (r row) isNumber() bool {
 	}
 }
 
+// isList reports whether the row holds R7's repository list, edited as one line of
+// comma-separated OWNER/REPO entries. It is a third edit shape rather than a stretched
+// numeric one, but it reuses the same gesture: enter opens, typing rewrites, enter
+// commits, esc abandons.
+//
+// The editor opens pre-filled with the list as it stands, which is what lets one gesture
+// both add and remove. A gesture that could only append would be a one-way ratchet, and
+// a person who excluded the wrong repository would have to reach for the file anyway.
+func (r row) isList() bool { return r == rowExclude }
+
+// isEditable reports whether enter opens an editor on the row, which is true of the
+// numeric rows and the list row and of nothing else.
+func (r row) isEditable() bool { return r.isNumber() || r.isList() }
+
 // configKey is the config.yml key the row maps to, the same spelling config.Save writes
 // and Load reads. It is what CursorKey returns.
 func (r row) configKey() string {
@@ -98,8 +109,6 @@ func (r row) configKey() string {
 		return "storage_scope"
 	case rowExclude:
 		return "exclude"
-	case rowPin:
-		return "pin"
 	case rowConfirmThreshold:
 		return "confirm_threshold"
 	case rowBreakerFailures:
@@ -128,11 +137,16 @@ type Model struct {
 	width  int
 	height int
 
-	// editing and editBuf hold a numeric edit in progress (R12, R20, R21). editBuf
-	// collects digits like the confirm pane's typed count, and commit clamps it to the
-	// setting's bound before it is adopted.
+	// editing and editBuf hold an edit in progress (R12, R20, R21 for a number, R7 for
+	// the exclude list). editBuf collects typed text like the confirm pane's typed count,
+	// and commit clamps a number to its bound or parses a list into identities before it
+	// is adopted.
 	editing bool
 	editBuf string
+	// editErr names the entries the last list commit could not parse, so the view reports
+	// them rather than dropping them silently. It is the loader's R14 rule applied to the
+	// same input arriving by keystroke, and it clears on the next edit.
+	editErr string
 
 	// saveErr is the last write's failure, surfaced in the view rather than swallowed so
 	// the operator is not misled into believing a change persisted (R17's spirit).
@@ -223,38 +237,107 @@ func (m Model) handleNavKey(k tea.KeyPressMsg) Model {
 			m = m.applyCycle()
 			m = m.persist()
 		}
-	case key.Matches(k, m.profile.OpenDetail): // enter: edit a number
-		if m.cursor.isNumber() {
+	case key.Matches(k, m.profile.OpenDetail): // enter: open the row's editor
+		if m.cursor.isEditable() {
 			m.editing = true
+			// A numeric row starts empty, because typing a threshold replaces it outright
+			// and an empty buffer is how "enter, then changed my mind" leaves it alone. A
+			// list row starts on what is there, because editing a list is mostly amending
+			// one, and starting empty would make removal the only cheap operation.
 			m.editBuf = ""
+			m.editErr = ""
+			if m.cursor.isList() {
+				m.editBuf = strings.Join(repoRefs(m.cfg.Exclude), ", ")
+			}
 		}
 	}
 	return m
 }
 
-// handleEditKey drives a numeric edit in progress (R12, R20, R21). Digits build the buffer
-// and backspace trims it, mirroring the confirm pane; enter commits, clamping to the
-// setting's bound; esc cancels, leaving the setting as it was. esc here does not close the
-// pane, exactly as the Feed's esc cancels the filter before it closes anything.
+// handleEditKey drives an edit in progress (R12, R20, R21 for a number, R7 for the list).
+// Typing builds the buffer and backspace trims it, mirroring the confirm pane; enter
+// commits, clamping a number to its bound and parsing a list into identities; esc cancels,
+// leaving the setting as it was. esc here does not close the pane, exactly as the Feed's
+// esc cancels the filter before it closes anything.
+//
+// What counts as typing is the row's, not the pane's: a numeric row takes digits alone, so
+// a letter cannot enter a threshold, and the list row takes the printable characters an
+// OWNER/REPO list is written in. Neither is a keybinding, exactly as the confirm pane's
+// typed count is not (R7a, AC18).
 func (m Model) handleEditKey(k tea.KeyPressMsg) Model {
 	switch {
 	case key.Matches(k, m.profile.CloseDetail): // esc: cancel the edit
-		m.editing = false
-		m.editBuf = ""
+		return m.endEdit()
 	case key.Matches(k, m.profile.OpenDetail): // enter: commit the edit
-		m = m.commitNumber()
-		m.editing = false
-		m.editBuf = ""
-	case isDigit(k):
-		if len(m.editBuf) < 6 { // no setting exceeds three digits; six is slack against a fat finger
-			m.editBuf += k.String()
+		if m.cursor.isList() {
+			m = m.commitList()
+		} else {
+			m = m.commitNumber()
 		}
+		editErr := m.editErr
+		m = m.endEdit()
+		m.editErr = editErr
+		return m
 	case k.Code == tea.KeyBackspace:
 		if n := len(m.editBuf); n > 0 {
 			m.editBuf = m.editBuf[:n-1]
 		}
+	case m.cursor.isList() && listText(k) != "":
+		if len(m.editBuf) < listBufMax {
+			m.editBuf += listText(k)
+		}
+	case m.cursor.isNumber() && isDigit(k):
+		if len(m.editBuf) < 6 { // no setting exceeds three digits; six is slack against a fat finger
+			m.editBuf += k.String()
+		}
 	}
 	return m
+}
+
+// endEdit leaves edit mode and clears the transient buffer and its error.
+func (m Model) endEdit() Model {
+	m.editing = false
+	m.editBuf = ""
+	m.editErr = ""
+	return m
+}
+
+// listBufMax bounds the exclude editor's buffer. The reference account discovers 163
+// repositories, so the ceiling is generous enough that nobody meets it by excluding, and
+// low enough that a stuck key cannot grow the buffer without limit.
+const listBufMax = 4096
+
+// commitList parses the edited buffer into R7's exclude list and adopts it. Entries are
+// comma-separated OWNER/REPO, and each goes through domain.ParseRepoRef, the same door the
+// loader uses, so the view can never store an identity config.Load would refuse. An entry
+// that does not parse is dropped and named in the view rather than silently swallowed,
+// which is the loader's rule (R14) applied to the same input arriving by keystroke.
+//
+// The whole list is replaced, so removing an entry from the buffer removes it from the
+// setting. A commit that changes nothing writes nothing, because persist diffs against the
+// baseline.
+func (m Model) commitList() Model {
+	var ids []domain.RepoID
+	var rejected []string
+	for _, field := range strings.Split(m.editBuf, ",") {
+		ref := strings.TrimSpace(field)
+		if ref == "" {
+			continue
+		}
+		id, err := domain.ParseRepoRef(ref)
+		if err != nil {
+			rejected = append(rejected, ref)
+			continue
+		}
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	m.cfg.Exclude = ids
+	if len(rejected) > 0 {
+		m.editErr = "ignored: " + strings.Join(rejected, ", ")
+	}
+	return m.persist()
 }
 
 // applyCycle advances the selector under the cursor to the next value in its set, wrapping
@@ -378,4 +461,29 @@ func nextScope(s config.Scope) config.Scope {
 func isDigit(k tea.KeyPressMsg) bool {
 	s := k.String()
 	return len(s) == 1 && s[0] >= '0' && s[0] <= '9'
+}
+
+// listText is the text a key press contributes to an exclude-list edit, empty when the
+// press contributes none. It reads KeyPressMsg.Text, the characters the press actually
+// produced, rather than String(), which names a key rather than spelling it: String()
+// answers "space" for the space bar, so a predicate over it would silently refuse the
+// separator an OWNER/REPO list is written with.
+//
+// The accepted set is GitHub's owner and name charset plus the slash, dot, comma and
+// space that qualify and separate entries, which is exactly what domain.ParseRepoRef and
+// domain.NewRepoID between them admit. It is deliberately narrower than "any printable
+// rune", so a pasted newline or a stray control sequence cannot enter the buffer.
+func listText(k tea.KeyPressMsg) string {
+	if len(k.Text) != 1 {
+		return ""
+	}
+	c := k.Text[0]
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return k.Text
+	case c == '-', c == '_', c == '.', c == '/', c == ',', c == ' ':
+		return k.Text
+	default:
+		return ""
+	}
 }

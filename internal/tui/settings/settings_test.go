@@ -409,65 +409,152 @@ func TestEditKeysComeFromRegistry(t *testing.T) {
 	}
 }
 
-// TestRepoListRowsShowTheConfiguredLists pins settings R17's first sentence for R7's
-// two keys: the view and the config file are the same settings, so a config carrying
-// an exclude list and a pin list shows both, named and reachable by the cursor. They
-// are read-only rows in 2.0.0. The pane's two edit gestures are cycling a fixed set
-// and typing a bounded number, and a repository list is neither, so the list is edited
-// in the config file and the view reports it.
-func TestRepoListRowsShowTheConfiguredLists(t *testing.T) {
+// TestExcludeRowShowsTheConfiguredList pins settings R17's first sentence for R7's
+// exclude key: the view and the config file are the same settings, so a config
+// carrying an exclude list shows it, named and reachable by the cursor.
+func TestExcludeRowShowsTheConfiguredList(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.Exclude = []domain.RepoID{
-		{Host: domain.HostGitHub, Owner: "jv-k", Name: "noisy"},
-		{Host: domain.HostGitHub, Owner: "acme", Name: "vendor"},
-	}
-	cfg.Pin = []domain.RepoID{{Host: domain.HostGitHub, Owner: "jv-k", Name: "main-project"}}
+	cfg.Exclude = []domain.RepoID{repo("jv-k", "noisy"), repo("acme", "vendor")}
 	m := settings.New(keys.Standard, cfg, nil).Open()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 
 	view := m.View()
-	for _, want := range []string{"Excluded repositories", "jv-k/noisy", "acme/vendor", "Pinned repositories", "jv-k/main-project"} {
+	for _, want := range []string{"Excluded repositories", "jv-k/noisy", "acme/vendor"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the Settings view does not show %q:\n%s", want, view)
 		}
 	}
-
-	// Both rows are reachable and name their config.yml key, so the view and the file
-	// agree on what each row is (R17).
-	for _, key := range []string{"exclude", "pin"} {
-		if got := focus(t, m, key).CursorKey(); got != key {
-			t.Errorf("CursorKey after focusing %q = %q", key, got)
-		}
+	if got := focus(t, m, "exclude").CursorKey(); got != "exclude" {
+		t.Errorf("CursorKey after focusing the exclude row = %q", got)
 	}
 }
 
-// TestEmptyRepoListRowsReadAsNone pins the fresh-install frame for R7's two rows: with
-// no config file both lists are empty (R3, AC1), and the view says so in text rather
-// than painting a blank cell, because a blank reads as broken where "none" reads as a
-// setting nobody has used.
-func TestEmptyRepoListRowsReadAsNone(t *testing.T) {
+// TestEmptyExcludeRowReadsAsNone pins the fresh-install frame: with no config file the
+// list is empty (R3, AC1), and the view says so in text rather than painting a blank
+// cell, because a blank reads as broken where "none" reads as a setting nobody has used.
+func TestEmptyExcludeRowReadsAsNone(t *testing.T) {
 	m := settings.New(keys.Standard, defaultConfig(), nil).Open()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 
-	if view := m.View(); strings.Count(view, "none") != 2 {
-		t.Errorf("the two empty repository lists do not both read as none:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "none") {
+		t.Errorf("the empty exclude list does not read as none:\n%s", view)
 	}
 }
 
-// TestRepoListRowsIgnoreTheEditGestures pins that the display rows stay display rows: the
-// selector key and the number-editor key do nothing on them and persist nothing, so a
-// stray press on the exclude row cannot empty a person's exclude list.
-func TestRepoListRowsIgnoreTheEditGestures(t *testing.T) {
+// TestExcludeRowEditsAndPersists is settings R17 and AC11 reached through the surface
+// they name: a change made in the view persists to the file. enter opens the row's
+// editor pre-filled with the list as written, typing rewrites it, and enter commits.
+// Editing here rather than only in the file is what makes AC11 reachable at all, since
+// the pane is the only thing AC11's "in the view" can mean.
+func TestExcludeRowEditsAndPersists(t *testing.T) {
+	r := &recorder{}
+	m := focus(t, open(r), "exclude")
+
+	m = send(m, "enter") // open the editor, empty list so an empty buffer
+	for _, k := range strings.Split("jv-k/noisy", "") {
+		m = send(m, k)
+	}
+	m = send(m, "enter") // commit
+
+	want := []domain.RepoID{repo("jv-k", "noisy")}
+	if got := m.Config().Exclude; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Exclude after the edit = %v, want %v", got, want)
+	}
+	if len(r.saved) != 1 {
+		t.Fatalf("saves = %d, want exactly one", len(r.saved))
+	}
+	if got := r.last().Exclude; !reflect.DeepEqual(got, want) {
+		t.Errorf("persisted Exclude = %v, want %v", got, want)
+	}
+}
+
+// TestExcludeRowEditPrefillsAndRemoves pins that the gesture removes as well as adds.
+// The editor opens on the list as written, so backspacing an entry out of the buffer
+// and committing removes it. A gesture that could only append would be a one-way
+// ratchet, which is worse than no gesture.
+func TestExcludeRowEditPrefillsAndRemoves(t *testing.T) {
+	r := &recorder{}
+	cfg := defaultConfig()
+	cfg.Exclude = []domain.RepoID{repo("jv-k", "noisy"), repo("acme", "vendor")}
+	m := settings.New(keys.Standard, cfg, r.save).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "exclude")
+
+	m = send(m, "enter")
+	// The buffer opens on "jv-k/noisy, acme/vendor". Trim the second entry away.
+	for i := 0; i < len("acme/vendor")+2; i++ {
+		m = send(m, "backspace")
+	}
+	m = send(m, "enter")
+
+	want := []domain.RepoID{repo("jv-k", "noisy")}
+	if got := m.Config().Exclude; !reflect.DeepEqual(got, want) {
+		t.Errorf("Exclude after removing an entry = %v, want %v", got, want)
+	}
+}
+
+// TestExcludeRowEditRejectsAnUnparseableEntry pins that the editor never admits an
+// identity the loader would refuse. A malformed or foreign-host entry is dropped and the
+// row says so, rather than being stored as a repository that can never match anything.
+func TestExcludeRowEditRejectsAnUnparseableEntry(t *testing.T) {
+	r := &recorder{}
+	m := focus(t, open(r), "exclude")
+
+	m = send(m, "enter")
+	for _, k := range strings.Split("nonsense", "") {
+		m = send(m, k)
+	}
+	m = send(m, "enter")
+
+	if got := m.Config().Exclude; len(got) != 0 {
+		t.Errorf("Exclude after an unparseable entry = %v, want empty", got)
+	}
+	if !strings.Contains(m.View(), "nonsense") {
+		t.Errorf("the view does not report the rejected entry:\n%s", m.View())
+	}
+}
+
+// TestExcludeRowEditCancels pins esc's contract on the row, matching the numeric editor:
+// it abandons the edit and leaves the setting as it was, and it does not close the pane.
+func TestExcludeRowEditCancels(t *testing.T) {
 	r := &recorder{}
 	m := focus(t, open(r), "exclude")
 	before := m.Config()
-	for _, k := range []string{"space", "enter"} {
+
+	m = send(m, "enter")
+	for _, k := range strings.Split("jv-k/noisy", "") {
 		m = send(m, k)
 	}
+	m = send(m, "esc")
+
 	if !reflect.DeepEqual(m.Config(), before) {
-		t.Error("an edit gesture on the exclude row changed a setting")
+		t.Error("esc committed the abandoned edit")
+	}
+	if !m.IsOpen() {
+		t.Error("esc during an edit closed the pane")
 	}
 	if len(r.saved) != 0 {
-		t.Error("an edit gesture on the exclude row persisted a change")
+		t.Error("an abandoned edit persisted a change")
 	}
+}
+
+// TestSpaceDoesNotChangeTheExcludeRow pins that the exclude row takes the editor gesture
+// and not the selector one: space is the key that cycles a fixed set, and a repository
+// list is not one, so it must leave the list alone rather than cycle something.
+func TestSpaceDoesNotChangeTheExcludeRow(t *testing.T) {
+	r := &recorder{}
+	m := focus(t, open(r), "exclude")
+	before := m.Config()
+	m = send(m, "space")
+	if !reflect.DeepEqual(m.Config(), before) {
+		t.Error("space changed the exclude row")
+	}
+	if len(r.saved) != 0 {
+		t.Error("space on the exclude row persisted a change")
+	}
+}
+
+// repo builds a github.com-qualified identity for the tests above (ADR-0009).
+func repo(owner, name string) domain.RepoID {
+	return domain.RepoID{Host: domain.HostGitHub, Owner: owner, Name: name}
 }
