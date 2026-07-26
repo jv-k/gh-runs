@@ -11,6 +11,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/tui/settings"
 )
@@ -552,6 +553,248 @@ func TestSpaceDoesNotChangeTheExcludeRow(t *testing.T) {
 	if len(r.saved) != 0 {
 		t.Error("space on the exclude row persisted a change")
 	}
+}
+
+// TestLaunchFilterRowShowsTheConfiguredFilter pins settings R17's first sentence for R9's
+// key: the view carries a launch-filter row, and it shows the filter the config holds, in
+// the same grammar the Feed's own / input takes.
+func TestLaunchFilterRowShowsTheConfiguredFilter(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.LaunchFilter = filter.Filter{
+		Branch:      "main",
+		Conclusions: []domain.Conclusion{domain.ConclusionFailure},
+	}
+	m := settings.New(keys.Standard, cfg, nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	view := focus(t, m, "launch_filter").View()
+
+	for _, want := range []string{"Launch filter", "branch:main", "status:failure"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the launch filter row does not show %q:\n%s", want, view)
+		}
+	}
+}
+
+// TestEmptyLaunchFilterRowReadsAsNone pins the fresh-install frame: with no config file the
+// launch filter is empty (R3, AC1), and the row says so rather than painting a blank cell.
+func TestEmptyLaunchFilterRowReadsAsNone(t *testing.T) {
+	view := focus(t, open(&recorder{}), "launch_filter").View()
+	if !strings.Contains(view, "Launch filter") || !strings.Contains(view, "none") {
+		t.Errorf("an empty launch filter did not read as none:\n%s", view)
+	}
+}
+
+// TestLaunchFilterRowEditsAndPersists is settings R17 and AC11 reached through the surface
+// AC11 names: the gesture is in the view. enter opens the editor, the line is typed, enter
+// commits, and the pane persists the parsed Filter rather than the text.
+func TestLaunchFilterRowEditsAndPersists(t *testing.T) {
+	r := &recorder{}
+	m := focus(t, open(r), "launch_filter")
+
+	m = send(m, "enter") // open the editor, empty filter so an empty buffer
+	m = typeLine(m, "branch:main")
+	m = send(m, "enter") // commit
+
+	want := filter.Filter{Branch: "main"}
+	if got := m.Config().LaunchFilter; !reflect.DeepEqual(got, want) {
+		t.Fatalf("LaunchFilter after the edit = %+v, want %+v", got, want)
+	}
+	if len(r.saved) != 1 {
+		t.Fatalf("saves = %d, want exactly one", len(r.saved))
+	}
+	if got := r.last().LaunchFilter; !reflect.DeepEqual(got, want) {
+		t.Errorf("persisted LaunchFilter = %+v, want %+v", got, want)
+	}
+}
+
+// TestLaunchFilterEditTypesTheSeparator pins the character the grammar is written with.
+// KeyPressMsg.String() answers "space" for the space bar, so a predicate over it would
+// silently refuse the one key that separates two clauses, and a two-clause filter would be
+// untypeable. The buffer reads Text, so the space arrives.
+func TestLaunchFilterEditTypesTheSeparator(t *testing.T) {
+	r := &recorder{}
+	m := focus(t, open(r), "launch_filter")
+
+	m = send(m, "enter")
+	m = typeLine(m, "branch:main")
+	m = send(m, "space") // the key whose String() is a name, not a character
+	m = typeLine(m, "actor:octocat")
+	m = send(m, "enter")
+
+	want := filter.Filter{Branch: "main", Actor: "octocat"}
+	if got := m.Config().LaunchFilter; !reflect.DeepEqual(got, want) {
+		t.Errorf("LaunchFilter = %+v, want %+v (the separator must reach the buffer)", got, want)
+	}
+}
+
+// TestLaunchFilterRowEditPrefillsAndClears pins that the gesture removes as well as sets.
+// The editor opens on the filter as it stands, so backspacing it away and committing an
+// empty line is how a launch filter is taken off, and one gesture does both.
+func TestLaunchFilterRowEditPrefillsAndClears(t *testing.T) {
+	r := &recorder{}
+	cfg := defaultConfig()
+	cfg.LaunchFilter = filter.Filter{Branch: "main"}
+	m := settings.New(keys.Standard, cfg, r.save).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "launch_filter")
+
+	m = send(m, "enter") // opens pre-filled with "branch:main"
+	for range "branch:main" {
+		m = send(m, "backspace")
+	}
+	m = send(m, "enter")
+
+	if got := m.Config().LaunchFilter; !reflect.DeepEqual(got, filter.Filter{}) {
+		t.Errorf("LaunchFilter after clearing the line = %+v, want empty", got)
+	}
+	if len(r.saved) != 1 {
+		t.Fatalf("saves = %d, want exactly one", len(r.saved))
+	}
+}
+
+// TestLaunchFilterRowRejectsAnUnparseableLine pins that the view never holds a filter the
+// Feed could not state: a line filter.ParseQuery refuses leaves the setting exactly as it
+// was, persists nothing, and is named in the frame rather than swallowed (R14's rule
+// applied to input arriving by keystroke).
+func TestLaunchFilterRowRejectsAnUnparseableLine(t *testing.T) {
+	r := &recorder{}
+	cfg := defaultConfig()
+	cfg.LaunchFilter = filter.Filter{Branch: "main"}
+	m := settings.New(keys.Standard, cfg, r.save).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "launch_filter")
+
+	m = send(m, "enter") // opens pre-filled with "branch:main"
+	m = send(m, "space")
+	m = typeLine(m, "nonsense")
+	m = send(m, "enter")
+
+	// The good clause is not adopted either: ParseQuery rejects the line, and half a filter
+	// is a narrowing nobody stated.
+	if got := m.Config().LaunchFilter; !reflect.DeepEqual(got, cfg.LaunchFilter) {
+		t.Errorf("LaunchFilter = %+v, want the filter left as it was", got)
+	}
+	if len(r.saved) != 0 {
+		t.Errorf("a rejected line persisted %d writes, want none", len(r.saved))
+	}
+	if !strings.Contains(m.View(), "nonsense") {
+		t.Errorf("the frame does not name the value it refused:\n%s", m.View())
+	}
+}
+
+// TestLaunchFilterRowEditCancels pins esc's contract on the row, matching the numeric and
+// list editors: it abandons the entry and leaves the setting alone, and does not close the
+// pane out from under the operator.
+func TestLaunchFilterRowEditCancels(t *testing.T) {
+	r := &recorder{}
+	m := focus(t, open(r), "launch_filter")
+
+	m = send(m, "enter")
+	m = typeLine(m, "branch:main")
+	m = send(m, "esc")
+
+	if got := m.Config().LaunchFilter; !reflect.DeepEqual(got, filter.Filter{}) {
+		t.Errorf("LaunchFilter after esc = %+v, want it unchanged", got)
+	}
+	if !m.IsOpen() {
+		t.Error("esc cancelling an edit closed the pane")
+	}
+	if len(r.saved) != 0 {
+		t.Errorf("a cancelled edit persisted %d writes, want none", len(r.saved))
+	}
+}
+
+// TestSpaceDoesNotChangeTheLaunchFilterRow pins that the row takes the editor gesture and
+// not the selector one: space cycles a fixed set, and a filter is not one, so outside an
+// edit it must leave the setting alone.
+func TestSpaceDoesNotChangeTheLaunchFilterRow(t *testing.T) {
+	r := &recorder{}
+	m := focus(t, open(r), "launch_filter")
+	before := m.Config()
+	m = send(m, "space")
+	if !reflect.DeepEqual(m.Config(), before) {
+		t.Error("space changed the launch filter row")
+	}
+	if len(r.saved) != 0 {
+		t.Error("space on the launch filter row persisted a change")
+	}
+}
+
+// TestLaunchFilterEditWritesOnlyThatKey is AC11 end to end for R9: the filter is edited in
+// the view, the pane is left as quitting leaves it, and config.yml carries the new key with
+// every unrelated comment, key and ordering intact.
+func TestLaunchFilterEditWritesOnlyThatKey(t *testing.T) {
+	dir := t.TempDir()
+	appDir := filepath.Join(dir, "gh-runs")
+	if err := os.MkdirAll(appDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := "# My gh-runs config\n" +
+		"budget: normal # a share of the allowance\n" +
+		"theme: auto\n" +
+		"future_thing: 42\n"
+	path := filepath.Join(appDir, "config.yml")
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := func(key string) (string, bool) {
+		if key == "XDG_CONFIG_HOME" {
+			return dir, true
+		}
+		return "", false
+	}
+	save := func(prev, next config.Config) error { return config.Save(env, prev, next) }
+
+	m := settings.New(keys.Standard, defaultConfig(), save).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = send(focus(t, m, "launch_filter"), "enter")
+	m = typeLine(m, "branch:main")
+	m = send(m, "space")
+	m = typeLine(m, "failure")
+	m = send(m, "enter")
+	m = send(m, "esc") // leave the pane, as quitting does
+	if m.IsOpen() {
+		t.Fatal("esc after the commit did not leave the pane")
+	}
+
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(written)
+	for _, want := range []string{"launch_filter:", "branch: main", "conclusion:", "- failure"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the view did not write %q:\n%s", want, got)
+		}
+	}
+	for _, want := range []string{
+		"# My gh-runs config",
+		"budget: normal",
+		"a share of the allowance",
+		"theme: auto",
+		"future_thing: 42",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the write discarded %q (R17, AC11):\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "budget") > strings.Index(got, "theme") {
+		t.Errorf("the write reordered the keys; budget must stay first:\n%s", got)
+	}
+	// The Conclusion is stored under its own key, never under status, which is the whole of
+	// what R9 asks the stored form to keep apart.
+	if strings.Contains(got, "status:") {
+		t.Errorf("a Conclusion was stored under status, conflating the pair (R9):\n%s", got)
+	}
+}
+
+// typeLine sends each character of a line as its own key press, which is how a person types
+// one. It is the exclude tests' strings.Split spelled once.
+func typeLine(m settings.Model, line string) settings.Model {
+	for _, c := range strings.Split(line, "") {
+		m = send(m, c)
+	}
+	return m
 }
 
 // repo builds a github.com-qualified identity for the tests above (ADR-0009).

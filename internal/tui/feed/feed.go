@@ -100,7 +100,14 @@ type Options struct {
 	// SetFilter publishes the Feed's active filter to the scheduler, which pushes its
 	// Query() server-side (R22, ADR-0016). main.go wires it to scheduler.SetFilter; a
 	// golden test leaves it nil, and the filter then narrows client-side only.
-	SetFilter   func(filter.Filter)
+	SetFilter func(filter.Filter)
+	// Filter is the launch filter the settings resolved (settings R9, AC3): the Feed opens
+	// already narrowed by it, with the line it states in the filter input, so the first
+	// frame and the input a person can edit are one state. The zero Filter is no launch
+	// filter, which matches every Run and is the default (R3). Nothing else applies it: the
+	// composition root publishes the same value to the scheduler before the first poll, so
+	// the opening listing is the filtered one rather than a narrowing of an unfiltered page.
+	Filter      filter.Filter
 	DetailFetch rundetail.Fetch
 	Clock       clock.Clock
 	// Ops freezes the selection into a Plan when the delete key opens the confirmation
@@ -253,15 +260,23 @@ func (p pendingChanges) any() bool { return p.added > 0 || p.removed > 0 || p.mo
 
 // New returns a Feed over opts. It reads nothing and paints an empty list until the
 // first RunsFetched arrives.
+//
+// The launch filter is held from the first frame rather than applied by a message (settings
+// R9). A message would paint one unfiltered frame before it landed, and the Feed's opening
+// frame is the one the cold-start reveal is measured on (R32, AC16).
 func New(opts Options) Model {
 	ti := textinput.New()
 	ti.Prompt = "/"
 	ti.Placeholder = "branch:main status:failure ..."
+	// The launch filter states itself in the input, exactly as an arriving ShowRuns does, so
+	// the held filter and the line a person can edit are one state (R22, R23).
+	ti.SetValue(opts.Filter.QueryString())
 	return Model{
 		active:      true,
 		profile:     opts.Profile,
 		setViewport: opts.SetViewport,
 		setFilter:   opts.SetFilter,
+		filter:      opts.Filter,
 		live:        make(map[string][]domain.Run),
 		current:     make(map[int64]domain.Run),
 		selected:    make(map[int64]bool),
