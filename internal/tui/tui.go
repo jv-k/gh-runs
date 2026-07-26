@@ -35,6 +35,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/tui/approval"
@@ -42,6 +43,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/tui/feed"
 	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
+	"github.com/jv-k/gh-runs/v2/internal/tui/running"
 	"github.com/jv-k/gh-runs/v2/internal/tui/settings"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
@@ -161,6 +163,11 @@ type Options struct {
 	// and travel ops's write path exactly as every other write does.
 	Approver      approval.Approver
 	ApprovalFetch approval.Fetcher
+	// Retrier re-attempts a finished operation's recorded failures, purge R22's keystroke.
+	// main.go wires it to the shared ops engine, which is the authority that the retry set
+	// is a subset of an already-confirmed one; a headless test leaves it nil and the
+	// summary then offers no retry.
+	Retrier running.Retrier
 }
 
 // Model is the root. It holds the three tabs, the focused index, and the seams it pulls
@@ -184,6 +191,22 @@ type Model struct {
 	// key (ADR-0011: a setting reachable from any tab cannot belong to one). It is not a tab
 	// and not a fourth peer; the root holds it directly and routes keys to it while it is open.
 	settings settings.Model
+
+	// running is the running-operation surface (purge R15, R16, R22). It is the root's for
+	// the same reason settings is: a launched Purge outlives the operator's attention and
+	// must keep painting whichever tab is focused (ADR-0015), and no tab can own a strip
+	// that has to survive a tab switch. It is a strip above the focused tab rather than a
+	// modal, because R14 forbids a Purge from being one.
+	running running.Model
+	// progress is the launched operation's stream, adapted with the same receive-one-then-
+	// reschedule command as the engine's channel (ADR-0015). It is a separate channel and
+	// deliberately not the engine's: riding progress on that one would make the scheduler a
+	// courier for ops.
+	progress <-chan ops.Progress
+	// stripHeight is how many rows the running surface currently occupies, which comes off
+	// what the tabs are laid out in. It is tracked so the root re-broadcasts a size only
+	// when the strip's height actually changes, rather than on every frame.
+	stripHeight int
 
 	// terminalDark is what the terminal last reported about its own background, which the
 	// auto theme derives its palette from (settings R6). It starts dark, which is gh's
@@ -252,6 +275,7 @@ func New(opts Options) Model {
 		repos:        opts.Repos,
 		revalidated:  opts.Revalidated,
 		settings:     set,
+		running:      running.New(opts.Profile).WithRetrier(opts.Retrier),
 		terminalDark: true,
 	}
 	// The palette is applied at construction so the first frame is already painted in the
@@ -293,6 +317,45 @@ func (m Model) listen() tea.Cmd {
 	}
 }
 
+// listenProgress is the same receive-one-then-reschedule adapter as listen, over the
+// launched operation's stream (ADR-0015). A closed channel yields nothing: the terminal
+// frame has already told the surface the pass is over, so the close is the stream's end
+// rather than the program's, which is the one way this loop differs from the engine's.
+func (m Model) listenProgress() tea.Cmd {
+	ch := m.progress
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		p, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return p
+	}
+}
+
+// innerSize is the space the tabs are laid out in: the terminal less the tab bar's line
+// and the running surface's rows, so a Purge's indicator never overlaps the list it sits
+// above (R4a, R14).
+func (m Model) innerSize() tea.WindowSizeMsg {
+	return tea.WindowSizeMsg{Width: m.width, Height: m.height - tabBarHeight - m.stripHeight}
+}
+
+// reserveStrip re-lays the tabs when the running surface's height changes, and does
+// nothing when it has not. A frame lands roughly twice a second at the governor's rates,
+// and re-broadcasting a size on each one would repaint three tabs for no reason.
+func (m Model) reserveStrip() (Model, tea.Cmd) {
+	h := m.running.Height()
+	if h == m.stripHeight {
+		return m, nil
+	}
+	m.stripHeight = h
+	inner := m.innerSize()
+	m.settings, _ = m.settings.Update(inner)
+	return m.broadcast(inner)
+}
+
 // tickCmd schedules the next coarse pull.
 func tickCmd() tea.Cmd {
 	return tea.Tick(readoutTick, func(time.Time) tea.Msg { return tickMsg{} })
@@ -306,11 +369,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		inner := tea.WindowSizeMsg{Width: msg.Width, Height: msg.Height - tabBarHeight}
+		// The running surface lays out first, because its height is what the tabs' is
+		// computed from.
+		m.running, _ = m.running.Update(msg)
+		m.stripHeight = m.running.Height()
+		inner := m.innerSize()
 		// The Settings pane lays out within the same inner size the tabs get, so it is sized
 		// whether or not it is open when the terminal resizes.
 		m.settings, _ = m.settings.Update(inner)
 		return m.broadcast(inner)
+
+	case ops.Started:
+		// ADR-0015: the initiating Cmd's first message hands the channel to the root, which
+		// adapts it with the same receive-one loop as the engine's. A retry's handle arrives
+		// here too, so a re-attempt is a launch like any other.
+		m.running = m.running.Start(msg)
+		m.progress = msg.Progress
+		next, cmd := m.reserveStrip()
+		return next, tea.Batch(cmd, next.listenProgress())
+
+	case ops.Progress:
+		// Progress is broadcast, because a Purge outlives the operator's attention and must
+		// keep painting whichever tab is focused (ADR-0015). The root's own surface consumes
+		// it too, and the adapter re-arms until the terminal frame.
+		m.running, _ = m.running.Update(msg)
+		next, cmd := m.reserveStrip()
+		bnext, bcmd := next.broadcast(msg)
+		cmds := []tea.Cmd{cmd, bcmd}
+		if !msg.Done {
+			cmds = append(cmds, bnext.listenProgress())
+		} else {
+			bnext.progress = nil
+		}
+		return bnext, tea.Batch(cmds...)
+
+	case ops.LaunchFailed:
+		// A refused launch is reported rather than dropped: a keystroke that silently does
+		// nothing is the defect this surface exists to fix.
+		m.running = m.running.Fail(msg)
+		return m.reserveStrip()
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -376,6 +473,16 @@ func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.tabs[m.active].CapturesInput() {
 		return m.routeKeyToActive(k)
+	}
+	// The running surface's two chords reach it and no tab, so one keystroke does one
+	// thing (ADR-0011). They are the surface's only while it is up: with nothing running
+	// they fall through and route to the focused tab like any other key, which is what
+	// keeps them from being permanently reserved from a tab that later wants them.
+	if m.running.Handles(k) {
+		var cmd tea.Cmd
+		m.running, cmd = m.running.Update(k)
+		next, rcmd := m.reserveStrip()
+		return next, tea.Batch(cmd, rcmd)
 	}
 	switch {
 	case key.Matches(k, m.profile.Quit):
@@ -529,7 +636,14 @@ func (m Model) View() tea.View {
 	if m.settings.IsOpen() {
 		body = m.settings.View()
 	}
-	content := lipgloss.JoinVertical(lipgloss.Left, m.tabBar(), body)
+	parts := []string{m.tabBar()}
+	// The running surface sits between the tab bar and the body, above whichever tab is
+	// focused and above the Settings pane too: a Purge keeps running while either is on
+	// screen, and R14 forbids it from being modal over any of them.
+	if strip := m.running.View(); strip != "" {
+		parts = append(parts, strip)
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, append(parts, body)...)
 	return tea.View{
 		Content:     content,
 		AltScreen:   true,

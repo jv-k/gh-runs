@@ -24,6 +24,7 @@
 package feed
 
 import (
+	"context"
 	"sort"
 	"time"
 
@@ -45,13 +46,21 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 )
 
-// Planner freezes a selection into an ops.Plan: the shared entry to the confirmation
-// chain (ADR-0019). *ops.Ops satisfies it. It is a narrow interface so the Feed
-// depends on the one call it makes and a golden test with no planner leaves it nil,
-// where the delete key is inert (the destructive action stays disabled until the
-// planner and the discovered capability data are wired, repo-discovery R8).
+// Planner is the whole confirmation chain the Feed drives, in the order ADR-0019 fixes:
+// Plan freezes the selection and prices its friction, Confirm validates the operator's
+// answer into a Confirmed the tab cannot forge, and Start runs it and returns the
+// progress stream (ADR-0015). *ops.Ops satisfies it. A golden test leaves it nil, where
+// the delete key is inert, because the destructive action stays disabled until the
+// planner and the discovered capability data are wired (repo-discovery R8).
+//
+// The three calls are one interface rather than three because they are one chain: a Plan
+// is only useful to Confirm, and a Confirmed is only useful to Start. Splitting them
+// would let a surface be wired with the freeze and not the execution, which is precisely
+// the state this issue found the Feed in.
 type Planner interface {
 	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error)
+	Confirm(p ops.Plan, in ops.Input) (ops.Confirmed, error)
+	Start(ctx context.Context, c ops.Confirmed) (ops.Started, error)
 }
 
 // ReposDiscovered carries the account's discovered repositories, so the Feed's
@@ -690,17 +699,53 @@ func (m Model) repoSnapshot() map[domain.RepoID]domain.Repo {
 
 // handleConfirmKey drives the confirmation modal while it is open, routing every key to
 // the pane (R7) and acting on its Outcome. An abort dismisses it having issued nothing
-// (AC6); a confirmation closes it holding the confirmed Plan and Input, and launching
-// the Purge from them is the running-Purge surface this stage defers.
+// (AC6); a confirmation closes it and launches the operation over the Plan and Input the
+// pane collected.
 func (m Model) handleConfirmKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.confirm, cmd = m.confirm.Update(k)
 	switch m.confirm.Outcome() {
-	case confirm.Aborted, confirm.Confirmed:
+	case confirm.Aborted:
 		m.confirm = m.confirm.Close()
 		m.confirmOpen = false
+	case confirm.Confirmed:
+		plan, in := m.confirm.Plan(), m.confirm.Input()
+		m.confirm = m.confirm.Close()
+		m.confirmOpen = false
+		return m, tea.Batch(cmd, m.launch(plan, in))
 	}
 	return m, cmd
+}
+
+// launch runs the confirmed set and hands back the progress stream (ADR-0015: the
+// initiating Cmd's first message hands that channel to the root, which adapts it and
+// broadcasts). Confirm and Start both happen inside the Cmd rather than in Update,
+// because Update must stay non-blocking and Start spawns.
+//
+// It is wired for the Purge alone at this stage. The surface it launches into is generic
+// over ops.Operation and so is the stream, so the bulk lifecycle mutations (#61) and
+// Reclamation (#64) join by removing this gate and wiring their own tab's confirmation,
+// not by building a second indicator. Until they do, a confirmed cancel closes the modal
+// and starts nothing, which is where run-lifecycle's execution issue picks it up.
+func (m Model) launch(plan ops.Plan, in ops.Input) tea.Cmd {
+	if m.planner == nil || plan.Operation() != ops.OpDelete {
+		return nil
+	}
+	planner := m.planner
+	return func() tea.Msg {
+		confirmed, err := planner.Confirm(plan, in)
+		if err != nil {
+			return ops.LaunchFailed{Op: plan.Operation(), Err: err}
+		}
+		// context.Background rather than a context threaded from main.go: the operation's
+		// lifetime is its own, and Started.Cancel is R16's stop. A Purge outlives the
+		// keystroke that started it and must not be tied to any shorter-lived scope.
+		st, err := planner.Start(context.Background(), confirmed)
+		if err != nil {
+			return ops.LaunchFailed{Op: plan.Operation(), Err: err}
+		}
+		return st
+	}
 }
 
 // openApproval opens the decision pane over the Run under the cursor when it is awaiting a

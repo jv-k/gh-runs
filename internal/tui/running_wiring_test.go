@@ -1,0 +1,223 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/scheduler"
+	"github.com/jv-k/gh-runs/v2/internal/tui/running"
+)
+
+// rootWithRunning builds a root over recording tabs with the running-operation pane
+// wired, sized, and idle.
+func rootWithRunning(tabs ...*recordingTab) Model {
+	m := Model{
+		tabs:    []tab{tabs[0], tabs[1], tabs[2]},
+		active:  0,
+		profile: keys.Standard,
+		running: running.New(keys.Standard),
+	}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	return next.(Model)
+}
+
+// launched is a Started over a live channel, the shape a tab's launch Cmd returns.
+func launched(ch chan ops.Progress, cancel func()) ops.Started {
+	return ops.Started{Op: ops.OpDelete, Total: 18258, Progress: ch, Cancel: cancel}
+}
+
+// TestStartedArmsTheAdapterAndPaints pins ADR-0015's write half at the root: the first
+// message hands over the channel, the root adapts it with the same receive-one loop as
+// the engine's, and the surface is on screen from that moment.
+func TestStartedArmsTheAdapterAndPaints(t *testing.T) {
+	m := rootWithRunning(&recordingTab{title: "Runs"}, &recordingTab{}, &recordingTab{})
+	ch := make(chan ops.Progress, 1)
+	next, cmd := m.Update(launched(ch, func() {}))
+	m = next.(Model)
+
+	if !m.running.Active() {
+		t.Fatalf("the launch left the running surface off screen")
+	}
+	if !strings.Contains(m.View().Content, "18,258") {
+		t.Errorf("the root does not paint the running surface over the focused tab (R15):\n%s", m.View().Content)
+	}
+	if cmd == nil {
+		t.Fatalf("the launch armed no adapter; the progress stream would never be read (ADR-0015)")
+	}
+	// The adapter is the receive-one-then-reschedule command: it blocks on the channel and
+	// returns what it received as a message.
+	want := ops.Progress{Op: ops.OpDelete, Sum: ops.Summary{Total: 18258, Deleted: 7}}
+	ch <- want
+	got := cmd()
+	if p, ok := got.(ops.Progress); !ok || p.Sum.Deleted != 7 {
+		t.Fatalf("the adapter returned %T (%+v), want the Progress it received", got, got)
+	}
+}
+
+// TestProgressIsBroadcastAndRearms pins ADR-0015's "progress is broadcast": a Purge
+// outlives the operator's attention, so every tab sees the frames and the adapter
+// re-arms until the stream closes.
+func TestProgressIsBroadcastAndRearms(t *testing.T) {
+	t0, t1, t2 := &recordingTab{}, &recordingTab{}, &recordingTab{}
+	m := rootWithRunning(t0, t1, t2)
+	ch := make(chan ops.Progress, 2)
+	next, _ := m.Update(launched(ch, func() {}))
+	m = next.(Model)
+
+	before := []int{t0.data, t1.data, t2.data}
+	_, cmd := m.Update(ops.Progress{Op: ops.OpDelete, Sum: ops.Summary{Total: 18258, Deleted: 7}})
+	for i, tb := range []*recordingTab{t0, t1, t2} {
+		if tb.data != before[i]+1 {
+			t.Errorf("tab %d received %d data messages, want the progress frame broadcast to it (ADR-0015)", i, tb.data-before[i])
+		}
+	}
+	if cmd == nil {
+		t.Fatalf("the root did not re-arm the adapter after a frame; the stream would stall")
+	}
+}
+
+// TestTerminalFrameStopsTheAdapter pins that the root stops listening once the stream is
+// over, so a finished Purge leaves no command blocked on a closed channel.
+func TestTerminalFrameStopsTheAdapter(t *testing.T) {
+	m := rootWithRunning(&recordingTab{}, &recordingTab{}, &recordingTab{})
+	ch := make(chan ops.Progress, 1)
+	next, _ := m.Update(launched(ch, func() {}))
+	m = next.(Model)
+
+	next, cmd := m.Update(ops.Progress{Op: ops.OpDelete, Done: true, Sum: ops.Summary{Total: 3, Deleted: 3}})
+	m = next.(Model)
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			t.Errorf("the root re-armed the adapter past the terminal frame, returning %T", msg)
+		}
+	}
+	if m.running.Running() {
+		t.Errorf("the surface still reports the operation running after its terminal frame")
+	}
+	if !m.running.Active() {
+		t.Errorf("the summary left the screen; R22's retry is offered from it")
+	}
+}
+
+// TestPurgeIsNotModal pins AC10 and R14: with a Purge in flight the Feed still applies
+// polled updates and still accepts cursor movement, and every other tab stays reachable.
+func TestPurgeIsNotModal(t *testing.T) {
+	t0, t1, t2 := &recordingTab{title: "Runs"}, &recordingTab{title: "Workflows"}, &recordingTab{title: "Storage"}
+	m := rootWithRunning(t0, t1, t2)
+	ch := make(chan ops.Progress, 1)
+	next, _ := m.Update(launched(ch, func() {}))
+	m = next.(Model)
+
+	// A polled update still reaches every tab.
+	dataBefore := t0.data
+	m = step(t, m, scheduler.Update{Repo: domain.RepoID{Host: domain.HostGitHub, Owner: "acme", Name: "api"}})
+	if t0.data <= dataBefore {
+		t.Errorf("the Feed stopped receiving polled updates while a Purge ran (R14, AC10)")
+	}
+	// Cursor movement still reaches the focused tab.
+	m = step(t, m, press("down"))
+	if len(t0.keys) != 1 {
+		t.Errorf("cursor movement did not reach the Feed while a Purge ran (AC10)")
+	}
+	// A view change still works: the tab bar still switches.
+	m = step(t, m, press("tab"))
+	if m.active != 1 {
+		t.Errorf("tab navigation was blocked while a Purge ran (R14, AC10)")
+	}
+	if !m.running.Active() {
+		t.Errorf("switching tabs dropped the Purge's indicator; it must paint whichever tab is focused (ADR-0015)")
+	}
+	if !strings.Contains(m.View().Content, "18,258") {
+		t.Errorf("the indicator is not painted over the second tab:\n%s", m.View().Content)
+	}
+}
+
+// TestCancelKeyReachesTheSurface pins R16 at the root: the cancel chord reaches the
+// running surface rather than the focused tab, and the tab does not also act on it.
+func TestCancelKeyReachesTheSurface(t *testing.T) {
+	stopped := false
+	t0 := &recordingTab{title: "Runs"}
+	m := rootWithRunning(t0, &recordingTab{}, &recordingTab{})
+	ch := make(chan ops.Progress, 1)
+	next, _ := m.Update(launched(ch, func() { stopped = true }))
+	m = next.(Model)
+
+	_, cmd := m.Update(press("ctrl+x"))
+	if len(t0.keys) != 0 {
+		t.Errorf("the cancel chord also reached the focused tab; two components acted on one keystroke (ADR-0011)")
+	}
+	if cmd == nil {
+		t.Fatalf("the cancel chord issued no command (R16)")
+	}
+	cmd()
+	if !stopped {
+		t.Errorf("the cancel chord did not reach the operation's cancel (R16)")
+	}
+}
+
+// TestRunningKeysReachTheTabWhenIdle pins that the two chords are the surface's only
+// while it is up: with nothing running they route to the focused tab like any other key,
+// so they are not stolen from a tab that later wants them.
+func TestRunningKeysReachTheTabWhenIdle(t *testing.T) {
+	t0 := &recordingTab{title: "Runs"}
+	m := rootWithRunning(t0, &recordingTab{}, &recordingTab{})
+	step(t, m, press("ctrl+x"))
+	if len(t0.keys) != 1 {
+		t.Errorf("with nothing running, the cancel chord did not route to the focused tab")
+	}
+}
+
+// TestCapturingTabKeepsItsKeys pins the existing rule unchanged: while the focused tab
+// holds text-input focus the root takes no global key but the interrupt, so a typed count
+// or a filter's text is never stolen, chord or not (R7, R23).
+func TestCapturingTabKeepsItsKeys(t *testing.T) {
+	t0 := &recordingTab{title: "Runs", captures: true}
+	m := rootWithRunning(t0, &recordingTab{}, &recordingTab{})
+	ch := make(chan ops.Progress, 1)
+	next, _ := m.Update(launched(ch, func() {}))
+	m = next.(Model)
+	step(t, m, press("ctrl+x"))
+	if len(t0.keys) != 1 {
+		t.Errorf("a capturing tab did not receive the chord; the root must take no global key while it captures (R7, R23)")
+	}
+}
+
+// TestSurfaceReservesItsRowsFromTheTabs pins that the strip's height comes off what the
+// tabs are laid out in, so a Purge's indicator never overlaps the list it sits above.
+func TestSurfaceReservesItsRowsFromTheTabs(t *testing.T) {
+	got := make(chan int, 4)
+	probe := &sizeProbe{got: got}
+	m := Model{tabs: []tab{probe, &recordingTab{}, &recordingTab{}}, profile: keys.Standard, running: running.New(keys.Standard)}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = next.(Model)
+	if h := <-got; h != 40-tabBarHeight {
+		t.Fatalf("idle: tab received height %d, want %d", h, 40-tabBarHeight)
+	}
+
+	ch := make(chan ops.Progress, 1)
+	next, _ = m.Update(launched(ch, func() {}))
+	m = next.(Model)
+	next, _ = m.Update(ops.Progress{
+		Op:          ops.OpDelete,
+		Sum:         ops.Summary{Total: 18258, Deleted: 100},
+		Outstanding: 18158, Elapsed: time.Minute, Rate: 1.0, Ceiling: 2.0, Floor: 0.5,
+	})
+	m = next.(Model)
+	strip := m.running.Height()
+	if strip == 0 {
+		t.Fatalf("the running surface reports no height while an operation runs")
+	}
+	var last int
+	for len(got) > 0 {
+		last = <-got
+	}
+	if last != 40-tabBarHeight-strip {
+		t.Errorf("with the surface up, the tab was laid out in %d rows, want %d (the strip's %d reserved)", last, 40-tabBarHeight-strip, strip)
+	}
+}
