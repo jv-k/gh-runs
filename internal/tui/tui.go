@@ -16,8 +16,15 @@
 // reaching into the Feed (workflow-management R13, AC4). Focus and cross-tab delivery are
 // the root's, because a tab may import a pane and never another tab.
 //
-// tui imports the tabs, the engine's event and Readout types, keys and domain, and
-// lipgloss for the tab bar. main.go constructs it and wires the channel and the pulls;
+// A launched write's progress travels a second channel of its own, adapted with the same
+// receive-one loop and broadcast the same way, because a Purge outlives the operator's
+// attention and must keep painting whichever tab is focused (ADR-0015). The root owns the
+// surface it paints into for that reason, as it owns settings for the parallel one, and
+// paints it as a strip above the focused tab rather than a modal over it, because purge
+// R14 forbids a Purge from being modal.
+//
+// tui imports the tabs, the engine's event and Readout types, ops, keys and domain, and
+// lipgloss for the tab bar. main.go constructs it and wires the channels and the pulls;
 // nothing imports tui (ADR-0011).
 package tui
 
