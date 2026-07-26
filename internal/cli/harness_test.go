@@ -101,6 +101,21 @@ func (c *countingRT) countMatching(substr string) int {
 	return n
 }
 
+// postedTo reports whether any wire request's URL ended with path, so a lifecycle test
+// proves which endpoint a verb resolved to. It anchors at the end rather than matching
+// anywhere, because /rerun is a suffix of nothing but is a prefix of /rerun-failed-jobs:
+// a contains check would report a plain re-run for every re-run of failed Jobs.
+func (h *harness) postedTo(path string) bool {
+	h.counting.mu.Lock()
+	defer h.counting.mu.Unlock()
+	for _, u := range h.counting.urls {
+		if strings.HasSuffix(u, path) {
+			return true
+		}
+	}
+	return false
+}
+
 // errRT is a base transport that fails any request. A zero-request test wraps it
 // so that if the command ever reaches the wire the test fails loudly rather than
 // silently succeeding against a cassette (cli-surface R19).
