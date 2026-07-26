@@ -29,6 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 )
 
 // Env is an injected environment lookup, matching the shape of os.LookupEnv.
@@ -41,6 +42,13 @@ type Env func(key string) (string, bool)
 // CLI that populates this is stage 6.
 type Flags struct {
 	Budget Tier
+	// LaunchFilter is the filter the command line stated, which beats the file's
+	// launch filter (R4, AC3). The zero Filter is "no filter flag was passed", and
+	// that reading is unambiguous rather than convenient: every axis arrives from a
+	// flag carrying a value, so a flag set that names no axis is a flag set that
+	// named no filter. There is no flag whose meaning is "match every Run", and
+	// cli-surface R26 makes the equivalent on the delete path ask for itself by name.
+	LaunchFilter filter.Filter
 }
 
 // The confirm threshold's bounds (settings R12, AC8). The default and the hard
@@ -267,6 +275,12 @@ type Config struct {
 	// no subsystem behind it defers with the subsystem rather than shipping inert, and
 	// R3 plus R14 mean adding it later needs no migration. Issue #97 carries it.
 	Exclude []domain.RepoID
+	// LaunchFilter is the filter the Feed opens with (settings R9), ADR-0016's structured
+	// Filter with Status and Conclusion as distinct typed fields, never the CLI's permissive
+	// -s/--status string. It defaults to the zero Filter, which matches every Run, so a
+	// config file without the key leaves the Feed exactly as it was (R3, AC1). The file's
+	// shape, and why the repository axis has no key in it, are in launchfilter.go.
+	LaunchFilter filter.Filter
 }
 
 // Diagnostic is a non-fatal message about the configuration: an unknown key, a
@@ -308,6 +322,13 @@ func Load(env Env, flags Flags) (Config, []Diagnostic) {
 	// (R4). A zero-valued flag was not passed and does not override.
 	if flags.Budget != "" {
 		cfg.Budget = flags.Budget
+	}
+	// AC3's worked example: the flag wins where both name a launch filter, the file's
+	// stands where no flag does, and the empty default holds where neither does. The
+	// override is whole rather than per axis, because a filter is one stated narrowing
+	// and merging two would produce a filter neither source asked for.
+	if !emptyFilter(flags.LaunchFilter) {
+		cfg.LaunchFilter = flags.LaunchFilter
 	}
 
 	return cfg, diags
@@ -418,6 +439,8 @@ func resolveFile(cfg Config, data []byte, diags []Diagnostic) (Config, []Diagnos
 			cfg.StorageScope, diags = resolveScope(key, node, cfg.StorageScope, diags)
 		case "exclude":
 			cfg.Exclude, diags = resolveRepoList(key, node, diags)
+		case "launch_filter":
+			cfg.LaunchFilter, diags = resolveLaunchFilter(key, node, diags)
 		default:
 			// Not a key this version applies. A key R13 refuses gets its specific
 			// reason; anything else gets the generic unknown-key message (R14).
@@ -632,10 +655,17 @@ func Save(env Env, prev, next Config) error {
 
 // change is one key to write and the value to write under it. The slice changedKeys
 // returns is ordered, so the keys a Save appends to a fresh file land in a stable order.
+// A nil value means the key is to be removed, which only a nested mapping's sub-key uses:
+// a top-level setting always has a value, because every one of them has a default.
 type change struct {
 	key   string
 	value any
 }
+
+// mappingValue is an ordered set of sub-keys, the value shape a nested setting takes
+// (R9's launch filter). It is a distinct type rather than a bare []change so setValue can
+// tell it from a scalar without inspecting the slice.
+type mappingValue []change
 
 // changedKeys returns the config.yml keys whose value differs between prev and next, in a
 // fixed order. Each Config field maps to exactly one key, the same spelling resolveFile
@@ -661,6 +691,11 @@ func changedKeys(prev, next Config) []change {
 	// form domain.ParseRepoRef reads back. slices.Equal compares it by value and by
 	// order, so reordering the list is a change and rewrites the key.
 	add(!slices.Equal(prev.Exclude, next.Exclude), "exclude", repoRefs(next.Exclude))
+	// R9's launch filter is written as a nested mapping of its axes, the same shape
+	// resolveLaunchFilter reads. An axis the filter no longer carries is written as a nil,
+	// which setMapping removes, so clearing a clause in the view clears it in the file.
+	add(!sameLaunchFilter(prev.LaunchFilter, next.LaunchFilter), "launch_filter",
+		launchFilterMapping(next.LaunchFilter))
 	return changes
 }
 
@@ -743,19 +778,71 @@ func setMappingKey(mapping *yaml.Node, key string, value any) {
 
 // setValue writes value into node, preserving any comments the node carried so an
 // inline note on the edited key survives the change (R17). A []string becomes a block
-// sequence (R7's repository lists), anything else a plain scalar.
+// sequence (R7's repository lists), a mappingValue a block mapping (R9's launch filter),
+// anything else a plain scalar.
 func setValue(node *yaml.Node, value any) {
 	head, line, foot := node.HeadComment, node.LineComment, node.FootComment
-	if list, ok := value.([]string); ok {
-		setSequence(node, list)
-	} else {
+	switch v := value.(type) {
+	case []string:
+		setSequence(node, v)
+	case mappingValue:
+		setMapping(node, v)
+	default:
 		setScalar(node, value)
 	}
 	node.HeadComment, node.LineComment, node.FootComment = head, line, foot
 }
 
-// setScalar writes value into node as a plain scalar. Every settings value but R7's two
-// lists is a plain string or a whole number, so the node needs no quoting style.
+// setMapping writes an ordered set of sub-keys into node as a block mapping, the shape R9's
+// launch filter takes. A sub-key carrying a nil value is removed, which is how an axis the
+// operator cleared leaves the file instead of lingering as a clause nothing applies. Every
+// other key already in the mapping is left exactly where it stands, with its comments, and
+// so is every key this version does not recognise: R17 reads no differently one level down
+// than it does at the top of the file.
+func setMapping(node *yaml.Node, pairs mappingValue) {
+	if node.Kind != yaml.MappingNode {
+		// The key held something else (a scalar, a list). The change set says this value is
+		// now a mapping, so the old shape goes rather than being merged into.
+		node.Kind = yaml.MappingNode
+		node.Tag = "!!map"
+		node.Value = ""
+		node.Content = nil
+	}
+	for _, p := range pairs {
+		if p.value == nil {
+			removeMappingKey(node, p.key)
+			continue
+		}
+		setMappingKey(node, p.key, p.value)
+	}
+	// An emptied mapping is written in the flow form, because a block mapping with no keys
+	// emits a bare key with nothing under it, which reads back as null. Flow reads back as
+	// an empty mapping, which is what a cleared filter is.
+	node.Style = 0
+	if len(node.Content) == 0 {
+		node.Style = yaml.FlowStyle
+	}
+}
+
+// removeMappingKey drops a key and its value from the mapping, taking the comments that sat
+// on them with it. That is the one comment a write may lose and the bound on it: there is
+// nowhere honest to put a note about a clause that no longer exists, and every other comment
+// in the file is untouched. R17 forbids discarding comments, not keeping notes about
+// settings the operator deleted.
+func removeMappingKey(mapping *yaml.Node, key string) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content = append(mapping.Content[:i:i], mapping.Content[i+2:]...)
+			return
+		}
+	}
+}
+
+// setScalar writes value into node as a plain scalar. Every settings value that is neither
+// a list (R7's repositories, R9's two enum sets) nor a mapping (R9's launch filter) is a
+// plain string or a whole number, so the node needs no quoting style: the encoder quotes a
+// value plain style cannot carry, which is what keeps a created clause like >=2026-01-01
+// readable back.
 func setScalar(node *yaml.Node, value any) {
 	node.Kind = yaml.ScalarNode
 	node.Style = 0
@@ -773,8 +860,9 @@ func setScalar(node *yaml.Node, value any) {
 	}
 }
 
-// setSequence writes a list of strings into node as a block sequence, the form R7's
-// exclude and pin keys take. Membership and order are the view's, which holds the
+// setSequence writes a list of strings into node as a block sequence, the form R7's exclude
+// key takes and the form R9's status and conclusion sets take under the launch filter.
+// Membership and order are the view's, which holds the
 // authoritative list for the running instance (R17), so an entry the operator removed
 // is gone rather than merged back. An item the list still carries keeps its own node,
 // and therefore the comment sitting on it: R17's "must not discard comments" reads no
@@ -787,7 +875,9 @@ func setSequence(node *yaml.Node, values []string) {
 	// entry never found its own node: it was rebuilt from scratch and its comment went
 	// with it, which R17 forbids. An item that does not parse keeps its literal text as
 	// its key, so it can still be matched by an equal literal and is otherwise dropped
-	// like any entry the list no longer carries.
+	// like any entry the list no longer carries. That limb is what carries R9's two enum
+	// sets: no Status or Conclusion is a repository reference, so each one keys by its own
+	// text and keeps its node and its comment the same way.
 	kept := make(map[string]*yaml.Node, len(node.Content))
 	if node.Kind == yaml.SequenceNode {
 		for _, item := range node.Content {

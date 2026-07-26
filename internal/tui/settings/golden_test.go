@@ -8,6 +8,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/tui/settings"
@@ -96,6 +97,41 @@ func TestGoldenExcludeList(t *testing.T) {
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = focus(t, m, "exclude")
 	goldie.New(t).Assert(t, "exclude_list", []byte(m.View()))
+}
+
+// TestGoldenLaunchFilter fixes the frame R9's launch-filter row paints when it is set: the
+// row focused with its description and its edit hint, and the filter rendered in the
+// grammar the Feed's own / input takes. It carries a Status and a Conclusion at once, which
+// is the case the stored form keeps apart and the displayed line deliberately does not: the
+// input is permissive by R23, and it is the file that holds the two in distinct fields.
+func TestGoldenLaunchFilter(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.LaunchFilter = filter.Filter{
+		Branch:      "main",
+		Statuses:    []domain.Status{domain.StatusQueued},
+		Conclusions: []domain.Conclusion{domain.ConclusionFailure},
+	}
+	m := settings.New(keys.Standard, cfg, nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "launch_filter")
+	goldie.New(t).Assert(t, "launch_filter", []byte(m.View()))
+}
+
+// TestGoldenEditingLaunchFilter fixes the launch-filter editor mid-entry (R9, R17): the row
+// is open on the filter as written with a second clause being typed, showing the buffer and
+// the caret. This is the frame AC11's gesture goes through, so it is the one worth pinning
+// byte for byte.
+func TestGoldenEditingLaunchFilter(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.LaunchFilter = filter.Filter{Branch: "main"}
+	m := settings.New(keys.Standard, cfg, nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "launch_filter")
+	m = send(m, "enter")
+	for _, k := range []string{"space", "a", "c", "t", "o", "r", ":", "o", "c", "t", "o"} {
+		m = send(m, k)
+	}
+	goldie.New(t).Assert(t, "editing_launch_filter", []byte(m.View()))
 }
 
 // TestGoldenEditingExcludeList fixes the exclude editor mid-entry (R7, R17): the row is

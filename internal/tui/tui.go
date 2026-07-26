@@ -238,9 +238,13 @@ type Model struct {
 // capability data the Feed's gate reads.
 func New(opts Options) Model {
 	f := feed.New(feed.Options{
-		Profile:       opts.Profile,
-		SetViewport:   opts.SetViewport,
-		SetFilter:     opts.SetFilter,
+		Profile:     opts.Profile,
+		SetViewport: opts.SetViewport,
+		SetFilter:   opts.SetFilter,
+		// The Feed opens on the settings' launch filter (settings R9, AC3), which is already
+		// resolved: config.Load applied the flag over the file over the default before this
+		// value reached the root. There is no second precedence here, and there must not be.
+		Filter:        opts.Config.LaunchFilter,
 		DetailFetch:   opts.DetailFetch,
 		Clock:         opts.Clock,
 		Ops:           opts.Ops,

@@ -8,6 +8,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
@@ -91,6 +92,9 @@ func (m Model) rowLine(r row) string {
 	if focused && r.isList() && !m.editing {
 		line += "  " + styleDim.Render("(enter to edit, comma separated)")
 	}
+	if focused && r.isFilter() && !m.editing {
+		line += "  " + styleDim.Render("(enter to edit)")
+	}
 	return line
 }
 
@@ -139,6 +143,8 @@ func (m Model) rawValue(r row) string {
 		return string(m.cfg.WorkflowsScope)
 	case rowStorageScope:
 		return string(m.cfg.StorageScope)
+	case rowLaunchFilter:
+		return filterLine(m.cfg.LaunchFilter)
 	case rowExclude:
 		return repoList(m.cfg.Exclude, m.valueRoom())
 	case rowConfirmThreshold:
@@ -166,6 +172,8 @@ func (m Model) label(r row) string {
 		return "Workflows scope"
 	case rowStorageScope:
 		return "Storage scope"
+	case rowLaunchFilter:
+		return "Launch filter"
 	case rowExclude:
 		return "Excluded repositories"
 	case rowConfirmThreshold:
@@ -194,6 +202,11 @@ func (m Model) description(r row) string {
 		return "Which repositories the Workflows tab covers."
 	case rowStorageScope:
 		return "Which repositories the Storage tab covers."
+	case rowLaunchFilter:
+		// It says "starts" rather than "now", and that is the requirement rather than a
+		// hedge: R9 settles the filter the Feed opens with, and a running Feed keeps
+		// whatever filter it is showing until its own / input changes it.
+		return "The Runs feed starts filtered by this. Same syntax as its / filter."
 	case rowExclude:
 		return "Kept out of discovery and never polled. Naming one with -R still works."
 	case rowConfirmThreshold:
@@ -260,6 +273,8 @@ func (m Model) helpLine() string {
 		parts = append(parts, m.profile.OpenDetail.Help().Key+" edit number")
 	case m.cursor.isList():
 		parts = append(parts, m.profile.OpenDetail.Help().Key+" edit list")
+	case m.cursor.isFilter():
+		parts = append(parts, m.profile.OpenDetail.Help().Key+" edit filter")
 	}
 	parts = append(parts, m.profile.CloseDetail.Help().Key+" close")
 	return strings.Join(parts, "   ")
@@ -310,6 +325,18 @@ func repoList(ids []domain.RepoID, room int) string {
 		return strconv.Itoa(len(names)) + " repositories"
 	}
 	return strings.Join(names[:shown], ", ") + tailFor(len(names)-shown)
+}
+
+// filterLine renders R9's launch filter as one line of the grammar filter owns, which is
+// the line the editor opens on and the line a person would type into the Feed's / input
+// (R17: the view and the file are the same settings, and now the same vocabulary too). An
+// empty filter reads "none" rather than blank, for the reason the exclude row does: a blank
+// cell reads as broken where "none" reads as a setting nobody has used.
+func filterLine(f filter.Filter) string {
+	if q := f.QueryString(); q != "" {
+		return q
+	}
+	return "none"
 }
 
 // repoRefs spells identities the way the config file does, OWNER/REPO. It is what the row

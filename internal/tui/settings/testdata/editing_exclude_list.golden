@@ -6,6 +6,7 @@
   Theme                     [1;38;2;0;175;255mauto[m
   Workflows scope           [1;38;2;0;175;255mall-repos[m
   Storage scope             [1;38;2;0;175;255mall-repos[m
+  Launch filter             [1;38;2;0;175;255mnone[m
 [38;2;0;175;255m> [m[1mExcluded repositories     [m[1;38;2;0;175;255mjv-k/dotfiles, acme/x[m[38;2;0;175;255m_[m
   Confirmation threshold    [1;38;2;0;175;255m50[m
   Purge breaker threshold   [1;38;2;0;175;255m50[m

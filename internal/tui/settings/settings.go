@@ -2,8 +2,10 @@
 // loads (settings R17, BUILD-ORDER stage 13). It is a pane, not a tab and not a
 // tea.Model: it exposes View() string and an Update the root drives, and the root opens
 // it over whichever tab is focused because a setting reachable from any tab cannot belong
-// to one (ADR-0011's pane contract, R2). It imports config and keys and no tab, and
-// nothing routes back to whatever opened it.
+// to one (ADR-0011's pane contract, R2). It imports config, filter and keys and no tab, and
+// nothing routes back to whatever opened it. filter is here for R9's launch filter: the row
+// edits it in the grammar that package owns, so this pane spells a filter the way the Feed's
+// own input spells one.
 //
 // It is the view, never the loader: config owns the file's precedence, defaults and
 // diagnostics (R3, R4, R14), and this pane edits the resolved Config and writes changed
@@ -28,6 +30,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 )
 
@@ -50,6 +53,10 @@ const (
 	rowTheme
 	rowWorkflowsScope
 	rowStorageScope
+	// The launch filter sits with the two tab scopes because it is the third of the same
+	// question: which Runs a tab opens on. R19's note says so outright, calling a launch
+	// filter pinned to one repository the Runs tab's this-repo scope by another name.
+	rowLaunchFilter
 	rowExclude
 	rowConfirmThreshold
 	rowBreakerFailures
@@ -89,9 +96,19 @@ func (r row) isNumber() bool {
 // a person who excluded the wrong repository would have to reach for the file anyway.
 func (r row) isList() bool { return r == rowExclude }
 
+// isFilter reports whether the row holds R9's launch filter, edited as one line of the
+// filter input's own grammar. It is the same gesture the list row takes, over a different
+// vocabulary: enter opens on the filter as it stands, typing rewrites it, enter commits,
+// esc abandons.
+//
+// The grammar is filter's, not this pane's (ParseQuery and QueryString). A second spelling
+// here would mean a person who learned the Feed's / filter had to learn another one to
+// persist it, and the two would drift the first time an axis was added to either.
+func (r row) isFilter() bool { return r == rowLaunchFilter }
+
 // isEditable reports whether enter opens an editor on the row, which is true of the
-// numeric rows and the list row and of nothing else.
-func (r row) isEditable() bool { return r.isNumber() || r.isList() }
+// numeric rows, the list row and the filter row, and of nothing else.
+func (r row) isEditable() bool { return r.isNumber() || r.isList() || r.isFilter() }
 
 // configKey is the config.yml key the row maps to, the same spelling config.Save writes
 // and Load reads. It is what CursorKey returns.
@@ -107,6 +124,8 @@ func (r row) configKey() string {
 		return "workflows_scope"
 	case rowStorageScope:
 		return "storage_scope"
+	case rowLaunchFilter:
+		return "launch_filter"
 	case rowExclude:
 		return "exclude"
 	case rowConfirmThreshold:
@@ -138,9 +157,9 @@ type Model struct {
 	height int
 
 	// editing and editBuf hold an edit in progress (R12, R20, R21 for a number, R7 for
-	// the exclude list). editBuf collects typed text like the confirm pane's typed count,
-	// and commit clamps a number to its bound or parses a list into identities before it
-	// is adopted.
+	// the exclude list, R9 for the launch filter). editBuf collects typed text like the
+	// confirm pane's typed count, and commit clamps a number to its bound, parses a list
+	// into identities, or parses a filter line, before any of them is adopted.
 	editing bool
 	editBuf string
 	// editErr names the entries the last list commit could not parse, so the view reports
@@ -245,36 +264,45 @@ func (m Model) handleNavKey(k tea.KeyPressMsg) Model {
 			m.editing = true
 			// A numeric row starts empty, because typing a threshold replaces it outright
 			// and an empty buffer is how "enter, then changed my mind" leaves it alone. A
-			// list row starts on what is there, because editing a list is mostly amending
-			// one, and starting empty would make removal the only cheap operation.
+			// list row and the filter row start on what is there, because editing either is
+			// mostly amending one, and starting empty would make removal the only cheap
+			// operation.
 			m.editBuf = ""
 			m.editErr = ""
-			if m.cursor.isList() {
+			switch {
+			case m.cursor.isList():
 				m.editBuf = strings.Join(repoRefs(m.cfg.Exclude), ", ")
+			case m.cursor.isFilter():
+				m.editBuf = m.cfg.LaunchFilter.QueryString()
 			}
 		}
 	}
 	return m
 }
 
-// handleEditKey drives an edit in progress (R12, R20, R21 for a number, R7 for the list).
-// Typing builds the buffer and backspace trims it, mirroring the confirm pane; enter
-// commits, clamping a number to its bound and parsing a list into identities; esc cancels,
-// leaving the setting as it was. esc here does not close the pane, exactly as the Feed's
-// esc cancels the filter before it closes anything.
+// handleEditKey drives an edit in progress (R12, R20, R21 for a number, R7 for the list, R9
+// for the launch filter). Typing builds the buffer and backspace trims it, mirroring the
+// confirm pane; enter commits, clamping a number to its bound, parsing a list into
+// identities, or parsing a filter line; esc cancels, leaving the setting as it was. esc here
+// does not close the pane, exactly as the Feed's esc cancels the filter before it closes
+// anything.
 //
 // What counts as typing is the row's, not the pane's: a numeric row takes digits alone, so
-// a letter cannot enter a threshold, and the list row takes the printable characters an
-// OWNER/REPO list is written in. Neither is a keybinding, exactly as the confirm pane's
-// typed count is not (R7a, AC18).
+// a letter cannot enter a threshold, the list row takes the characters an OWNER/REPO list is
+// written in, and the filter row takes printable ASCII, because its values are GitHub's to
+// shape. None of the three is a keybinding, exactly as the confirm pane's typed count is not
+// (R7a, AC18).
 func (m Model) handleEditKey(k tea.KeyPressMsg) Model {
 	switch {
 	case key.Matches(k, m.profile.CloseDetail): // esc: cancel the edit
 		return m.endEdit()
 	case key.Matches(k, m.profile.OpenDetail): // enter: commit the edit
-		if m.cursor.isList() {
+		switch {
+		case m.cursor.isList():
 			m = m.commitList()
-		} else {
+		case m.cursor.isFilter():
+			m = m.commitFilter()
+		default:
 			m = m.commitNumber()
 		}
 		editErr := m.editErr
@@ -288,6 +316,10 @@ func (m Model) handleEditKey(k tea.KeyPressMsg) Model {
 	case m.cursor.isList() && listText(k) != "":
 		if len(m.editBuf) < listBufMax {
 			m.editBuf += listText(k)
+		}
+	case m.cursor.isFilter() && filterText(k) != "":
+		if len(m.editBuf) < filterBufMax {
+			m.editBuf += filterText(k)
 		}
 	case m.cursor.isNumber() && isDigit(k):
 		if len(m.editBuf) < 6 { // no setting exceeds three digits; six is slack against a fat finger
@@ -340,6 +372,32 @@ func (m Model) commitList() Model {
 	if len(rejected) > 0 {
 		m.editErr = "ignored: " + strings.Join(rejected, ", ")
 	}
+	return m.persist()
+}
+
+// filterBufMax bounds the launch-filter editor's buffer. One filter line is a handful of
+// short clauses, so the ceiling is far above anything a person types and low enough that a
+// stuck key cannot grow the buffer without limit. It is the exclude list's rule at the
+// scale this row works at.
+const filterBufMax = 512
+
+// commitFilter parses the edited buffer into R9's launch filter and adopts it. The buffer is
+// one line of the Feed's own filter grammar, parsed by filter.ParseQuery, the same door the
+// Feed's / input uses, so the view can never store a filter the Feed could not state and a
+// person learns one syntax rather than two.
+//
+// A line that does not parse leaves the setting exactly as it was and names the reason in
+// the frame, which is the loader's R14 rule applied to input arriving by keystroke. It does
+// not adopt a partial filter: ParseQuery rejects the whole line, and half a filter is a
+// narrowing nobody asked for. An empty line commits the empty filter, which is how the
+// gesture removes a launch filter as well as sets one.
+func (m Model) commitFilter() Model {
+	f, err := filter.ParseQuery(m.editBuf)
+	if err != nil {
+		m.editErr = "not applied: " + err.Error()
+		return m
+	}
+	m.cfg.LaunchFilter = f
 	return m.persist()
 }
 
@@ -489,4 +547,25 @@ func listText(k tea.KeyPressMsg) string {
 	default:
 		return ""
 	}
+}
+
+// filterText is the text a key press contributes to a launch-filter edit, empty when the
+// press contributes none. Like listText it reads KeyPressMsg.Text rather than String(),
+// which names a key rather than spelling it and answers "space" for the space bar, the one
+// character the grammar separates clauses with.
+//
+// It admits any printable ASCII, which is wider than the exclude row's set and narrower
+// than "any rune", both deliberately. Wider, because a filter's values are free-form: a
+// branch, an actor, an event or a Workflow name is GitHub's to shape, and the grammar's own
+// punctuation runs to colons, comparison operators and the range dots that gh's --created
+// syntax uses. Narrower, because a pasted newline or a stray control sequence still has no
+// business in a one-line filter.
+func filterText(k tea.KeyPressMsg) string {
+	if len(k.Text) != 1 {
+		return ""
+	}
+	if c := k.Text[0]; c < ' ' || c > '~' {
+		return ""
+	}
+	return k.Text
 }

@@ -48,6 +48,13 @@ func (d DateRange) contains(t time.Time) bool {
 // no parsed clause has an unset raw string, so raw is the honest sentinel.
 func (d DateRange) empty() bool { return d.raw == "" }
 
+// String is the clause exactly as it was accepted, which is the form the created
+// query parameter carries and the form ParseCreated reads back. It is what lets a
+// consumer outside this package persist a range without re-serialising one: the
+// verbatim string is the only spelling that cannot shift a boundary (ADR-0016), and
+// the typed bounds are deliberately unreachable. The zero value renders empty.
+func (d DateRange) String() string { return d.raw }
+
 // ParseCreated validates gh's date syntax and returns the range (ADR-0016). It
 // accepts gh's five date widths (a bare year, a year-month, a full date, an RFC3339
 // datetime with a zone, and a zone-less datetime read as UTC), the comparison
