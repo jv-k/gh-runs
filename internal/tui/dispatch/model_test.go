@@ -57,11 +57,18 @@ func typeText(m dispatch.Model, s string) dispatch.Model {
 type fakeDispatcher struct {
 	calls  []ops.DispatchRequest
 	result ops.DispatchResult
-	err    error
+	// byWorkflow answers per Workflow, where a test needs two Dispatches told apart by the Run they
+	// created. It is keyed on the request rather than on call order, because a Cmd runs when the test
+	// chooses to run it and the two orders need not agree. Anything unlisted falls back to result.
+	byWorkflow map[int64]ops.DispatchResult
+	err        error
 }
 
 func (f *fakeDispatcher) Dispatch(_ context.Context, req ops.DispatchRequest) (ops.DispatchResult, error) {
 	f.calls = append(f.calls, req)
+	if res, ok := f.byWorkflow[req.WorkflowID]; ok {
+		return res, f.err
+	}
 	return f.result, f.err
 }
 
@@ -517,10 +524,14 @@ func TestRepeatedRejectionsStayRetryable(t *testing.T) {
 // in-flight guard: it was keyed to the pane rather than to what was sent, so a POST for one Workflow
 // refused an unrelated Dispatch of another. Two different Workflows are two different Dispatches.
 func TestAnotherWorkflowDispatchesWhileOneIsInFlight(t *testing.T) {
-	disp := &fakeDispatcher{result: ops.DispatchResult{RunID: 42}}
-	opts := dispatch.Options{Profile: keys.Standard, Ops: disp}
 	first := wf(9001, ".github/workflows/deploy.yml")
 	second := wf(9002, ".github/workflows/release.yml")
+	// Each Workflow's Dispatch gets its own Run, so the two outcomes are told apart on screen.
+	disp := &fakeDispatcher{byWorkflow: map[int64]ops.DispatchResult{
+		first.ID:  {RunID: 111},
+		second.ID: {RunID: 222},
+	}}
+	opts := dispatch.Options{Profile: keys.Standard, Ops: disp}
 
 	m := openLoaded(t, opts, first, "deployment.yml")
 	m = fillRequired(m, "v1")
@@ -551,6 +562,15 @@ func TestAnotherWorkflowDispatchesWhileOneIsInFlight(t *testing.T) {
 	if _, cmd3 := m.Update(press("x")); cmd3 != nil {
 		t.Errorf("the second Workflow re-dispatched after another Workflow's outcome landed; an outcome must settle only its own submission")
 	}
+	// Nor may that outcome paint here. R16 and AC5 make this line the only record that a Run was
+	// created, so the form showing it must be the form that created it. The second Workflow created
+	// Run 222 and the first created Run 111, so the number on screen names which one this is.
+	if !strings.Contains(m.View(), "Run 222") {
+		t.Errorf("the form stopped showing its own Run after another Workflow's outcome landed (R16, AC5):\n%s", m.View())
+	}
+	if strings.Contains(m.View(), "Run 111") {
+		t.Errorf("the form paints another Workflow's Run; an outcome belongs to the form that produced it (R16, AC5):\n%s", m.View())
+	}
 }
 
 // TestSubmitAfterSuccessCreatesNoSecondRun pins the done-latch: once a Dispatch has been accepted, a
@@ -572,7 +592,7 @@ func TestSubmitAfterSuccessCreatesNoSecondRun(t *testing.T) {
 	if len(disp.calls) != 1 {
 		t.Errorf("issued %d dispatches, want exactly 1; a submit after success must not create a second Run", len(disp.calls))
 	}
-	if !strings.Contains(m.View(), "already been made, Run 42") {
+	if !strings.Contains(m.View(), "already dispatched as Run 42") {
 		t.Errorf("the refusal must say the Dispatch already happened and name its Run: %q", m.View())
 	}
 }
@@ -860,6 +880,73 @@ func TestRefEnumerationFailureKeepsTheForm(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "Ref: main") {
 		t.Errorf("the form left the ref it holds after a failed enumeration (R23): %q", m.View())
+	}
+}
+
+// TestOutcomeReachesOnlyTheFormThatProducedIt pins that a Dispatch's outcome belongs to the
+// submission that produced it, not to whichever form happens to be open when it lands. The guard was
+// made submission-aware and the painting was not, so a Workflow that dispatched nothing announced
+// another's Run, offered its URL, and wrote its own unsubmitted values as R25's last-used inputs.
+//
+// R16 and AC5 make that status line the only record that a Run was created. Naming the wrong
+// Workflow's Run there is worse than saying nothing.
+func TestOutcomeReachesOnlyTheFormThatProducedIt(t *testing.T) {
+	cases := []struct {
+		name  string
+		disp  *fakeDispatcher
+		wants []string // strings that must not appear on the second Workflow's form
+	}{
+		{
+			name:  "a success",
+			disp:  &fakeDispatcher{result: ops.DispatchResult{RunID: 111111, HTMLURL: "https://github.com/o/r/actions/runs/111111"}},
+			wants: []string{"111111", "dispatched"},
+		},
+		{
+			name:  "a rejection",
+			disp:  &fakeDispatcher{err: &ops.DispatchError{Code: 422, Message: "Cannot trigger a 'workflow_dispatch' on a disabled workflow"}},
+			wants: []string{"dispatch failed", "disabled"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			st := store.NewTransport(nil, dir, clockwork.NewFakeClock())
+			opts := dispatch.Options{Profile: keys.Standard, Ops: c.disp, Store: st}
+			first := wf(9001, ".github/workflows/deploy.yml")
+			second := wf(9002, ".github/workflows/release.yml")
+
+			m := openLoaded(t, opts, first, "deployment.yml")
+			m = fillRequired(m, "sent-by-the-first")
+			m, cmd := m.Update(press("x")) // the first Workflow's POST is in flight
+			if cmd == nil {
+				t.Fatal("the first submit issued no Cmd")
+			}
+
+			// The operator closes the form and opens another Workflow's, then types into it without
+			// submitting. Nothing here dispatched anything.
+			m = m.Close()
+			m, _ = m.Open(dispatch.Target{Repo: rid("o", "r"), Workflow: second, Eligible: true, Ref: "main"})
+			m, _ = m.Update(dispatch.YAMLLoaded{Ref: "main", Path: second.Path, Data: fixture(t, "deployment.yml")})
+			m = fillRequired(m, "typed-into-the-second")
+
+			m = runCmd(m, cmd) // the first Workflow's outcome lands on the second Workflow's form
+
+			for _, unwanted := range c.wants {
+				if strings.Contains(m.View(), unwanted) {
+					t.Errorf("the second Workflow's form paints %q from another Workflow's outcome (R16, AC5):\n%s", unwanted, m.View())
+				}
+			}
+
+			// R25: the second Workflow dispatched nothing, so nothing of its may be remembered.
+			// Re-opening its form must fall back to the declared defaults.
+			m2 := dispatch.New(opts)
+			m2, _ = m2.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+			m2, _ = m2.Open(dispatch.Target{Repo: rid("o", "r"), Workflow: second, Eligible: true, Ref: "main"})
+			m2, _ = m2.Update(dispatch.YAMLLoaded{Ref: "main", Path: second.Path, Data: fixture(t, "deployment.yml")})
+			if strings.Contains(m2.View(), "typed-into-the-second") {
+				t.Errorf("another Workflow's outcome persisted this form's unsubmitted values as its last-used inputs (R25):\n%s", m2.View())
+			}
+		})
 	}
 }
 

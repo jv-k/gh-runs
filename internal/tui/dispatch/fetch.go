@@ -157,13 +157,34 @@ func (c ClientFetch) Refs(repo domain.RepoID) ([]Ref, error) {
 	return out, nil
 }
 
+// maxRefPages bounds each ref walk. At the API's page ceiling it admits 2,000 branches and 2,000
+// tags, past which a picker cycled one ref at a time has long stopped being usable, so the cap costs
+// nothing real. It is also the worst case a single keypress can spend: two listings, so forty
+// requests, which is a bound worth keeping small because the operator did not ask to pay it.
+const maxRefPages = 20
+
 // refNames reads a branch or tag listing to exhaustion, both of which are arrays of objects carrying
 // a name. The two endpoints differ in what else they carry and in nothing this reads. It trusts
 // rel="next" rather than a count, exactly as discovery's enumeration does (ADR-0005), and stops when
 // the server stops offering a next page.
+//
+// It also stops when the server never does. Every iteration is a real request through the governor,
+// so a walk that does not terminate quietly drains the primary rate limit this tool exists to
+// protect (PRD risk R4), while the picker sits on a pending line forever. discovery's enumeration
+// bounds the same walk with a per-iteration context check, which this cannot borrow: the Fetcher seam
+// carries no context, so the walk has to bound itself. Two bounds, because one page cap is fooled by
+// a chain that never repeats and one visited set is fooled by a chain that never cycles.
+//
+// A bounded walk keeps the pages it did read. They are a smaller picker set, not a failure, and R23's
+// ref is reachable regardless because the pane holds it before the picker is ever opened.
 func (c ClientFetch) refNames(path string) ([]string, error) {
 	var names []string
-	for path != "" {
+	seen := make(map[string]bool)
+	for i := 0; path != "" && i < maxRefPages; i++ {
+		if seen[path] {
+			break // a cycling rel="next": well-formed, and endless
+		}
+		seen[path] = true
 		page, next, err := c.refPage(path)
 		if err != nil {
 			return nil, err

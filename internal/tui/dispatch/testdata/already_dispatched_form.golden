@@ -12,5 +12,5 @@
   dry_run           [x] true  [38;2;138;138;138m(boolean)[m
 [38;2;138;138;138m    Resolve the plan without deploying[m
 
-[1;38;2;255;95;95m  this Dispatch has already been made, Run 29803635501. Change the ref or an input to dispatch again[m
+[1;38;2;255;95;95m  already dispatched as Run 29803635501. Change the ref or an input to dispatch again[m
 [38;2;138;138;138m  enter edit  space toggle/cycle  x dispatch  esc close[m

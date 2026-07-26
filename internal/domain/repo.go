@@ -23,6 +23,12 @@ type Repo struct {
 	// here is what makes R23 cost no request: without it the form spent a
 	// GET /repos/{owner}/{repo} on every open to learn a string the enumeration
 	// had already returned.
+	//
+	// It is empty for a repository whose discovery record predates the field, and
+	// nothing repairs such a record in place. The consumer then resolves the branch
+	// itself and lands on the right ref at the cost of one request per form open.
+	// discovery.Record's own field comment carries why, and repo-discovery R7a
+	// carries the requirement.
 	DefaultBranch string `json:"default_branch"`
 }
 

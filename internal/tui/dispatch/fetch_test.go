@@ -1,6 +1,9 @@
 package dispatch_test
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -216,6 +219,93 @@ func TestClientFetchFollowsRefPagination(t *testing.T) {
 	if n := counting.countExact("/repos/o/paged/branches"); n != 2 {
 		t.Errorf("the branch walk made %d requests, want 2 (a page and its rel=next)", n)
 	}
+}
+
+// cyclingRequester answers every request with a page whose rel="next" points back into the cycle, a
+// well-formed Link header that never terminates. ghlink.Next is already safe on a malformed header,
+// so only a valid cycle reaches the walk. It carries its own hard stop so a regression fails the test
+// rather than hanging the suite.
+type cyclingRequester struct {
+	n    int
+	urls []string
+}
+
+func (c *cyclingRequester) Request(_, path string, _ io.Reader) (*http.Response, error) {
+	c.n++
+	if c.n > 500 {
+		return nil, errors.New("the walk did not terminate")
+	}
+	c.urls = append(c.urls, path)
+	// Two pages pointing at each other: a cycle no page counter alone would notice, and no page is
+	// ever requested twice in a row.
+	next := "https://api.github.com/repos/o/r/branches?per_page=100&page=2"
+	if strings.Contains(path, "page=2") {
+		next = "https://api.github.com/repos/o/r/branches?per_page=100"
+	}
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	h.Set("Link", "<"+next+">; rel=\"next\"")
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     h,
+		Body:       io.NopCloser(strings.NewReader(`[{"name":"a"}]`)),
+	}, nil
+}
+
+// TestRefWalkTerminatesOnACyclingLinkHeader pins that the ref listing cannot run away. Every
+// iteration is a real request through the governor, so a walk that never ends drains the primary rate
+// limit the tool is built to protect (PRD risk R4) while the picker sits on a pending line forever.
+// The Fetcher seam takes no context, so the walk cannot be cancelled from outside and has to bound
+// itself.
+func TestRefWalkTerminatesOnACyclingLinkHeader(t *testing.T) {
+	req := &cyclingRequester{}
+	fetch := dispatch.NewClientFetch(req)
+
+	refs, err := fetch.Refs(rid("o", "r"))
+	if err != nil {
+		t.Fatalf("Refs returned an error: %v", err)
+	}
+	if req.n > 8 {
+		t.Errorf("the walk made %d requests against a cycling rel=next; it must bound itself: %v", req.n, req.urls)
+	}
+	if len(refs) == 0 {
+		t.Errorf("the walk bounded itself but kept nothing; the pages it did read are still a picker set")
+	}
+}
+
+// TestRefWalkStopsAtThePageCap pins the second bound, for a chain that never repeats a URL and so
+// slips past the visited set. A repository cannot have more refs than the cap allows without the
+// picker being useless anyway, and an unbounded walk is the worse failure.
+func TestRefWalkStopsAtThePageCap(t *testing.T) {
+	req := &climbingRequester{}
+	fetch := dispatch.NewClientFetch(req)
+
+	if _, err := fetch.Refs(rid("o", "r")); err != nil {
+		t.Fatalf("Refs returned an error: %v", err)
+	}
+	// Two listings, each capped, so the cap is what a single press can spend at worst.
+	if req.n > 40 {
+		t.Errorf("the walk made %d requests against an endless chain of fresh pages; the page cap must stop it", req.n)
+	}
+}
+
+// climbingRequester answers with a fresh page number every time, so no URL ever repeats. Only a page
+// cap ends this walk.
+type climbingRequester struct{ n int }
+
+func (c *climbingRequester) Request(_, _ string, _ io.Reader) (*http.Response, error) {
+	c.n++
+	if c.n > 500 {
+		return nil, errors.New("the walk did not terminate")
+	}
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	h.Set("Link", fmt.Sprintf("<https://api.github.com/repos/o/r/branches?per_page=100&page=%d>; rel=\"next\"", c.n+1))
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     h,
+		Body:       io.NopCloser(strings.NewReader(`[{"name":"a"}]`)),
+	}, nil
 }
 
 // TestOpeningAtTheDiscoveredDefaultBranchIssuesNoRepositoryRead is R23's Budget claim measured at

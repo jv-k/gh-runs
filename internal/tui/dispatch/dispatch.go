@@ -184,6 +184,15 @@ type Model struct {
 	//
 	// The map is shared across the Model's copies, which for a latch is the safe direction: a copy
 	// that lags still sees what was sent.
+	//
+	// It grows by one entry per Run actually created in this session, and by nothing else: a
+	// rejection deletes its entry, so a session that dispatches nothing successfully leaves it
+	// empty. A session creating enough Runs for the map to matter has a far larger problem than the
+	// map.
+	//
+	// Whitespace is content here and is not content to R9's required-input gate, which trims. The
+	// two disagree deliberately: a trailing space is a different value to the API, so it is a
+	// different submission, while an input holding only spaces is still unfilled.
 	issued map[dispatchTarget]issueState
 
 	status    string
@@ -357,12 +366,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m.applyRefs(msg)
 	case Dispatched:
-		// The latch settles whether or not the form is still open. The pane issued the POST, so it
+		// The guard settles whether or not the form is still open. The pane issued the POST, so it
 		// must not forget it because the window closed: a closed pane that forgot is precisely what
-		// let a reopen issue a second Dispatch. Only the visible outcome (the status, the Run and
-		// R25's remembered inputs) belongs to an open form.
+		// let a reopen issue a second Dispatch.
 		m = m.settle(msg)
-		if !m.open {
+		// The visible outcome is narrower. It belongs to the form that produced it, not to whichever
+		// form is open when it lands. R16 and AC5 make that status line the only record that a Run
+		// was created, so painting one Workflow's Run on another's form names the wrong Workflow and
+		// offers its URL, and R25 would persist values that were never submitted as the open
+		// Workflow's last-used inputs.
+		if !m.open || !m.showsOutcomeFor(msg.issued) {
 			return m, nil
 		}
 		return m.applyDispatched(msg)
@@ -431,6 +444,13 @@ func (m Model) settle(msg Dispatched) Model {
 	if !ok {
 		return m
 	}
+	if !rec.inflight {
+		// Already settled. A record only ever moves from in flight to done, never back, so a
+		// duplicate or late outcome cannot reopen a submission whose Run exists. Bubble Tea delivers
+		// one message per Cmd, so this is defence in depth, which is the right posture on the path
+		// that creates Runs.
+		return m
+	}
 	if msg.Err != nil {
 		delete(m.issued, msg.issued)
 		return m
@@ -439,6 +459,15 @@ func (m Model) settle(msg Dispatched) Model {
 	rec.runID = msg.Result.RunID
 	m.issued[msg.issued] = rec
 	return m
+}
+
+// showsOutcomeFor reports whether the form on screen is the one that produced a Dispatch, which is
+// the only form its outcome may paint on or persist for. It matches the repository and the Workflow
+// and not the ref or the inputs: those can have moved on since the POST (R3 re-fetches on a ref
+// change, and R9 makes the operator retype after a reopen), and the outcome is still this form's to
+// report. A different Workflow's outcome is never this form's.
+func (m Model) showsOutcomeFor(t dispatchTarget) bool {
+	return t.repo == m.repo && t.workflow == m.workflow.ID
 }
 
 // inflightHere reports whether a Dispatch of the Workflow now on screen has not resolved, which Open
@@ -626,6 +655,9 @@ func (m Model) cycleNames() []string {
 	names := make([]string, 0, len(m.refs)+1)
 	listed := false
 	for _, r := range m.refs {
+		if r.Name == "" {
+			continue // an unnamed ref is not a ref, and landing on one would make the target ambiguous (R4)
+		}
 		names = append(names, r.Name)
 		if r.Name == m.refHome {
 			listed = true
@@ -643,6 +675,14 @@ func (m Model) cycleNames() []string {
 // input (R9, AC3). Otherwise it builds the inputs map and dispatches, and the API is the final
 // authority on the rest (R14).
 func (m Model) submit() (Model, tea.Cmd) {
+	if m.ref == "" {
+		// R4: which ref a Dispatch will run must never be ambiguous, and an empty ref is the API's
+		// choice rather than the operator's. Nothing reaches here today; it is stated because Target
+		// is an opener-filled struct and the cost of being wrong is a Run on an unintended ref.
+		m.status = "no ref is selected, so there is nothing to dispatch"
+		m.statusErr = true
+		return m, nil
+	}
 	if m.loadErr != "" || !m.form.Dispatchable {
 		m.status = "this Workflow declares no workflow_dispatch trigger at this ref"
 		m.statusErr = true
@@ -685,14 +725,17 @@ func (m Model) submit() (Model, tea.Cmd) {
 // named where one is recorded, which is every settled success under R16: the response carries the
 // Run ID, so a settled Dispatch with none is a 200 the API is not documented to return, and printing
 // "Run 0" for it would be worse than saying nothing.
+//
+// It is kept short on purpose. The pane wraps nothing, so a line long enough to exceed the terminal
+// wraps in the renderer, and this is the line standing between a keypress and a duplicate Run.
 func refusal(rec issueState) string {
 	switch {
 	case rec.inflight:
 		return "this Dispatch is already in flight"
 	case rec.runID == 0:
-		return "this Dispatch has already been made. Change the ref or an input to dispatch again"
+		return "already dispatched. Change the ref or an input to dispatch again"
 	default:
-		return fmt.Sprintf("this Dispatch has already been made, Run %d. Change the ref or an input to dispatch again", rec.runID)
+		return fmt.Sprintf("already dispatched as Run %d. Change the ref or an input to dispatch again", rec.runID)
 	}
 }
 
