@@ -177,10 +177,20 @@ type countingRT struct {
 	n           int
 	conditional int
 	urls        []string
+	// issued records each request's URL as it reaches the wire, before the base has
+	// answered. urls records the ones that came back. The two differ exactly while a
+	// response is held, which is the window R32's ordering claim lives in: a test that
+	// counts what went out while the fast path's poll is still in flight must read this
+	// one, because the completed count is still zero there.
+	issued []string
 }
 
 func (c *countingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	cond := req.Header.Get("If-None-Match") != ""
+	c.mu.Lock()
+	c.issued = append(c.issued, req.URL.String())
+	c.mu.Unlock()
+
 	resp, err := c.base.RoundTrip(req)
 	c.mu.Lock()
 	c.n++
@@ -190,6 +200,14 @@ func (c *countingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	c.urls = append(c.urls, req.URL.String())
 	c.mu.Unlock()
 	return resp, err
+}
+
+// countIssued counts how many requests targeting a URL containing substr have reached the
+// wire, whether or not they have come back.
+func (c *countingRT) countIssued(substr string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return countMatching(c.issued, substr)
 }
 
 func (c *countingRT) count() int {
@@ -209,8 +227,15 @@ func (c *countingRT) conditionalCount() int {
 func (c *countingRT) countPath(substr string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return countMatching(c.urls, substr)
+}
+
+// countMatching is the one substring tally the two counters above share. It takes the slice
+// rather than reading a field, because which slice is read is the whole difference between
+// them: issued is what went out, urls is what came back.
+func countMatching(urls []string, substr string) int {
 	n := 0
-	for _, u := range c.urls {
+	for _, u := range urls {
 		if strings.Contains(u, substr) {
 			n++
 		}
@@ -256,6 +281,29 @@ func (f *fakePollSet) set(ids ...domain.RepoID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ids = append([]domain.RepoID(nil), ids...)
+}
+
+// fakeClassified is a mutable stand-in for discovery's record set: which repositories it has
+// classified so far. It exists so a test can move a repository from unclassified to
+// classified mid-session, which is what a discovery pass does one probe at a time.
+type fakeClassified struct {
+	mu  sync.Mutex
+	ids map[domain.RepoID]bool
+}
+
+func (f *fakeClassified) has(id domain.RepoID) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ids[id]
+}
+
+func (f *fakeClassified) set(ids ...domain.RepoID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ids = make(map[domain.RepoID]bool, len(ids))
+	for _, id := range ids {
+		f.ids[id] = true
+	}
 }
 
 // fakeBudget is a controllable Budget Readout for the demotion and exhaustion tests
@@ -304,10 +352,17 @@ type harness struct {
 
 // harnessConfig customises a harness before its Scheduler is built.
 type harnessConfig struct {
-	base      http.RoundTripper // the injected wire base; a cassette or a fake
-	pollSet   []domain.RepoID
-	budget    Budget         // nil means wire the governor
-	workflows WorkflowLister // nil means no Workflow list is resolved, the cadence tests' default
+	base    http.RoundTripper // the injected wire base; a cassette or a fake
+	pollSet []domain.RepoID
+	// first is Options.First: the repository the tool was launched inside, polled alone
+	// until its opening poll lands (R32, AC16). The zero value is a launch outside any
+	// repository, which is every test that does not set it.
+	first domain.RepoID
+	// classified is Options.Classified: whether discovery has classified a repository yet.
+	// nil means discovery has classified nothing, which is every test that does not set it.
+	classified *fakeClassified
+	budget     Budget         // nil means wire the governor
+	workflows  WorkflowLister // nil means no Workflow list is resolved, the cadence tests' default
 	// wireWorkflows replaces workflows with a lister that reads the listing over the
 	// harness's own client, so the read travels the counted wire and the cassette exactly as
 	// it does in main.go. It is how a test counts the join's requests rather than a fake's
@@ -342,7 +397,15 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		lister = wireWorkflowLister(client)
 	}
 
-	s := New(Options{Client: client, PollSet: ps, Budget: budget, Clock: clk, Workflows: lister})
+	var classified func(domain.RepoID) bool
+	if cfg.classified != nil {
+		classified = cfg.classified.has
+	}
+
+	s := New(Options{
+		Client: client, PollSet: ps, First: cfg.first, Classified: classified,
+		Budget: budget, Clock: clk, Workflows: lister,
+	})
 	s.settled = make(chan time.Duration, 1)
 	s.polled = make(chan struct{}, 4096)
 
@@ -371,6 +434,20 @@ func (h *harness) waitPolls(t *testing.T, n int) {
 		case <-time.After(2 * time.Second):
 			t.Fatalf("timed out waiting for poll %d of %d to finish", i+1, n)
 		}
+	}
+}
+
+// waitPrimed blocks until the fast path's gate has opened, which is the only barrier that
+// means it. waitPolls is not: it fires on the polled seam, and poll registers markPrimed to
+// run after that seam, so a test that advances the clock on the strength of waitPolls alone
+// can evaluate a schedule that is still gated. That reads as one poll where two were due, and
+// it shows up as a flake under a constrained scheduler rather than consistently.
+func (h *harness) waitPrimed(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h.s.Primed():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the fast path's gate never opened")
 	}
 }
 

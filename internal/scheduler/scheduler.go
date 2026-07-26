@@ -140,11 +140,49 @@ type WorkflowLister func(domain.RepoID) ([]domain.Workflow, error)
 // and the clock is the injected one. Workflows is the Workflow-list source the
 // fan-out joins against.
 type Options struct {
-	Client    Requester
-	PollSet   PollSet
-	Budget    Budget
-	Clock     clock.Clock
-	Workflows WorkflowLister
+	Client  Requester
+	PollSet PollSet
+	// First is the repository the tool was launched inside, resolved from the git
+	// remote before the engine starts (live-run-feed R32, repo-discovery R14). It is
+	// polled alone, first, and the rest of the poll set is held back until its opening
+	// poll lands, so a cold start issues exactly one Run listing before that repository
+	// is painted (AC16). It holds its place in the schedule only until discovery has
+	// classified it, after which the poll set is the whole answer (Classified).
+	//
+	// The zero value is a launch outside any git repository, or one whose remote did not
+	// resolve. Nothing is gated then and every discovered repository is due at the cold
+	// start, which is R34's fallback. It is also how the composition root declines to name
+	// a fast path at all, which is what an excluded launch repository gets (settings R7).
+	First domain.RepoID
+	// Classified reports whether discovery holds a record for a repository, and is the
+	// scheduler's cue to stop treating First as a special case. It is a function over
+	// domain types rather than an import, exactly as WorkflowLister is: main.go is the only
+	// place that knows both sides (ADR-0011).
+	//
+	// It exists because R32 and polling-scheduler R2 want opposite things and both are
+	// right. R32 needs the launch repository polled before discovery has said anything
+	// about it. R2 says the scheduler polls **only** what discovery classified as having
+	// Runs, and repo-discovery R22 admits the launch repository to the poll set "if it has
+	// Runs", not regardless. So the union is a bridge over the window where discovery has
+	// no answer, and it ends when the answer arrives: a launch repository classified as
+	// having Runs is in the poll set already, and one classified without them leaves the
+	// rotation like any other.
+	//
+	// Reporting false for a repository discovery never enumerated is deliberate rather than
+	// incidental. A clone the account does not own never appears in /user/repos, so no pass
+	// will ever record it, and dropping it on the pass completing would blank the Feed for the
+	// repository the operator is sitting in. repo-discovery R22 answers that case by adopting
+	// it for the session, at which point a record exists and this branch stops carrying it.
+	// That adoption is written and unreached (issue #100), so today the branch is what holds
+	// such a repository in the schedule, and it is load-bearing for a reason it should not
+	// have to be.
+	//
+	// A nil Classified is "discovery has classified nothing", which keeps First in the
+	// schedule. That is the honest reading for a caller that wired no discovery at all.
+	Classified func(domain.RepoID) bool
+	Budget     Budget
+	Clock      clock.Clock
+	Workflows  WorkflowLister
 }
 
 // Scheduler is the stateful engine. It holds each repository's last-known Runs
@@ -207,6 +245,14 @@ type Scheduler struct {
 	// asserts. Production leaves it nil.
 	polled chan struct{}
 
+	// primed is closed once the fast path's opening poll has finished, which is the gate
+	// on the rest of the schedule (R32, AC16). It is a channel rather than a flag because
+	// its consumer is main.go's discovery goroutine, which waits on it alongside a
+	// cancellation, and because closing it is a broadcast to any number of waiters. With
+	// no First configured it is closed at construction and gates nothing.
+	primed    chan struct{}
+	primeOnce sync.Once
+
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
@@ -216,7 +262,7 @@ type Scheduler struct {
 // New returns a Scheduler over opts. It reads nothing and issues no request: a
 // caller starts the engine with Start and stops it with Stop.
 func New(opts Options) *Scheduler {
-	return &Scheduler{
+	s := &Scheduler{
 		opts:     opts,
 		lastRuns: make(map[string][]domain.Run),
 		viewport: make(map[string]bool),
@@ -226,6 +272,60 @@ func New(opts Options) *Scheduler {
 		wfLists:  make(map[string]workflowList),
 		updates:  make(chan Event),
 		wake:     make(chan struct{}, 1),
+		primed:   make(chan struct{}),
+	}
+	if opts.First == (domain.RepoID{}) {
+		// No fast path (R34): nothing is held back, so the gate is open before the engine
+		// starts and every scheduling decision sees the whole poll set.
+		s.primeOnce.Do(func() { close(s.primed) })
+	}
+	return s
+}
+
+// Primed reports when the fast path has finished its opening poll, by returning a
+// channel closed at that instant (R32). It is what lets main.go start repository
+// discovery behind the fast path rather than in front of it: discovery's pass probes
+// every repository's Run list, so starting it first would put ~163 Run listings on the
+// wire before the repository the operator is sitting in had painted, which is exactly
+// what AC16 counts.
+//
+// It closes on the poll finishing, whatever it found: a 200, a 304, a failed request and
+// a repository with no Runs all release the gate, because each one is the fast path
+// having had its turn on the wire. With no First configured the channel is closed from
+// construction.
+//
+// It does not close while scheduling is paused by Budget exhaustion (R16), because no
+// poll is spawned then. That is the safe direction: a waiter is held rather than firing a
+// discovery burst into an exhausted limit, and it is released by cancelling the context
+// it waits on alongside.
+func (s *Scheduler) Primed() <-chan struct{} { return s.primed }
+
+// markPrimed opens the gate when the fast path's poll goroutine finishes, and does
+// nothing for any other repository. It wakes the loop so the rest of the poll set is
+// scheduled at once rather than at the end of the wait the loop chose while the set was
+// still one repository wide.
+//
+// It is called from a deferred call in poll, after the repository's single-flight flag has
+// been cleared, so the loop it wakes finds the fast path schedulable rather than skipping
+// it as still in flight.
+func (s *Scheduler) markPrimed(id domain.RepoID) {
+	if id != s.opts.First {
+		return
+	}
+	s.primeOnce.Do(func() {
+		close(s.primed)
+		s.signalWake()
+	})
+}
+
+// isPrimed reports whether the gate is open. It reads the closed channel rather than a
+// second flag, so there is one source of truth for a state two consumers observe.
+func (s *Scheduler) isPrimed() bool {
+	select {
+	case <-s.primed:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -286,6 +386,46 @@ func (s *Scheduler) pollSetLocked() []domain.RepoID {
 		return nil
 	}
 	return s.opts.PollSet.PollSet()
+}
+
+// scheduleSetLocked is what the loop may poll at this decision, and the slow tier's base
+// interval. The two are returned together because both come from one read of the poll
+// set, which the loop must resolve once per tick rather than once per repository.
+//
+// Until the fast path has landed the set is that repository alone, which is the whole of
+// R32: one Run listing goes out, for the repository the operator launched inside, and no
+// other repository's response is waited on or even asked for (AC16). After it lands the set
+// is the poll set, with the fast path's repository unioned in only while discovery holds no
+// record for it. That window is a bridge and not a permanent exemption: polling-scheduler R2
+// admits only what discovery classified as having Runs, so once it has an answer the answer
+// stands (Options.Classified carries the reasoning and the one case that never resolves).
+//
+// pollSetBase is the slow tier's base interval, and it is deliberately **not** derived from
+// the ids returned beside it: it is computed from the poll set, whatever the gate did to the
+// schedule. It is a Budget projection over what will be polled in the steady state (R11), and
+// stretching it on the strength of a one-repository opening window would be reading the gate
+// as scale. The name says so, because `wholeSetInterval(len(ids))` is the thing a later
+// reader would otherwise assume it equals.
+func (s *Scheduler) scheduleSetLocked() (ids []domain.RepoID, pollSetBase time.Duration) {
+	set := s.pollSetLocked()
+	pollSetBase = wholeSetInterval(len(set))
+
+	first := s.opts.First
+	if first == (domain.RepoID{}) {
+		return set, pollSetBase
+	}
+	if !s.isPrimed() {
+		return []domain.RepoID{first}, pollSetBase
+	}
+	if s.opts.Classified != nil && s.opts.Classified(first) {
+		return set, pollSetBase // discovery has answered: its answer is the whole schedule (R2)
+	}
+	for _, id := range set {
+		if id == first {
+			return set, pollSetBase
+		}
+	}
+	return append([]domain.RepoID{first}, set...), pollSetBase
 }
 
 // recordPoll stores a changed poll's Runs and ETag and reports whether the
@@ -394,6 +534,20 @@ func (s *Scheduler) SetViewport(ids []domain.RepoID) {
 	// This is symmetric with the poll-driven tier change that wakes the loop (R8).
 	s.signalWake()
 }
+
+// PollSetChanged tells the engine its poll set may have changed, so it re-evaluates now
+// rather than at the end of the wait it last chose (R3, live-run-feed R33). The set is
+// already read on every scheduling decision, and this is what makes the next decision
+// happen: without it the loop sleeps until the next repository it already knew about is
+// due, so one classified a moment after it slept waits out that whole interval, up to the
+// slow tier's 30s, before its first Run reaches the screen.
+//
+// Its caller is main.go's discovery, which now runs behind the fast path rather than in
+// front of it, and which publishes each repository as its probe returns (repo-discovery
+// R15). It is symmetric with the viewport and filter wakes, and costs nothing when nothing
+// changed: a redundant wake re-evaluates the same state, spawns no poll, and settles on the
+// same wait.
+func (s *Scheduler) PollSetChanged() { s.signalWake() }
 
 // SetFilter publishes the Feed's active filter, whose Query() every subsequent poll
 // pushes server-side (R22, ADR-0016). The Feed calls it when the filter input is

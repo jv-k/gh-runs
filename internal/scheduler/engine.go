@@ -83,15 +83,14 @@ func (s *Scheduler) readout() governor.Readout {
 // removed enters or leaves the rotation with no restart (R3).
 func (s *Scheduler) pollDue(now time.Time) {
 	s.mu.Lock()
-	ids := s.pollSetLocked()
-	slowBase := wholeSetInterval(len(ids))
+	ids, pollSetBase := s.scheduleSetLocked()
 	var due []domain.RepoID
 	for _, id := range ids {
 		key := id.String()
 		if s.inFlight[key] {
 			continue // single-flight: a superseded tick is skipped, never reissued (ADR-0018)
 		}
-		interval := s.intervalForLocked(s.tierOfLocked(id), now, slowBase)
+		interval := s.intervalForLocked(s.tierOfLocked(id), now, pollSetBase)
 		last, polled := s.lastPoll[key]
 		if !polled || !now.Before(last.Add(interval)) {
 			s.inFlight[key] = true
@@ -114,6 +113,10 @@ func (s *Scheduler) pollDue(now time.Time) {
 // queueing behind it (ADR-0018).
 func (s *Scheduler) poll(id domain.RepoID) {
 	defer s.wg.Done()
+	// Deferred calls run last-registered first, so the gate opens after the repository's
+	// single-flight flag is cleared: the loop this wakes must find the fast path
+	// schedulable rather than skip it as still in flight (R32, markPrimed).
+	defer s.markPrimed(id)
 	defer s.signalPolled()
 	defer s.clearInFlight(id)
 
@@ -331,15 +334,14 @@ func (s *Scheduler) resolveWorkflow(id domain.RepoID, selector string) (int64, b
 func (s *Scheduler) nextWait(now time.Time) time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ids := s.pollSetLocked()
-	slowBase := wholeSetInterval(len(ids))
+	ids, pollSetBase := s.scheduleSetLocked()
 	var next time.Time
 	found := false
 	for _, id := range ids {
 		key := id.String()
 		var due time.Time
 		if last, polled := s.lastPoll[key]; polled {
-			due = last.Add(s.intervalForLocked(s.tierOfLocked(id), now, slowBase))
+			due = last.Add(s.intervalForLocked(s.tierOfLocked(id), now, pollSetBase))
 		} else {
 			due = now // never polled: due at once
 		}
