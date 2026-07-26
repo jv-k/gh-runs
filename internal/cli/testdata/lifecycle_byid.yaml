@@ -1,0 +1,52 @@
+---
+version: 2
+# The positional-Run-ID forms, which name their targets outright and so issue no crawl at
+# all. Four writes and not one GET: force-cancel against its own endpoint (R6), a plain
+# re-run, and a re-run of failed Jobs with the debug opt-in (R13, R14). A re-run answers
+# 201, because it adds an Attempt to the Run that already exists rather than creating one
+# (R8).
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/7/force-cancel
+      response:
+        status: 202 Accepted
+        code: 202
+        body: "{}"
+        headers:
+            X-Ratelimit-Remaining: ["4990"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 1
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/8/cancel
+      response:
+        status: 202 Accepted
+        code: 202
+        body: "{}"
+        headers:
+            X-Ratelimit-Remaining: ["4989"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 2
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/9/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: "{}"
+        headers:
+            X-Ratelimit-Remaining: ["4988"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 3
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/10/rerun-failed-jobs
+      response:
+        status: 201 Created
+        code: 201
+        body: "{}"
+        headers:
+            X-Ratelimit-Remaining: ["4987"]
+            X-Ratelimit-Reset: ["1789000000"]

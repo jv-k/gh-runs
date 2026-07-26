@@ -170,5 +170,11 @@ func newRootCmd(deps Deps) *cobra.Command {
 	}
 	root.AddCommand(newListCmd(deps))
 	root.AddCommand(newDeleteCmd(deps))
+	// The non-interactive form of run-lifecycle's four operations (#61). cancel carries
+	// force-cancel behind --force and rerun carries re-run-failed behind --failed, because
+	// each pair is one verb with an escalation rather than two commands, which is the shape
+	// gh already established and ADR-0008 commits to mirroring.
+	root.AddCommand(newCancelCmd(deps))
+	root.AddCommand(newRerunCmd(deps))
 	return root
 }

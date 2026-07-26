@@ -43,6 +43,40 @@ func TestCancelMixedOutcomes(t *testing.T) {
 	}
 }
 
+// TestSucceededNamesTheRunsTheAPIAccepted pins what Succeeded holds after a cancel, which is
+// AC5's precondition. Acted is a count, and a count cannot mark a row: AC5 requires the Feed
+// to show a cancellation-requested indicator on the Run the 202 came back for, so the Summary
+// has to name which Runs those were. The record is Reclamation's (storage-reclamation R24),
+// and this is the second reader of it.
+//
+// The two Runs the API refused are absent, and that is the property the Feed depends on: a
+// 409 and a 404 are both skips for a cancel (R20, R22), so nothing was requested of them that
+// a row could report, and Succeeded after a cancel is exactly the accepted set.
+func TestSucceededNamesTheRunsTheAPIAccepted(t *testing.T) {
+	h := newHarness(t, "cancel_mixed", 50, 50)
+	c := h.confirmed(t, ops.OpCancel, items("o", "r", 1, 2, 3, 4), snapshot(writableRepo("o", "r")))
+	sum := runPurge(t, h, c)
+
+	var got []int64
+	for _, it := range sum.Succeeded {
+		got = append(got, it.ID)
+	}
+	// Runs 1 and 4 answered 202 in the cassette; 2 answered 409 and 3 answered 404.
+	want := []int64{1, 4}
+	if len(got) != len(want) {
+		t.Fatalf("Succeeded = %v, want %v (R4, AC5)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Succeeded = %v, want %v in attempt order (R4, AC5)", got, want)
+		}
+	}
+	if len(sum.Succeeded) != sum.Acted {
+		t.Errorf("Succeeded has %d Runs but Acted counts %d; the two must agree by construction",
+			len(sum.Succeeded), sum.Acted)
+	}
+}
+
 // TestForceCancelIsADistinctEndpoint pins R6: force-cancel is a distinct operation against
 // a distinct endpoint, never substituted for cancel. Its 202 is 'acted', like cancel's.
 func TestForceCancelIsADistinctEndpoint(t *testing.T) {

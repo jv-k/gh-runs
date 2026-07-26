@@ -18,18 +18,21 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 
 **R4.** The Feed must render Status and Conclusion as two distinct, separately labelled columns, and must never merge them into one column.
 
-**R4a.** The Feed's minimum width is **100 columns**. Below it the Feed must state that the terminal is too narrow, name the width it needs, and paint no rows. Four columns are fixed and must never shrink, and two flex above their floors:
+**R4a.** The Feed's minimum width is **100 columns**. Below it the Feed must state that the terminal is too narrow, name the width it needs, and paint no rows. A fixed gutter leads the row, four columns are fixed and must never shrink, and two flex above their floors:
 
 | Column | Width | Fixed? | Basis |
 |---|---|---|---|
+| Gutter | 2 | Fixed | Row state belonging to no field, joined without a separator. [run-lifecycle](../run-lifecycle/requirements.md) R4's cancellation-requested indicator is its first occupant |
 | Status | 11 | Fixed | `in_progress`, the longest of [CONTEXT.md](../../CONTEXT.md)'s six |
 | Conclusion | 15 | Fixed | `action_required` and `startup_failure`, the longest of its nine |
 | Run ID | 11 | Fixed | Measured. `cli/cli` serves 11-digit ids |
 | `run_started_at` | 20 | Fixed | Measured, `2026-07-15T16:39:00Z`. R10 in [settings](../settings/requirements.md) makes relative narrower, never wider |
 | Repository | 20 floor | Flexes | `home-assistant/core` is 19, `kubernetes/kubernetes` is 21 |
-| Workflow name | 18 floor | Flexes | Chosen. It is what is left |
+| Workflow name | 16 floor | Flexes | Chosen. It is what is left |
 
-**The arithmetic is where the number comes from, and it refutes 80 without needing the two floors at all.** The four fixed columns sum to **57**, and five single-space separators make **62**. An 80-column terminal has **18 characters left for the repository and the Workflow name together**, and `home-assistant/core` is 19. So 80 cannot hold the repository column alone, before a character of Workflow name. The floors then give 57 + 5 + 20 + 18 = **100**, and that is the whole derivation. **The only "80 columns" in this canon is [log-viewer](../log-viewer/requirements.md)'s Purpose line, and it contradicts this Feed's own mandated row.** That line is about a Job log, which is one text column, and it does not reach here.
+**The arithmetic is where the number comes from, and it refutes 80 without needing the two floors at all.** The gutter and the four fixed columns sum to **59**, and five single-space separators make **64**. An 80-column terminal has **16 characters left for the repository and the Workflow name together**, and `home-assistant/core` is 19. So 80 cannot hold the repository column alone, before a character of Workflow name. The floors then give 2 + 57 + 5 + 20 + 16 = **100**, and that is the whole derivation. **The only "80 columns" in this canon is [log-viewer](../log-viewer/requirements.md)'s Purpose line, and it contradicts this Feed's own mandated row.** That line is about a Job log, which is one text column, and it does not reach here.
+
+**The gutter was funded out of the Workflow floor rather than by raising the minimum, and that choice is load-bearing.** Raising the minimum past 100 would retire a terminal width this document has promised twice (AC20 renders at 100, AC19 goldens at 100), and it would do so to carry two characters. Taking them from the Workflow name costs the two least valuable characters on the row: the repository column already names the project, and a Workflow name is the one field on the row a truncation marker reports honestly. **The gutter is a marker, not a seventh field.** Nothing in it is a value the API served, which is why [purge](../purge/requirements.md) R30's "the Feed's columns and no new ones" is untouched: the inspect view mirrors the six columns and does not inherit row state that belongs to a request this process made.
 
 **The row is mandated rather than chosen, which is why nothing can be dropped to fit.** [purge](../purge/requirements.md) R30 fixes all six for the inspect view ("the Feed's columns and no new ones") and forbids new ones. Dropping Conclusion or Status to fit a narrow pane would breach R4 outright, in a tool whose stated defining bug is conflating those two fields. There is no honest subset, so the Feed says so and waits. Widening a pane is one action, and it is a better outcome than a Feed that quietly stops showing the column this product exists to separate.
 

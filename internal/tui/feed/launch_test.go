@@ -16,12 +16,13 @@ import (
 // in for the ops engine. Plan is delegated to a real Ops, because a Plan cannot be
 // forged and the friction it prices is what the modal enforces (ADR-0019).
 type launchSpy struct {
-	real       *ops.Ops
-	confirmed  int
-	started    int
-	startedOp  ops.Operation
-	startedSet int
-	startErr   error
+	real        *ops.Ops
+	confirmed   int
+	started     int
+	confirmedOp ops.Operation
+	startedOp   ops.Operation
+	startedSet  int
+	startErr    error
 }
 
 func newLaunchSpy() *launchSpy {
@@ -34,6 +35,9 @@ func (s *launchSpy) Plan(op ops.Operation, sel []ops.Item, repos map[domain.Repo
 
 func (s *launchSpy) Confirm(p ops.Plan, in ops.Input) (ops.Confirmed, error) {
 	s.confirmed++
+	// The verb the Feed froze and priced. Recorded here rather than asserted off the
+	// Started the spy fabricates, which would only prove the spy returns its own field.
+	s.confirmedOp = p.Operation()
 	return s.real.Confirm(p, in)
 }
 
@@ -89,6 +93,67 @@ func TestConfirmedDeleteLaunchesTheOperation(t *testing.T) {
 	}
 }
 
+// TestSingleRerunLaunchesWithoutAModal pins R18's asymmetry all the way through: a single
+// re-run prices at FrictionNone, so it opens no modal, and it must still act. Before #61 it
+// returned at the friction check and issued nothing, so pressing R on one Run was a silent
+// no-op: the operator got neither a prompt nor a re-run. Both verbs behave this way, and
+// the confirmation they skip is the modal, never ops.Confirm, which still validates the
+// Plan and mints the single-use Confirmed (ADR-0019).
+func TestSingleRerunLaunchesWithoutAModal(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want ops.Operation
+	}{
+		{"R", ops.OpRerun},
+		{"F", ops.OpRerunFailed},
+	} {
+		t.Run(string(tc.want), func(t *testing.T) {
+			m, spy := feedWithSpy(t)
+			m = m.Update2(press("down")) // engage; no selection, so the cursor Run is the set
+			m, cmd := m.Update(press(tc.key))
+
+			if m.confirmOpen {
+				t.Fatalf("a single %s opened a confirmation modal; R18 forbids it", tc.want)
+			}
+			if cmd == nil {
+				t.Fatalf("a single %s issued no command, so pressing %q is a silent no-op (the #61 defect)", tc.want, tc.key)
+			}
+			msg := cmd()
+			if spy.confirmed != 1 || spy.started != 1 {
+				t.Fatalf("confirmed %d times and started %d, want exactly one of each", spy.confirmed, spy.started)
+			}
+			if spy.confirmedOp != tc.want {
+				t.Errorf("the launched Plan's operation = %q, want %q", spy.confirmedOp, tc.want)
+			}
+			if _, ok := msg.(ops.Started); !ok {
+				t.Fatalf("the launch command returned %T, want an ops.Started (ADR-0015)", msg)
+			}
+		})
+	}
+}
+
+// TestSingleCancelStillTakesAModal is R18's other half, and the reason the FrictionNone
+// launch above cannot simply be applied to every single-Run operation: cancel and
+// force-cancel take a y/N even over one Run, because cancelled work cannot be recovered.
+func TestSingleCancelStillTakesAModal(t *testing.T) {
+	for _, k := range []string{"c", "C"} {
+		m, spy := feedWithSpy(t)
+		m = m.Update2(press("down"))
+		m, cmd := m.Update(press(k))
+		if !m.confirmOpen {
+			t.Errorf("a single %q opened no modal; R18 requires y/N for cancel", k)
+		}
+		if cmd != nil {
+			if msg := cmd(); msg != nil {
+				t.Errorf("a single %q launched %T before any confirmation", k, msg)
+			}
+		}
+		if spy.started != 0 {
+			t.Errorf("a single %q started an operation before the operator answered", k)
+		}
+	}
+}
+
 // TestAbortedDeleteLaunchesNothing pins AC6: aborting the modal issues zero requests, and
 // the launch path is not reached at all.
 func TestAbortedDeleteLaunchesNothing(t *testing.T) {
@@ -123,29 +188,49 @@ func TestLaunchFailureIsReportedRatherThanDropped(t *testing.T) {
 	}
 }
 
-// TestLifecycleConfirmationDoesNotLaunchYet pins the seam left for #61: the running-op
-// surface is generic over ops.Operation and the Feed's launch is wired for the Purge
-// alone at this stage, so a confirmed cancel still closes the modal and starts nothing.
-// Removing this gate is the whole of what run-lifecycle's execution issue has to do here.
-func TestLifecycleConfirmationDoesNotLaunchYet(t *testing.T) {
-	m, spy := feedWithSpy(t)
-	m = m.Update2(press("down"))
-	m = m.Update2(press("space"))
-	m = m.Update2(press("space")) // deselect, so the cursor Run is the set
-	m = m.Update2(press("c"))     // a bulk cancel confirmation
-	if !m.confirmOpen {
-		t.Fatalf("the cancel key did not open a confirmation")
-	}
-	m, cmd := m.Update(press("y"))
-	if m.confirmOpen {
-		t.Errorf("the modal stayed open after a confirmation")
-	}
-	if cmd != nil {
-		if msg := cmd(); msg != nil {
-			t.Errorf("a confirmed cancel launched %T; #61 owns wiring that launch", msg)
-		}
-	}
-	if spy.started != 0 {
-		t.Errorf("a confirmed cancel started an operation; #61 owns that wiring")
+// TestConfirmedLifecycleLaunchesTheOperation is the second half of the #61 defect: the
+// Feed's launch was wired for the Purge alone, so a confirmed cancel closed the modal and
+// started nothing. All four lifecycle verbs now travel the same launch, because the
+// running-op surface and the progress stream are generic over ops.Operation and a bulk
+// lifecycle mutation is the same walk over a frozen set (run-lifecycle R16, R17, AC17).
+func TestConfirmedLifecycleLaunchesTheOperation(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want ops.Operation
+	}{
+		{"c", ops.OpCancel},
+		{"C", ops.OpForceCancel},
+		{"R", ops.OpRerun},
+		{"F", ops.OpRerunFailed},
+	} {
+		t.Run(string(tc.want), func(t *testing.T) {
+			m, spy := feedWithSpy(t)
+			// Two Runs selected, so every verb prices above FrictionNone and opens the modal:
+			// R18 exempts only the single re-run, which has its own test.
+			m = m.Update2(press("space"))
+			m = m.Update2(press("down"))
+			m = m.Update2(press("space"))
+			m = m.Update2(press(tc.key))
+			if !m.confirmOpen {
+				t.Fatalf("the %q key did not open a confirmation", tc.key)
+			}
+			m, cmd := m.Update(press("y"))
+			if m.confirmOpen {
+				t.Errorf("the modal stayed open after a confirmation")
+			}
+			if cmd == nil {
+				t.Fatalf("a confirmed %s issued no command, so nothing would be requested (the #61 defect)", tc.want)
+			}
+			msg := cmd()
+			if spy.confirmed != 1 || spy.started != 1 {
+				t.Fatalf("confirmed %d times and started %d, want exactly one of each (ADR-0019)", spy.confirmed, spy.started)
+			}
+			if spy.confirmedOp != tc.want {
+				t.Errorf("the launched Plan's operation = %q, want %q", spy.confirmedOp, tc.want)
+			}
+			if _, ok := msg.(ops.Started); !ok {
+				t.Fatalf("the launch command returned %T, want an ops.Started carrying the progress stream (ADR-0015)", msg)
+			}
+		})
 	}
 }
