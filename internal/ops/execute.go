@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 )
@@ -58,6 +59,13 @@ type Summary struct {
 	// Retry refuses it, and no path from a selection to a DELETE gains a way around R9.
 	op    Operation
 	debug bool
+
+	// retry is the single-use cell for R22's re-attempt, minted by the walk and shared by
+	// every copy of this Summary, exactly as Confirmed.spent is shared by every copy of a
+	// Confirmed (ADR-0019). One recorded pass authorises one re-attempt, so two keystrokes
+	// landing before the first handle arrives cannot dispatch two walks over the same
+	// Items, and a Summary a caller assembled carries no cell at all.
+	retry *atomic.Bool
 }
 
 // FailedCount is the number of Runs recorded as failures (R20). A partially failed
@@ -233,14 +241,38 @@ func (o *Ops) executeDelete(ctx context.Context, plan Plan, emit progressFunc) (
 	// no deletion" a property of Execute rather than a promise four call sites make.
 	// The streamed entry changes nothing here: it runs this same call, so a Purge
 	// launched from the TUI refuses on an unwritable log exactly as the CLI's does.
+	//
+	// A deletion already running holds the log, and a second one would open a second
+	// append handle to the same file. Each tracks size from its own Stat, so one handle's
+	// rotation renames the file the other is appending to and a generation can vanish.
+	// That is the one file recoverable from nowhere else, so the second deletion refuses
+	// exactly as an unwritable log makes it refuse: no record, no deletion (R29, AC20).
+	if !o.deleting.CompareAndSwap(false, true) {
+		return o.logUnavailable(plan, "the deletion log is held by another deletion already running"), nil
+	}
+	defer o.deleting.Store(false)
 	log, err := o.openLog(o.logPath, o.clk)
 	if err != nil {
-		return Summary{Total: plan.Total(), LogFailed: true, Reason: err.Error(), op: plan.op, debug: plan.debug}, nil
+		return o.logUnavailable(plan, err.Error()), nil
 	}
 	defer func() { _ = log.close() }()
 	return o.executeSet(ctx, plan, log, emit, func(ctx context.Context, log logSink, item Item) (itemResult, error) {
 		return o.deleteItem(ctx, log, item)
 	})
+}
+
+// logUnavailable is the Summary a deletion returns when it cannot take exclusive hold of
+// R29's record: zero DELETEs issued, the log named as the reason, and the same LogFailed
+// shape the CLI's exit code and the running surface already read (AC20).
+func (o *Ops) logUnavailable(plan Plan, reason string) Summary {
+	return Summary{
+		Total:     plan.Total(),
+		LogFailed: true,
+		Reason:    reason,
+		op:        plan.op,
+		debug:     plan.debug,
+		retry:     &atomic.Bool{},
+	}
 }
 
 // executeLifecycle runs a non-deletion mutation set: a cancel, force-cancel, re-run,
@@ -267,7 +299,7 @@ func (o *Ops) executeLifecycle(ctx context.Context, plan Plan, emit progressFunc
 // a reported outcome the surface renders, not a programming fault (ADR-0019).
 func (o *Ops) executeSet(ctx context.Context, plan Plan, log logSink, emit progressFunc,
 	attempt func(context.Context, logSink, Item) (itemResult, error)) (Summary, error) {
-	sum := Summary{Total: plan.Total(), op: plan.op, debug: plan.debug}
+	sum := Summary{Total: plan.Total(), op: plan.op, debug: plan.debug, retry: &atomic.Bool{}}
 	failureStreak := 0
 	// Outstanding counts only the Items that will issue a request, because an Item stamped
 	// ineligible at Plan time concludes instantly and costs no wall clock: counting it

@@ -2,6 +2,9 @@ package ops_test
 
 import (
 	"context"
+	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -294,6 +297,156 @@ func TestRetryRefusesAPassWithNoFailures(t *testing.T) {
 	}
 	if _, err := h.ops.Retry(context.Background(), sum); err == nil {
 		t.Errorf("Retry accepted a clean pass; there is nothing to re-attempt (R22)")
+	}
+}
+
+// blockedProgress holds a started operation's stream unread so the walk is still in
+// flight while the test does something else, and returns the release that drains it to
+// completion while driving virtual time. Nothing advances the fake clock until then, so
+// the walk issues its first request and parks on the governor's pacing timer.
+func blockedProgress(t *testing.T, h *harness, st ops.Started) (release func() []ops.Progress) {
+	t.Helper()
+	return func() []ops.Progress { return drainProgress(t, h, st) }
+}
+
+// firstRequest returns a channel closed once the operation's first wire request lands, so
+// a test can wait for the walk to be genuinely under way rather than racing the goroutine
+// Start spawned. It must be armed before Start.
+func firstRequest(h *harness) <-chan struct{} {
+	landed := make(chan struct{})
+	var once sync.Once
+	h.counting.onDelete = func(int) { once.Do(func() { close(landed) }) }
+	return landed
+}
+
+// TestStartRefusesASecondOperationWhileOneRuns pins R16 against the orphaning bug: the
+// handle carrying a running operation's cancel is the only way to stop it, so a second
+// launch that overwrote it would leave the first invisible and uncancellable for the rest
+// of the session, running to completion on a set of tens of thousands. The engine refuses
+// instead, which is what makes the guarantee hold for every surface that launches rather
+// than for the one that remembered to check.
+func TestStartRefusesASecondOperationWhileOneRuns(t *testing.T) {
+	h := newHarness(t, "delete_ok", 50, 50)
+	first := h.confirmed(t, ops.OpDelete, items("o", "r", 1, 2, 3, 4, 5, 6, 7, 8), snapshot(writableRepo("o", "r")))
+	second := h.confirmed(t, ops.OpDelete, items("o", "r", 9), snapshot(writableRepo("o", "r")))
+
+	st, err := h.ops.Start(context.Background(), first)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	release := blockedProgress(t, h, st)
+
+	if _, err := h.ops.Start(context.Background(), second); !errors.Is(err, ops.ErrBusy) {
+		t.Fatalf("a second Start while one runs returned %v, want ErrBusy; accepting it orphans the first operation's cancel (R16)", err)
+	}
+	// The first operation is still the one the handle stops, which is the property the
+	// refusal exists to preserve.
+	st.Cancel()
+	got := release()
+	final := got[len(got)-1]
+	if !final.Sum.Cancelled {
+		t.Errorf("the first operation did not stop on its own handle's cancel; it was orphaned (R16)")
+	}
+	if h.counting.deletes() >= 8 {
+		t.Errorf("the first operation ran to completion after being cancelled (%d DELETEs of 8)", h.counting.deletes())
+	}
+	// Once it is over, the gate is free and the second set may be launched.
+	if _, err := h.ops.Start(context.Background(), second); err != nil {
+		t.Errorf("the gate stayed held after the operation ended: %v", err)
+	}
+}
+
+// TestConcurrentDeletionsCannotBothHoldTheLog pins R29's record against splitting. Two
+// deletion walks running at once hold two append handles to one file, each tracking size
+// from its own Stat, so one handle's rotation renames the file the other is still
+// appending to and a generation can vanish. That is the one file recoverable from nowhere
+// else, so the second deletion refuses to start and names the log, exactly as an
+// unwritable log does (R29, AC20). A log deletion arriving mid-Purge is the live case:
+// the log view's delete key reaches Execute while the TUI's Purge is streaming.
+func TestConcurrentDeletionsCannotBothHoldTheLog(t *testing.T) {
+	h := newHarness(t, "delete_ok", 50, 50)
+	purge := h.confirmed(t, ops.OpDelete, items("o", "r", 1, 2, 3, 4, 5, 6, 7, 8), snapshot(writableRepo("o", "r")))
+	logs := h.confirmed(t, ops.OpDelete, []ops.Item{ops.LogItem(completedRun(9, "o", "r"))}, snapshot(writableRepo("o", "r")))
+
+	landed := firstRequest(h)
+	st, err := h.ops.Start(context.Background(), purge)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	release := blockedProgress(t, h, st)
+	<-landed // the Purge is under way and holds the log
+
+	before := h.counting.deletes()
+	sum, err := h.ops.Execute(context.Background(), logs)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !sum.LogFailed {
+		t.Errorf("a second deletion started beside a running one; two handles to one log split R29's record")
+	}
+	if !strings.Contains(sum.Reason, "log") {
+		t.Errorf("the refusal reason is %q, want it to name the log (AC20)", sum.Reason)
+	}
+	if h.counting.deletes() != before {
+		t.Errorf("the refused deletion issued %d DELETEs, want zero: no record, no deletion (R29)", h.counting.deletes()-before)
+	}
+	release()
+}
+
+// TestRetryIsSingleUse pins R22's set against unbounded re-attempts of one recorded pass.
+// A Summary authorises one retry, exactly as a Confirmed authorises one execution
+// (ADR-0019), so two keystrokes landing before the first handle arrives cannot dispatch
+// two walks over the same Items.
+func TestRetryIsSingleUse(t *testing.T) {
+	h := newHarness(t, "delete_retry", 50, 50)
+	c := h.confirmed(t, ops.OpDelete, items("o", "r", 1, 2, 3), snapshot(writableRepo("o", "r")))
+	st, err := h.ops.Start(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	got := drainProgress(t, h, st)
+	sum := got[len(got)-1].Sum
+
+	rst, err := h.ops.Retry(context.Background(), sum)
+	if err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	if _, err := h.ops.Retry(context.Background(), sum); err == nil {
+		t.Errorf("the same Summary retried twice; one recorded pass authorises one re-attempt (R22)")
+	}
+	// The retry holds the same gate a launch does, so nothing else starts beside it. Two
+	// keystrokes landing before the first handle arrives cannot dispatch two walks.
+	other := h.confirmed(t, ops.OpDelete, items("o", "r", 7), snapshot(writableRepo("o", "r")))
+	if _, err := h.ops.Start(context.Background(), other); !errors.Is(err, ops.ErrBusy) {
+		t.Errorf("a launch beside a running retry returned %v, want ErrBusy", err)
+	}
+	drainProgress(t, h, rst)
+}
+
+// TestPlanKindNamesTheObjectTheSetHolds pins what a surface needs to say what it is doing.
+// A delete over Runs is a Purge, a delete over Caches and Artifacts is a Reclamation, and
+// the Operation alone cannot tell them apart (CONTEXT.md).
+func TestPlanKindNamesTheObjectTheSetHolds(t *testing.T) {
+	h := newOfflineHarness(t, 50, 50)
+	repos := snapshot(writableRepo("o", "r"))
+
+	runs, err := h.ops.Plan(ops.OpDelete, items("o", "r", 1, 2), repos)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if runs.Kind() != ops.KindRun {
+		t.Errorf("a Run set reports Kind %q, want %q", runs.Kind(), ops.KindRun)
+	}
+
+	mixed, err := h.ops.Plan(ops.OpDelete, []ops.Item{
+		ops.CacheItem(domain.Cache{ID: 1, Repo: repoID("o", "r")}),
+		ops.ArtifactItem(domain.Artifact{ID: 2, Repo: repoID("o", "r")}),
+	}, repos)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if mixed.Kind() != "" {
+		t.Errorf("a set mixing Kinds reports %q, want the empty Kind; no single noun describes it", mixed.Kind())
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 )
@@ -78,6 +79,23 @@ type Ops struct {
 	// sink; production wires the real append-only file. It is never a seam a caller
 	// outside ops can set, so the log stays ops's alone (ADR-0011, R29).
 	openLog func(path string, clk clock.Clock) (logSink, error)
+
+	// launching is the one-streamed-operation-at-a-time gate (purge R16). Start and Retry
+	// take it and the stream releases it. It exists because the Started handle carries the
+	// only cancel a running operation has: a second launch replacing it would leave the
+	// first invisible and uncancellable for the rest of the session, still deleting. The
+	// gate lives here rather than in a surface so it holds for every launcher, which
+	// matters now that run-lifecycle and storage-reclamation each add one.
+	launching atomic.Bool
+
+	// deleting is the one-deletion-walk-at-a-time gate (purge R29). Every deletion, from
+	// either entry, opens the append-only log, and two handles to one file each track size
+	// from their own Stat: one handle's rotation renames the file the other is appending
+	// to, and a generation can vanish. That file is the only record of what a Purge
+	// destroyed and is recoverable from nowhere else, so a second concurrent deletion
+	// refuses to start rather than risk splitting it. Non-deletion walks write no log and
+	// are not gated: a Workflow toggle beside a running Purge touches nothing shared.
+	deleting atomic.Bool
 }
 
 // New returns an Ops over opts. A nil Clock defaults to the wall clock, which a

@@ -70,6 +70,25 @@ func (p Plan) Items() []Item {
 // including the ineligible, because AC15 counts the skipped inside the 47.
 func (p Plan) Total() int { return len(p.items) }
 
+// Kind is the object this set holds, or the empty Kind where it is empty or mixes Kinds.
+// It exists because the Operation alone cannot name what is happening: a delete over Runs
+// is a Purge and a delete over Caches and Artifacts is a Reclamation, and CONTEXT.md holds
+// those two words apart deliberately. A surface reading only the verb would label one the
+// other. A mixed set gets no single noun rather than an arbitrary one, which is honest:
+// Reclamation's list is Caches and Artifacts together (storage-reclamation R7).
+func (p Plan) Kind() Kind {
+	if len(p.items) == 0 {
+		return ""
+	}
+	kind := p.items[0].Kind
+	for i := range p.items {
+		if p.items[i].Kind != kind {
+			return ""
+		}
+	}
+	return kind
+}
+
 // Breakdown is R6's per-repository split, a copy in first-seen order.
 func (p Plan) Breakdown() []RepoCount {
 	out := make([]RepoCount, len(p.breakdown))

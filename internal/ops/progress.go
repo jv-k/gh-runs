@@ -6,15 +6,19 @@ import (
 	"time"
 )
 
-// ErrNotFinished is returned when Retry is handed a pass that has not finished. The
-// retry set is the recorded failures, and a running pass has not finished recording
-// them (R22).
-var ErrNotFinished = errors.New("ops: this operation has not finished")
+// ErrBusy is returned when an operation is launched while one is already running. One
+// Ops runs one streamed operation at a time, and the reason is R16: the Started handle
+// carries the only cancel a running operation has, so a second launch that replaced it
+// would leave the first invisible and uncancellable for the rest of the session, running
+// to completion on a set of tens of thousands. Refusing here rather than in a surface is
+// what makes that hold for every launcher rather than for the one that remembered.
+var ErrBusy = errors.New("ops: an operation is already running; stop it before starting another")
 
-// ErrNothingToRetry is returned when Retry is handed a pass with no recorded failures,
-// or a Summary no pass produced. R22's retry set can only shrink from an already
-// confirmed frozen set, so a set with no provenance is refused rather than executed.
-var ErrNothingToRetry = errors.New("ops: this operation recorded no failures to retry")
+// ErrNothingToRetry is returned when Retry is handed a pass with no recorded failures, a
+// Summary no pass produced, or one whose single re-attempt is already spent. R22's retry
+// set can only shrink from an already confirmed frozen set, so a set with no provenance
+// is refused rather than executed.
+var ErrNothingToRetry = errors.New("ops: this operation has no recorded failures left to retry")
 
 // rateSamples is the width of R15's observed trailing rate window, in attempts. A
 // trailing window rather than the run's average is what the requirement asks for: the
@@ -41,6 +45,10 @@ const rateSamples = 32
 type Progress struct {
 	// Op is the verb this pass was confirmed for, so one surface renders all of them.
 	Op Operation
+	// Kind is the object the frozen set holds, or empty where the set mixes Kinds. The
+	// Operation alone cannot name what is happening: a delete over Runs is a Purge and a
+	// delete over Caches and Artifacts is a Reclamation, which CONTEXT.md holds apart.
+	Kind Kind
 	// Sum is the running tally, and the pass's terminal Summary once Done is true.
 	Sum Summary
 	// Outstanding is how many eligible Items are still to be requested: R15's remaining
@@ -66,12 +74,6 @@ type Progress struct {
 	Done bool
 }
 
-// Concluded is how many Items of the frozen set have reached a terminal disposition,
-// R15's numerator against Sum.Total.
-func (p Progress) Concluded() int {
-	return p.Sum.Deleted + p.Sum.Gone + p.Sum.Acted + p.Sum.Skipped + p.Sum.FailedCount()
-}
-
 // Started is the handle a launched operation hands its surface, and the first message
 // the initiating Cmd returns (ADR-0015): the verb, the frozen total, the progress
 // stream, and the cancel that stops the operation. It carries no Bubble Tea type, and
@@ -83,33 +85,23 @@ func (p Progress) Concluded() int {
 // repainting while the walk grinds on.
 type Started struct {
 	Op       Operation
+	Kind     Kind
 	Total    int
 	Progress <-chan Progress
 	Cancel   context.CancelFunc
 }
 
 // LaunchFailed reports that an operation could not be started: a declined confirmation,
-// a spent one, or a retry the engine refused. It is a message rather than a dropped
-// error, because a keystroke that silently does nothing is the exact defect the in-TUI
-// running surface exists to fix. It is the emitter's own type, like Started, so every
-// surface that launches an operation reports a refusal the same way.
+// a spent one, a launch refused because one is already running, or a retry with nothing
+// left to re-attempt. It is a message rather than a dropped error, because a keystroke
+// that silently does nothing is the exact defect the in-TUI running surface exists to
+// fix. It is the emitter's own type, like Started, so every surface that launches an
+// operation reports a refusal the same way.
 type LaunchFailed struct {
-	Op  Operation
-	Err error
+	Op   Operation
+	Kind Kind
+	Err  error
 }
-
-// Error makes LaunchFailed usable where the refusal is handled as an error rather than
-// rendered, and keeps the operation's verb in the text either way.
-func (l LaunchFailed) Error() string {
-	if l.Err == nil {
-		return string(l.Op) + " could not be started"
-	}
-	return string(l.Op) + " could not be started: " + l.Err.Error()
-}
-
-// Unwrap exposes the refusal underneath, so errors.Is against ErrDeclined or ErrSpent
-// still answers.
-func (l LaunchFailed) Unwrap() error { return l.Err }
 
 // Start runs a Confirmed set on its own goroutine and returns promptly with the channel
 // its progress travels (ADR-0015). It is Execute's async entry and not a second
@@ -122,11 +114,19 @@ func (l LaunchFailed) Unwrap() error { return l.Err }
 // without freezing every other surface (R14, AC10). A caller with no screen keeps
 // calling Execute.
 func (o *Ops) Start(ctx context.Context, c Confirmed) (Started, error) {
+	// The launch gate is taken before the Confirmed is claimed, so a refused launch leaves
+	// the confirmation unspent and the operator can start it once the running one is over
+	// rather than having to confirm the same set again.
+	if !o.launching.CompareAndSwap(false, true) {
+		return Started{}, ErrBusy
+	}
 	plan, err := c.claim()
 	if err != nil {
+		o.launching.Store(false)
 		return Started{}, err
 	}
 	if !supportedOperation(plan.op) {
+		o.launching.Store(false)
 		return Started{}, unsupportedOperation(plan.op)
 	}
 	return o.start(ctx, plan), nil
@@ -143,11 +143,20 @@ func (o *Ops) Start(ctx context.Context, c Confirmed) (Started, error) {
 // DELETE that skips confirmation (R9): this path starts at a DELETE that already went
 // through one.
 func (o *Ops) Retry(ctx context.Context, sum Summary) (Started, error) {
-	if sum.op == "" {
-		return Started{}, ErrNothingToRetry // no pass produced this Summary
+	if !o.launching.CompareAndSwap(false, true) {
+		return Started{}, ErrBusy
+	}
+	// A Summary authorises one re-attempt, exactly as a Confirmed authorises one execution
+	// (ADR-0019). The cell is minted by the walk and shared by every copy of the Summary,
+	// so single use survives the value crossing the progress channel, and a Summary a
+	// caller assembled carries no cell at all.
+	if sum.retry == nil || !sum.retry.CompareAndSwap(false, true) {
+		o.launching.Store(false)
+		return Started{}, ErrNothingToRetry
 	}
 	failed := sum.Failed()
 	if len(failed) == 0 {
+		o.launching.Store(false)
 		return Started{}, ErrNothingToRetry
 	}
 	// The retry Plan carries the failures with the eligibility stamps the first pass
@@ -171,15 +180,20 @@ func (o *Ops) start(ctx context.Context, plan Plan) Started {
 	runCtx, cancel := context.WithCancel(ctx)
 	ch := make(chan Progress, 1)
 	go o.stream(runCtx, cancel, plan, ch)
-	return Started{Op: plan.op, Total: plan.Total(), Progress: ch, Cancel: cancel}
+	return Started{Op: plan.op, Kind: plan.Kind(), Total: plan.Total(), Progress: ch, Cancel: cancel}
 }
 
 // stream drives the walk and publishes its snapshots. It closes the channel when the
-// pass ends, which is the surface's signal that the stream is over, and it releases the
-// context whatever ended it so a cancelled or completed operation leaks neither.
+// pass ends, which is the surface's signal that the stream is over, releases the context
+// whatever ended it so a cancelled or completed operation leaks neither, and frees the
+// launch gate so the next operation may start.
 func (o *Ops) stream(ctx context.Context, cancel context.CancelFunc, plan Plan, ch chan Progress) {
-	defer cancel()
+	// The safety net, for a panic. The normal release is explicit and happens before the
+	// terminal frame goes out, so a surface acting on that frame is not refused by a gate
+	// the walk has already finished with.
+	defer o.launching.Store(false)
 	defer close(ch)
+	defer cancel()
 
 	begin := o.clk.Now()
 	win := &rateWindow{}
@@ -190,13 +204,18 @@ func (o *Ops) stream(ctx context.Context, cancel context.CancelFunc, plan Plan, 
 		// Outstanding falls by exactly one when a request concludes, so the walk needs to
 		// tell the window nothing: the count is the signal. A skip stamped at Plan time
 		// leaves it unchanged and correctly contributes no sample, because it took no time.
-		if outstanding >= 0 && left < outstanding {
+		// The terminal frame zeroes the count whatever is left, so it is not an attempt
+		// landing and must not be sampled as one.
+		if !done && outstanding >= 0 && left < outstanding {
 			win.mark(now)
 		}
-		outstanding = left
+		if !done {
+			outstanding = left
+		}
 		ceiling, floor := o.pacing()
 		return Progress{
 			Op:          plan.op,
+			Kind:        plan.Kind(),
 			Sum:         sum.snapshot(),
 			Outstanding: left,
 			Elapsed:     now.Sub(begin),
@@ -216,6 +235,9 @@ func (o *Ops) stream(ctx context.Context, cancel context.CancelFunc, plan Plan, 
 		// waiting on a terminal event would otherwise wait forever.
 		sum.Reason = err.Error()
 	}
+	// Release before the terminal frame: R22's retry is offered from that frame, and a
+	// keystroke on it must not be refused by a gate this walk has already finished with.
+	o.launching.Store(false)
 	offer(ch, frame(sum, 0, true))
 }
 
