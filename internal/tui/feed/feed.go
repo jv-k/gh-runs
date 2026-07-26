@@ -25,7 +25,6 @@ package feed
 
 import (
 	"sort"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -71,13 +70,14 @@ type ReposDiscovered []domain.Repo
 // broadcast the root pulls from the store on its coarse tick.
 type RevalidatedAt time.Time
 
-// ShowRuns is a filter another surface asked the Feed to apply, stated in the filter
-// input's own syntax (R23). The Workflows tab's navigation from a deleted Workflow to its
-// Orphaned Runs arrives this way (workflow-management R13, AC4): that tab may not import
-// this one, so it asks the root and the root broadcasts this. It goes through the parser a
-// typed filter goes through and lands in the same input, so an arriving filter and a typed
-// one are one code path and one displayed state.
-type ShowRuns string
+// ShowRuns is a filter another surface asked the Feed to apply (ADR-0016's structured
+// Filter, never a query string). The Workflows tab's navigation from a deleted Workflow to
+// its Orphaned Runs arrives this way (workflow-management R13, AC4): that tab may not import
+// this one, so it asks the root and the root broadcasts this. The Feed renders it into the
+// filter input's grammar with QueryString, so an arriving filter and a typed one end in one
+// displayed state, and the grammar itself stays owned by filter rather than crossing a tab
+// seam as an unowned string.
+type ShowRuns filter.Filter
 
 // Options carries the Feed's construction seams. The root fills them: the profile is
 // the resolved keybinding set (R7a), and SetViewport publishes the visible
@@ -389,16 +389,20 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 
 	case ShowRuns:
-		// Applied through the filter input, so the held filter, the text the operator can
-		// edit and the query published server-side cannot disagree (R22, R23). A query this
-		// Feed's own parser rejects is dropped whole, leaving the last good filter standing
-		// exactly as a half-typed one does.
-		if _, err := parseFilterQuery(string(msg)); err != nil {
-			return m, nil
-		}
-		m.filterInput.SetValue(string(msg))
-		m.applyFilterFromInput()
-		return m, m.publishFilter()
+		// The filter arrives as a value and is rendered into the input's grammar, so the held
+		// filter, the line the operator reads and can edit, and the query published
+		// server-side are one state (R22, R23). The open detail pane is retargeted like any
+		// other view change, because the Run it was opened over may not survive the narrowing.
+		m.filter = filter.Filter(msg)
+		m.filterInput.SetValue(m.filter.QueryString())
+		// The cap totals belong to the resource the previous filter polled, so a label from it
+		// would paint over the new one until each repository's next Update replaces it (R24:
+		// the claimed count is the response's, and no response has arrived for this filter).
+		clear(m.totals)
+		m.applyView(m.liveView())
+		var dcmd tea.Cmd
+		m, dcmd = m.retargetDetail()
+		return m, tea.Batch(m.publishFilter(), dcmd)
 
 	case governor.Readout:
 		m.readout = msg
@@ -843,7 +847,7 @@ func (m Model) handleFilterKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 // unparseable token leaves the last good filter in place rather than clearing it, so a
 // half-typed query never blanks the list.
 func (m *Model) applyFilterFromInput() {
-	if f, err := parseFilterQuery(m.filterInput.Value()); err == nil {
+	if f, err := filter.ParseQuery(m.filterInput.Value()); err == nil {
 		m.filter = f
 	}
 	m.applyView(m.liveView())
@@ -1093,49 +1097,4 @@ func (m Model) visibleRepos() []domain.RepoID {
 		}
 	}
 	return ids
-}
-
-// parseFilterQuery parses the filter input into a Filter (R22, R23). A key:value token
-// sets the named axis; a bare token is a permissive Status or Conclusion value, which
-// is what R23's one input accepts. The axis names mirror the filter engine's fields and
-// gh's flags. This micro-syntax is a stage-7 choice: the canon fixes the axes and their
-// server or client placement, not the input's token spelling.
-func parseFilterQuery(s string) (filter.Filter, error) {
-	var f filter.Filter
-	for _, tok := range strings.Fields(s) {
-		axis, value, hasColon := strings.Cut(tok, ":")
-		if !hasColon {
-			if err := f.ParseStatus(tok); err != nil {
-				return filter.Filter{}, err
-			}
-			continue
-		}
-		switch strings.ToLower(axis) {
-		case "branch", "b":
-			f.Branch = value
-		case "commit", "c":
-			f.Commit = value
-		case "actor", "user", "u":
-			f.Actor = value
-		case "event", "e":
-			f.Event = value
-		case "workflow", "w":
-			f.Workflow = value
-		case "status", "s", "conclusion":
-			if err := f.ParseStatus(value); err != nil {
-				return filter.Filter{}, err
-			}
-		case "created":
-			dr, err := filter.ParseCreated(value)
-			if err != nil {
-				return filter.Filter{}, err
-			}
-			f.Created = dr
-		default:
-			if err := f.ParseStatus(tok); err != nil {
-				return filter.Filter{}, err
-			}
-		}
-	}
-	return f, nil
 }

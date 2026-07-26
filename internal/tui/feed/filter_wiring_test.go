@@ -34,7 +34,7 @@ func feedWithFilterSink(width, height int, sink func(filter.Filter)) Model {
 
 // TestAcceptingAFilterPublishesItToTheScheduler pins R22's Feed half: accepting a filter
 // publishes it to the scheduler, which pushes it server-side. Narrowing client-side over
-// held Runs is not enough, because a status:failure search would then see only the ~30-Run
+// held Runs is not enough, because a status:failure search would then see only the one-page
 // held window rather than the newest matches (the defect issue #53 fixes).
 func TestAcceptingAFilterPublishesItToTheScheduler(t *testing.T) {
 	var got []filter.Filter

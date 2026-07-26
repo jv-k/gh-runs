@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
@@ -42,7 +43,7 @@ func (filteredStubRT) RoundTrip(req *http.Request) (*http.Response, error) {
 // TestActiveFilterIsPushedToTheWire is R22 at the transport seam: once a filter is
 // set, every poll's request carries the filter's Query() parameters, so the server
 // returns the newest matches rather than the newest Runs the Feed then filters over
-// its ~30-Run held window. It is asserted at the counting transport, the same seam
+// its one-page held window. It is asserted at the counting transport, the same seam
 // cli-surface AC4 uses, so a dropped or misspelled parameter is caught on the wire.
 func TestActiveFilterIsPushedToTheWire(t *testing.T) {
 	a := gh("acme", "a")
@@ -117,5 +118,73 @@ func TestUnfilteredUpdateCarriesNoClaimedTotal(t *testing.T) {
 	}
 	if u.ClaimedTotal != 0 {
 		t.Errorf("Update.ClaimedTotal = %d, want 0 (unfiltered listing)", u.ClaimedTotal)
+	}
+}
+
+// TestSetFilterKeepsTheRotationWhenTheResourceIsUnchanged pins the cost side of R22: a
+// filter change resets every repository's poll stamp and ETag memory and wakes the loop,
+// because a filter change usually makes every repository a different resource. It does not
+// always. A change confined to the client-side axes, a Conclusion or a repository set, leaves
+// the request byte-identical, and resetting there spends one conditional GET per repository
+// on a resource nobody stopped polling.
+//
+// The identity is the whole server-side projection: Query()'s parameters, and the endpoint
+// the Workflow selector picks (ADR-0016). Same projection, same resource, so the rotation and
+// the ETag memory stand.
+func TestSetFilterKeepsTheRotationWhenTheResourceIsUnchanged(t *testing.T) {
+	a := gh("acme", "a")
+	s := New(Options{PollSet: &fakePollSet{ids: []domain.RepoID{a}}})
+	s.SetFilter(filter.Filter{Branch: "main"})
+	<-s.wake // drain the seeding change's wake, so the next one is observable
+
+	s.mu.Lock()
+	s.lastPoll[a.String()] = t0
+	s.lastETag[a.String()] = `"v1"`
+	s.mu.Unlock()
+
+	polled := func() (time.Time, string) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.lastPoll[a.String()], s.lastETag[a.String()]
+	}
+
+	// A client-side-only addition: the repository axis has no parameter form at all
+	// (ADR-0016), so the query, the endpoint and the URL are unchanged.
+	s.SetFilter(filter.Filter{Branch: "main", Repos: []domain.RepoID{a}})
+	if last, etag := polled(); last.IsZero() || etag == "" {
+		t.Errorf("a client-side-only filter change reset the rotation (lastPoll %v, etag %q); the request is unchanged", last, etag)
+	}
+	if len(s.wake) != 0 {
+		t.Error("a client-side-only filter change woke the loop, so every repository re-polls a resource that did not change")
+	}
+
+	// A server-side change: a different query, so every repository is a different resource.
+	s.SetFilter(filter.Filter{Branch: "next"})
+	if last, etag := polled(); !last.IsZero() || etag != "" {
+		t.Errorf("a server-side filter change left the rotation standing (lastPoll %v, etag %q); every repository is now a different resource", last, etag)
+	}
+	if len(s.wake) != 1 {
+		t.Error("a server-side filter change did not wake the loop, so the new filter waits out the slow interval (R22)")
+	}
+}
+
+// TestSetFilterTreatsTheWorkflowAxisAsAResourceChange pins that the Workflow selector counts
+// toward that identity even though it emits no query parameter: it selects a different
+// endpoint (ADR-0016), so keeping the old resource's ETag would send If-None-Match for a
+// listing nobody is asking for anymore.
+func TestSetFilterTreatsTheWorkflowAxisAsAResourceChange(t *testing.T) {
+	a := gh("acme", "a")
+	s := New(Options{PollSet: &fakePollSet{ids: []domain.RepoID{a}}})
+	s.mu.Lock()
+	s.lastETag[a.String()] = `"v1"`
+	s.mu.Unlock()
+
+	s.SetFilter(filter.Filter{Workflow: "9004"})
+
+	s.mu.Lock()
+	etag := s.lastETag[a.String()]
+	s.mu.Unlock()
+	if etag != "" {
+		t.Errorf("the ETag memory survived a Workflow-axis change (%q), but the poll now targets a different endpoint", etag)
 	}
 }

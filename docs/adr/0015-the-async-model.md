@@ -81,6 +81,8 @@ Focus resolution stays recursive, per [ADR-0011](./0011-package-layout-and-depen
 
 Fine targeting inside the broadcast route is done by **type visibility, not by the router**. A `rundetail` response reaches every tab, and no other package can act on it because no other package can name its unexported type. The root neither exports pane vocabularies nor tracks which component awaits what, and the stale case is already the pane's own discard rule (R11). The root's routing code stays a dozen lines, and grows by zero when a message type is added.
 
+**The root originates broadcasts too, and they are not catalog members.** The catalog above is the engine's channel, and nothing the root sends belongs to it. Three messages come from the root instead: `ReposDiscovered` and `RevalidatedAt`, which it pulls on its coarse tick, and `ShowRuns`, which carries a cross-tab navigation. A tab may import a pane and never another tab ([ADR-0011](./0011-package-layout-and-dependency-direction.md)), so a tab that wants another tab shown asks the root, and the root switches focus and broadcasts the payload. `workflows` asks this way when a deleted Workflow's Orphaned Runs are opened in the Feed ([workflow-management](../features/workflow-management/requirements.md) R13, AC4). Each is typed in its consumer's package, so the same visibility rule targets them, and the root's routing gains one case per navigation rather than a registry of who wants what.
+
 ## Considered Options
 
 **`Program.Send` from a `main.go` goroutine.** Delivery from outside the tea runtime, logic in the wiring file, and a golden seam that needs a live program. Rejected above.

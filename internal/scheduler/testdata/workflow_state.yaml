@@ -9,7 +9,7 @@ interactions:
     - id: 0
       request:
         method: GET
-        url: https://api.github.com/repos/acme/legacy/actions/runs
+        url: https://api.github.com/repos/acme/legacy/actions/runs?per_page=100
       response:
         status: 200 OK
         code: 200
@@ -30,7 +30,7 @@ interactions:
     - id: 1
       request:
         method: GET
-        url: https://api.github.com/repos/acme/legacy/actions/runs
+        url: https://api.github.com/repos/acme/legacy/actions/runs?per_page=100
         headers:
             If-None-Match:
                 - '"legacy-v1"'

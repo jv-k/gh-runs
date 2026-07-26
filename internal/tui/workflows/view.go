@@ -52,7 +52,7 @@ func (m Model) View() string {
 		return m.dispatch.View()
 	}
 	if len(m.workflows) == 0 && len(m.errs) == 0 {
-		return styleDim.Render(m.emptyLine())
+		return styleDim.Render(m.loadPrompt())
 	}
 	var lines []string
 	lines = append(lines, m.summaryLine())
@@ -72,14 +72,14 @@ func (m Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
-// emptyLine invites the refresh that loads the list, naming what that refresh will cover,
+// loadPrompt invites the refresh that loads the list, naming what that refresh will cover,
 // which is the scope's own set (R0): the whole discovered set under all-repos, or the working
 // directory's repository under this-repo. The key comes from the registry, so the line
 // advertises exactly what the tab matches (R7a).
-func (m Model) emptyLine() string {
+func (m Model) loadPrompt() string {
 	press := "Workflows: press " + m.profile.Refresh.Help().Key + " to load the Workflows "
 	if id, ok := m.thisRepo(); ok {
-		return press + "in " + textsan.Sanitize(id.Owner+"/"+id.Name) + "."
+		return press + "in " + repoName(id) + "."
 	}
 	return press + "across your repositories."
 }
@@ -91,7 +91,7 @@ func (m Model) summaryLine() string {
 	active, disabled, deleted, other := m.stateCounts()
 	scope := strconv.Itoa(len(m.order)) + " repositories"
 	if len(m.order) == 1 {
-		scope = textsan.Sanitize(m.order[0].Owner + "/" + m.order[0].Name)
+		scope = repoName(m.order[0])
 	}
 	parts := []string{
 		styleTitle.Render("Workflows") + " " + styleDim.Render(scope),
@@ -135,7 +135,7 @@ func (m Model) scopeLabel() string {
 		return ""
 	}
 	if id, ok := m.thisRepo(); ok {
-		return "scope this-repo: " + textsan.Sanitize(id.Owner+"/"+id.Name)
+		return "scope this-repo: " + repoName(id)
 	}
 	return "scope this-repo found no repository in this working directory, showing all-repos"
 }
@@ -229,7 +229,7 @@ func (m Model) listRow(r wfRow, cursor bool) string {
 	if cursor {
 		lead = styleCursor.Render("> ")
 	}
-	repo := textsan.Sanitize(r.repo.Owner + "/" + r.repo.Name)
+	repo := repoName(r.repo)
 	cells := []string{
 		pad(repo, repoW),
 		pad(textsan.Sanitize(r.wf.Name), m.nameWidth()),
@@ -334,6 +334,13 @@ func actionPast(op ops.Operation) string {
 		return "Enabled"
 	}
 	return "Disabled"
+}
+
+// repoName is a repository's owner/name, sanitised for paint. An owner and a name are
+// untrusted text an author on a fanned-out repository controls, so every rendering of one
+// goes through here rather than through four hand-built concatenations.
+func repoName(id domain.RepoID) string {
+	return textsan.Sanitize(id.Owner + "/" + id.Name)
 }
 
 // pad right-pads or truncates s to exactly w columns; lpad is unused here. Widths are rune

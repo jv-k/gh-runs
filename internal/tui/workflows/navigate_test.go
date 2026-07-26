@@ -46,14 +46,11 @@ func TestDeletedWorkflowNavigatesToItsRuns(t *testing.T) {
 	m = send(m, "down") // move to the deleted Workflow
 
 	got := navRequest(t, m)
-	if got.Repo != rid("cli", "cli") {
-		t.Errorf("navigation Repo = %v, want cli/cli", got.Repo)
+	if got.Filter.Workflow != "9004" {
+		t.Errorf("navigation Filter.Workflow = %q, want %q: the Feed selects the Workflow by the id its Runs carry", got.Filter.Workflow, "9004")
 	}
-	if got.Workflow.ID != 9004 || got.Workflow.State != domain.StateDeleted {
-		t.Errorf("navigation Workflow = {id %d, state %q}, want {9004, deleted} (R13)", got.Workflow.ID, got.Workflow.State)
-	}
-	if got.Query != "workflow:9004" {
-		t.Errorf("navigation Query = %q, want %q: the Feed selects the Workflow by the id its Runs carry", got.Query, "workflow:9004")
+	if q := got.Filter.QueryString(); q != "workflow:9004" {
+		t.Errorf("navigation filter renders as %q, want %q", q, "workflow:9004")
 	}
 }
 
@@ -65,8 +62,8 @@ func TestNavigationIsOfferedRegardlessOfState(t *testing.T) {
 	m = fetched(m, deletedList())
 	m = send(m, "r")
 
-	if got := navRequest(t, m); got.Query != "workflow:9001" {
-		t.Errorf("navigation from the active Workflow = %q, want %q (R14)", got.Query, "workflow:9001")
+	if got := navRequest(t, m); got.Filter.Workflow != "9001" {
+		t.Errorf("navigation from the active Workflow selects %q, want %q (R14)", got.Filter.Workflow, "9001")
 	}
 }
 

@@ -123,6 +123,9 @@ func (m Model) View() string {
 	if a, ok := m.approvalBadgeLine(); ok {
 		top = append(top, a)
 	}
+	if f, ok := m.filterLine(); ok {
+		top = append(top, f)
+	}
 	if c, ok := m.capLabelLine(); ok {
 		top = append(top, c)
 	}
@@ -189,6 +192,9 @@ func (m Model) chromeLineCount() int {
 	if _, ok := m.approvalBadgeLine(); ok {
 		n++
 	}
+	if _, ok := m.filterLine(); ok {
+		n++
+	}
 	if _, ok := m.capLabelLine(); ok {
 		n++
 	}
@@ -248,8 +254,16 @@ func (m Model) viewportBounds(capRows int) (int, int) {
 	return top, top + capRows
 }
 
-// renderRows paints the viewport's run rows.
+// renderRows paints the viewport's run rows, or the one line that says why there are none.
+// An empty list is otherwise a blank area under a header, where a filter matching nothing, a
+// Feed nothing has arrived in yet and a broken tool all look identical.
 func (m Model) renderRows(capRows int) []string {
+	if len(m.displayedIDs) == 0 {
+		if capRows < 1 {
+			return nil
+		}
+		return []string{m.emptyLine()}
+	}
 	start, end := m.viewportBounds(capRows)
 	out := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
@@ -257,6 +271,40 @@ func (m Model) renderRows(capRows int) []string {
 		out = append(out, m.renderRow(m.current[id], i == m.cursor, m.selected[id]))
 	}
 	return out
+}
+
+// emptyLine says why the list is empty, distinguishing the two reasons. Under a filter it is
+// the filter, and the filter line above already states which one and how to lift it. With no
+// filter nothing has arrived yet, which at cold start is the ordinary first frame.
+func (m Model) emptyLine() string {
+	if m.narrowed() {
+		return styleDim.Render("  No Runs match the active filter.")
+	}
+	return styleDim.Render("  No Runs yet.")
+}
+
+// narrowed reports whether anything is hiding Runs the Feed holds: the text filter, or the
+// approvals saved filter behind the badge (approvals R9). Both are client-side predicates
+// over the held Runs, so either can empty the list while the Feed holds plenty.
+func (m Model) narrowed() bool {
+	return m.filter.QueryString() != "" || m.approvalsFilter
+}
+
+// filterLine states the active filter, so a narrowing the operator did not type is visible
+// rather than silent. The Workflows tab's navigation to a deleted Workflow's Orphaned Runs
+// arrives that way (workflow-management R13, AC4), and an unstated filter is why an empty
+// result reads as a broken tool. It names the keys that edit and clear it, from the registry
+// (R7a), and stands down while the input is focused, where the input itself shows the text.
+func (m Model) filterLine() (string, bool) {
+	if m.filterActive {
+		return "", false
+	}
+	q := m.filter.QueryString()
+	if q == "" {
+		return "", false
+	}
+	return styleDim.Render(fmt.Sprintf("filter %s  (%s edit, then %s clears)",
+		q, hint(m.profile.Filter), hint(m.profile.FilterCancel))), true
 }
 
 // headerLine is the column header, in the fixed order the rows follow.

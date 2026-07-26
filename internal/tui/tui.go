@@ -134,7 +134,12 @@ type Options struct {
 	// this-repo, and WorkflowCurrentRepo resolves what this-repo means (workflow-management
 	// R0, settings R19). The zero scope is all-repos, the default R0 fixes, and it is what
 	// main.go states: the setting that selects the other is settings R19's and is not built.
-	// The resolver is wired regardless, so selecting the scope is all that remains.
+	// The resolver is wired regardless, so the scope is chosen once, here, at construction.
+	//
+	// Making it changeable while running needs two things this does not have: a setter on the
+	// tab, and a reset of the held list when the scope changes, because the tab merges each
+	// repository's Workflows as they arrive and a narrowed scope never removes the rows a
+	// wider one left behind. Both belong with settings R19, which is what will call them.
 	WorkflowScope       workflows.Scope
 	WorkflowCurrentRepo func() (domain.RepoID, bool)
 	// The dispatch form the Workflows tab opens over a Workflow reads its YAML at a ref and the
@@ -413,7 +418,7 @@ func isInterrupt(k tea.KeyPressMsg) bool {
 // only the Feed names its type (ADR-0015's type-visibility targeting), so the root needs no
 // handle on the Feed beyond the tab interface the other three routes use.
 func (m Model) showRuns(req workflows.NavigateToRuns) (tea.Model, tea.Cmd) {
-	return m.switchTab(feedTabIndex).broadcast(feed.ShowRuns(req.Query))
+	return m.switchTab(feedTabIndex).broadcast(feed.ShowRuns(req.Filter))
 }
 
 // switchTab moves focus, wrapping for next and previous. The tab losing focus is told so

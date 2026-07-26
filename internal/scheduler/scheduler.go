@@ -164,12 +164,12 @@ type Scheduler struct {
 	inFlight map[string]bool         // per repo: a poll is out, so the next due tick is skipped (R18)
 	lastETag map[string]string       // per repo: the ETag its last 200 carried, to spot a 304 (R19)
 
-	// wfStates is each repository's Workflow ID to State join, read once through the
-	// WorkflowLister and held for the process. An entry exists once the read has been
+	// wfLists is each repository's Workflow list as the engine uses it, read once through
+	// the WorkflowLister and held for the process. An entry exists once the read has been
 	// attempted, successfully or not, so the listing is read at most once per repository
-	// whatever it answered (workflowStates has the reasoning). A nil value is a read that
-	// failed, and answers the empty State for every Workflow ID.
-	wfStates map[string]map[int64]domain.State
+	// whatever it answered (workflowList has the reasoning). A zero value is a read that
+	// failed, and answers the empty State for every Workflow ID and resolves no selector.
+	wfLists map[string]workflowList
 
 	// filt is the Feed's active filter, guarded by mu (ADR-0016). A poll derives its
 	// server-side query from filt.Query() (R22), and a filtered poll carries the
@@ -223,7 +223,7 @@ func New(opts Options) *Scheduler {
 		lastPoll: make(map[string]time.Time),
 		inFlight: make(map[string]bool),
 		lastETag: make(map[string]string),
-		wfStates: make(map[string]map[int64]domain.State),
+		wfLists:  make(map[string]workflowList),
 		updates:  make(chan Event),
 		wake:     make(chan struct{}, 1),
 	}
@@ -399,20 +399,40 @@ func (s *Scheduler) SetViewport(ids []domain.RepoID) {
 // pushes server-side (R22, ADR-0016). The Feed calls it when the filter input is
 // accepted or cleared; the zero Filter restores the unfiltered listing.
 //
-// A filter change makes every repository a different resource, so the last-poll
-// stamps and the per-repository ETag memory are cleared: every repository is due at
-// once, and no poll of the new resource is false-skipped against the prior filter's
-// ETag (which the store keys by URL, not by repository, so it never confuses the two;
-// this clears the scheduler's own repository-keyed shortcut). The loop is then woken
-// so the re-poll happens at once rather than waiting out the up-to-30s slow interval,
-// symmetric with the viewport wake (R8).
+// A filter change that changes the request makes every repository a different resource, so
+// the last-poll stamps and the per-repository ETag memory are cleared: every repository is
+// due at once, and no poll of the new resource is false-skipped against the prior filter's
+// ETag (which the store keys by URL, not by repository, so it never confuses the two; this
+// clears the scheduler's own repository-keyed shortcut). The loop is then woken so the
+// re-poll happens at once rather than waiting out the up-to-30s slow interval, symmetric
+// with the viewport wake (R8).
+//
+// A change that leaves the request identical resets nothing. Not every axis reaches the
+// wire: a Conclusion and the repository set are client-side only (ADR-0016), and the Feed
+// narrows over the Runs it holds the moment they change, with no poll involved. Resetting
+// there would spend one conditional GET per repository on a resource nobody stopped polling.
 func (s *Scheduler) SetFilter(f filter.Filter) {
 	s.mu.Lock()
+	changed := !sameResource(s.filt, f)
 	s.filt = f
-	s.lastPoll = make(map[string]time.Time)
-	s.lastETag = make(map[string]string)
+	if changed {
+		s.lastPoll = make(map[string]time.Time)
+		s.lastETag = make(map[string]string)
+	}
 	s.mu.Unlock()
-	s.signalWake()
+	if changed {
+		s.signalWake()
+	}
+}
+
+// sameResource reports whether two Filters project to the same request: the same query
+// parameters, and the same endpoint. The endpoint is the Workflow selector's, the axis with
+// no parameter form (ADR-0016), and it is compared raw rather than resolved because
+// resolution is per repository while this decision is not: two selectors that differ in text
+// address the same endpoint only if they resolve alike everywhere, which is not knowable here
+// and is not worth a request to learn.
+func sameResource(a, b filter.Filter) bool {
+	return a.Workflow == b.Workflow && a.Query().Encode() == b.Query().Encode()
 }
 
 // activeFilter reads the Feed's active filter under the lock, so a poll goroutine

@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/tui/feed"
@@ -26,7 +27,7 @@ func TestNavigateToRunsSwitchesToTheFeedAndHandsItTheFilter(t *testing.T) {
 		t.Fatalf("setup: active = %d, want the Workflows tab", m.active)
 	}
 
-	m = step(t, m, workflows.NavigateToRuns{Query: "workflow:9004"})
+	m = step(t, m, workflows.NavigateToRuns{Filter: filter.Filter{Workflow: "9004"}})
 
 	if m.active != 0 {
 		t.Errorf("active tab = %d after the navigation, want the Feed at 0 (R13)", m.active)
@@ -40,8 +41,8 @@ func TestNavigateToRunsSwitchesToTheFeedAndHandsItTheFilter(t *testing.T) {
 			delivered = append(delivered, s)
 		}
 	}
-	if len(delivered) != 1 || delivered[0] != feed.ShowRuns("workflow:9004") {
-		t.Fatalf("the Feed received %v, want exactly one ShowRuns(workflow:9004)", delivered)
+	if len(delivered) != 1 || filter.Filter(delivered[0]).Workflow != "9004" {
+		t.Fatalf("the Feed received %v, want exactly one ShowRuns filtered to Workflow 9004", delivered)
 	}
 }
 

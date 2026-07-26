@@ -36,6 +36,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
@@ -79,7 +80,10 @@ type Options struct {
 
 	// Scope is the set of repositories the fan-out covers (R0). The zero value is all-repos,
 	// the default R0 fixes. The setting that selects it is [settings] R19's, which is not
-	// built: until it is, main.go states no scope and the tab runs all-repos.
+	// built: until it is, main.go states no scope and the tab runs all-repos. The scope is
+	// chosen at construction and does not change while running, because changing it also
+	// means dropping the held list: applyFetched merges each repository's Workflows as they
+	// arrive, so narrowing the scope would leave the wider one's rows on screen.
 	Scope Scope
 	// CurrentRepo resolves the working directory's repository, which is what this-repo means
 	// ([settings] R19). main.go wires it to ghclient.CurrentRepo, the same resolver
@@ -103,20 +107,16 @@ type Options struct {
 //
 // The tab only asks. It returns this as a Cmd and acts on it no further, because the move
 // is a cross-tab one and a tab may import a pane but never another tab (ADR-0011). The root
-// owns focus, so the root receives this, switches to the Feed, and hands the Feed the query.
+// owns focus, so the root receives this, switches to the Feed, and hands the Feed the filter.
 type NavigateToRuns struct {
-	// Repo and Workflow name the row the request came from, so a consumer can say where it
-	// is going without re-deriving it from the query string.
-	Repo     domain.RepoID
-	Workflow domain.Workflow
-
-	// Query is the destination stated in the Feed's own filter-input syntax, which the Feed
-	// parses with the parser it already applies to a typed filter (live-run-feed R23). It
-	// names the Workflow by its numeric id, not its name: the id is stamped on every Run the
-	// Workflow produced and stays unique after the YAML is gone, while a name can be taken by
-	// a later Workflow. That is the same reason R12 identifies an Orphaned Run from Workflow
-	// state rather than from a missing file.
-	Query string
+	// Filter is the destination as ADR-0016's structured value, the one representation both
+	// sides already speak, so no filter grammar crosses this seam as a string neither package
+	// owns. It names the Workflow by its numeric id, not its name: the id is stamped on every
+	// Run the Workflow produced and stays unique after the YAML is gone, while a name can be
+	// taken by a later Workflow. That is the same reason R12 identifies an Orphaned Run from
+	// Workflow state rather than from a missing file. The id is also what the poll needs to
+	// reach the Workflow's own Run listing, the axis's only server-side form.
+	Filter filter.Filter
 }
 
 // toggleResultMsg carries one toggle's outcome back into the message loop. On an accepted
@@ -419,11 +419,7 @@ func (m Model) viewRuns() (Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	req := NavigateToRuns{
-		Repo:     row.repo,
-		Workflow: row.wf,
-		Query:    "workflow:" + strconv.FormatInt(row.wf.ID, 10),
-	}
+	req := NavigateToRuns{Filter: filter.Filter{Workflow: strconv.FormatInt(row.wf.ID, 10)}}
 	return m, func() tea.Msg { return req }
 }
 
