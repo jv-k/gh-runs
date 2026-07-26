@@ -147,7 +147,7 @@ func (m Model) scopeLabel() string {
 // counts.
 func (m Model) totals() (cacheBytes int64, cacheCount int, artifactReclaim int64, live, tombstones int) {
 	for _, id := range m.order {
-		st := m.storage[id.String()]
+		st := m.visible(id)
 		cacheBytes += st.ActiveCachesSizeInBytes
 		cacheCount += st.ActiveCachesCount
 		for _, a := range st.Artifacts {
@@ -168,7 +168,7 @@ func (m Model) totals() (cacheBytes int64, cacheCount int, artifactReclaim int64
 func (m Model) incompleteLabel() string {
 	var caches, artifacts int
 	for _, id := range m.order {
-		st := m.storage[id.String()]
+		st := m.visible(id)
 		if !st.cacheListComplete() {
 			caches++
 		}
@@ -205,7 +205,7 @@ func (m Model) rollupLines() []string {
 	}
 	rows := make([]rr, 0, len(m.order))
 	for _, id := range m.order {
-		st := m.storage[id.String()]
+		st := m.visible(id)
 		var art int64
 		for _, a := range st.Artifacts {
 			art += a.ReclaimableBytes()

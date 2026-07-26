@@ -27,6 +27,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"sort"
 
@@ -39,13 +40,21 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/tui/confirm"
 )
 
-// Planner freezes a selection into an ops.Plan: the shared entry to the confirmation
-// chain (ADR-0019). *ops.Ops satisfies it. It is a narrow interface so the tab depends on
-// the one call it makes, and a golden test with no planner leaves it nil, where the delete
-// key is inert (the destructive action stays disabled until the planner and the discovered
-// capability data are wired, repo-discovery R8).
+// Planner is the whole confirmation chain the tab drives, in the order ADR-0019 fixes:
+// Plan freezes the selection and prices its friction, Confirm validates the operator's
+// answer into a Confirmed the tab cannot forge, and Start runs it and returns the progress
+// stream (ADR-0015). *ops.Ops satisfies it. A golden test leaves it nil, where the delete
+// key is inert, because the destructive action stays disabled until the planner and the
+// discovered capability data are wired (repo-discovery R8).
+//
+// The three calls are one interface rather than three because they are one chain: a Plan is
+// only useful to Confirm, and a Confirmed is only useful to Start. Splitting them would let
+// a surface be wired with the freeze and not the execution, which is precisely the state
+// this issue found the tab in.
 type Planner interface {
 	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error)
+	Confirm(p ops.Plan, in ops.Input) (ops.Confirmed, error)
+	Start(ctx context.Context, c ops.Confirmed) (ops.Started, error)
 }
 
 // Scope is the set of repositories this view operates over (R0). It is one of two values
@@ -245,6 +254,18 @@ type Model struct {
 	confirmOpen    bool
 	pendingReclaim int64
 
+	// reclaimed is every object this session's reclamations destroyed, keyed exactly as the
+	// selection is. It is what R24 adjusts the displayed figures by: a reclaimed row leaves
+	// the list, and a Cache's bytes and count come off R1's endpoint figures while the
+	// endpoint is still reporting them. A refresh therefore cannot raise the total back above
+	// the adjusted figure on account of the just-deleted rows, which is the failed-reclaim
+	// reading R24 exists to prevent.
+	//
+	// It is display state and nothing reads it back, so it stays inside ADR-0006's
+	// statelessness: the record of what was destroyed is the append-only deletion log, which
+	// this is not and never substitutes for.
+	reclaimed map[selKey]bool
+
 	// status is a transient line reporting the last download's outcome: the path written
 	// (R13), or that the Artifact's bytes are gone (R14, AC9). It is display state alone and
 	// nothing reads it back, which keeps a download outside ADR-0006's statelessness rule as
@@ -266,6 +287,7 @@ func New(opts Options) Model {
 		storage:     make(map[string]RepoStorage),
 		capability:  make(map[string]domain.Repo),
 		selected:    make(map[selKey]bool),
+		reclaimed:   make(map[selKey]bool),
 		confirm:     confirm.New(opts.Profile),
 	}
 }
@@ -319,6 +341,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.status = downloadOutcome(msg)
 		return m, nil
 
+	case ops.Progress:
+		m.applyProgress(msg)
+		return m, nil
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -339,6 +365,48 @@ func downloadOutcome(msg downloadDoneMsg) string {
 	default:
 		return "Downloaded " + msg.name + " to " + msg.path
 	}
+}
+
+// applyProgress records what a completed pass destroyed, which is what R24 adjusts the
+// displayed figures by. The frames are broadcast to every tab, so this sees a Purge over
+// Runs and a lifecycle mutation as well as its own reclamations: it takes only the Caches
+// and Artifacts, and only on the terminal frame, because the running surface owns the live
+// line and the tally is not final until then.
+//
+// It reports the bytes recovered, which is the other half of R24. A row that reclaims
+// nothing is a real outcome, not an empty one: a set of expired Artifacts recovers zero
+// bytes and says so, exactly as its confirmation did (R11, AC8).
+func (m *Model) applyProgress(p ops.Progress) {
+	if !p.Done {
+		return
+	}
+	var bytes int64
+	var n int
+	for _, it := range p.Sum.Succeeded {
+		switch it.Kind {
+		case ops.KindCache:
+			if it.Cache == nil {
+				continue
+			}
+			bytes += it.Cache.SizeInBytes
+		case ops.KindArtifact:
+			if it.Artifact == nil {
+				continue
+			}
+			bytes += it.Artifact.ReclaimableBytes() // a Tombstone recovers nothing (R10)
+		default:
+			continue // a Run, a Workflow or a log: another surface's operation
+		}
+		k := selKey{repo: it.Repo, kind: it.Kind, id: it.ID}
+		m.reclaimed[k] = true
+		delete(m.selected, k) // a destroyed object is not a selection the next delete key acts on
+		n++
+	}
+	if n == 0 {
+		return
+	}
+	m.status = "Reclaimed " + formatBytes(bytes) + " across " + plural(n, "object")
+	m.clampCursor()
 }
 
 // applyFetched replaces one repository's held storage wholesale and records it in the
@@ -499,18 +567,61 @@ func (m Model) thisRepo() (domain.RepoID, bool) {
 
 // handleConfirmKey drives the confirmation modal while it is open, routing every key to
 // the pane (R7) and acting on its Outcome. An abort dismisses it having issued nothing
-// (purge AC6); a confirmation closes it holding the confirmed Plan, and launching Execute
-// over it is the running-reclamation surface this stage defers, exactly as the Feed defers
-// launching a Purge from a confirmed delete Plan (ADR-0011, ADR-0015).
+// (purge AC6); a confirmation closes it and launches the reclamation over the Plan and
+// Input the pane collected (R24).
 func (m Model) handleConfirmKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.confirm, cmd = m.confirm.Update(k)
 	switch m.confirm.Outcome() {
-	case confirm.Aborted, confirm.Confirmed:
+	case confirm.Aborted:
 		m.confirm = m.confirm.Close()
 		m.confirmOpen = false
+	case confirm.Confirmed:
+		plan, in := m.confirm.Plan(), m.confirm.Input()
+		m.confirm = m.confirm.Close()
+		m.confirmOpen = false
+		return m, tea.Batch(cmd, m.launch(plan, in))
 	}
 	return m, cmd
+}
+
+// launch runs the confirmed set and hands back the progress stream (ADR-0015: the
+// initiating Cmd's first message hands that channel to the root, which adapts it and
+// broadcasts). Confirm and Start both happen inside the Cmd rather than in Update, because
+// Update must stay non-blocking and Start spawns.
+//
+// The surface it launches into is the shared one a Purge uses, unchanged: a Reclamation is
+// the same walk over a frozen set under the same failure contract, differing only in the
+// noun the frame names (R24, ADR-0015). The Kind travels with the launch, and for
+// Reclamation's ordinary mixed Cache-and-Artifact list it is the empty Kind, which is a
+// real value rather than an unknown one.
+func (m Model) launch(plan ops.Plan, in ops.Input) tea.Cmd {
+	if m.planner == nil {
+		return nil
+	}
+	planner := m.planner
+	return func() tea.Msg {
+		confirmed, err := planner.Confirm(plan, in)
+		if err != nil {
+			return ops.LaunchFailed{Op: plan.Operation(), Kind: plan.Kind(), Err: err}
+		}
+		// context.Background rather than a context threaded from main.go: the operation's
+		// lifetime is its own, and Started.Cancel is the stop (purge R16). A Reclamation over
+		// a large frozen set outlives the keystroke that started it and must not be tied to
+		// any shorter-lived scope.
+		//
+		// A refusal here is reported rather than dropped, and the one a running operation
+		// makes likely is ErrBusy: the engine runs one at a time so the first keeps the only
+		// cancel it has. The Confirmed is unspent in that case, but the modal has closed, so
+		// the operator confirms again once the running one is over. Holding a live Confirmed
+		// across that wait would be a resolved set kept on the side, which is the shape
+		// purge R23 refuses.
+		st, err := planner.Start(context.Background(), confirmed)
+		if err != nil {
+			return ops.LaunchFailed{Op: plan.Operation(), Kind: plan.Kind(), Err: err}
+		}
+		return st
+	}
 }
 
 // openConfirm freezes the selection into a delete Plan and opens the confirmation over it
@@ -605,6 +716,49 @@ func (m *Model) toggleSelect() {
 	}
 }
 
+// visible is one repository's storage as the frame reports it: the held fetch with the rows
+// this session already reclaimed removed, and R1's endpoint figures reduced by exactly those
+// Caches' bytes and count (R24, AC12). Every reader of the held storage goes through it, so
+// the list, the rollup, the grand totals and the row budget cannot disagree about what is
+// still there.
+//
+// The enumerated list is the oracle for whether the endpoint has caught up. R1's figures are
+// the repository's truth and the list is reconciled against them (R2), so while the list
+// still carries an object this session destroyed, the figures beside it are still counting
+// it and the deduction stands. Once the list drops it the endpoint has caught up, and
+// deducting again would take the same bytes off twice and report less storage than the
+// repository has.
+func (m Model) visible(id domain.RepoID) RepoStorage {
+	st := m.storage[id.String()]
+	if len(m.reclaimed) == 0 {
+		return st
+	}
+	caches := make([]domain.Cache, 0, len(st.Caches))
+	for _, c := range st.Caches {
+		if m.reclaimed[selKey{repo: id, kind: ops.KindCache, id: c.ID}] {
+			st.ActiveCachesSizeInBytes -= c.SizeInBytes
+			st.ActiveCachesCount--
+			continue
+		}
+		caches = append(caches, c)
+	}
+	if st.ActiveCachesSizeInBytes < 0 {
+		st.ActiveCachesSizeInBytes = 0
+	}
+	if st.ActiveCachesCount < 0 {
+		st.ActiveCachesCount = 0
+	}
+	artifacts := make([]domain.Artifact, 0, len(st.Artifacts))
+	for _, a := range st.Artifacts {
+		if m.reclaimed[selKey{repo: id, kind: ops.KindArtifact, id: a.ID}] {
+			continue
+		}
+		artifacts = append(artifacts, a)
+	}
+	st.Caches, st.Artifacts = caches, artifacts
+	return st
+}
+
 // displayRows is the merged Cache-and-Artifact list, sorted by size descending (R4) with a
 // deterministic tiebreak so the order is stable across refreshes (R19). artifactsOnly drops
 // the Caches (R8). The reclaimable figures and the sort read size_in_bytes, which a
@@ -613,7 +767,7 @@ func (m *Model) toggleSelect() {
 func (m Model) displayRows() []storeRow {
 	var rows []storeRow
 	for _, id := range m.order {
-		st := m.storage[id.String()]
+		st := m.visible(id)
 		if !m.artifactsOnly {
 			for _, c := range st.Caches {
 				rows = append(rows, storeRow{repo: id, kind: ops.KindCache, cache: c})
