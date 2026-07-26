@@ -192,6 +192,32 @@ func TestClientFetchListsBranchesOnlyWithNoTags(t *testing.T) {
 	}
 }
 
+// TestClientFetchFollowsRefPagination pins R24's walk against the cassette: a repository whose
+// branches span two pages yields all three, because the listing follows the Link header's rel="next"
+// rather than stopping at the first page. A truncated set is not merely incomplete: the ref the
+// picker opened on can be missing from it, which is how a default branch becomes unreachable.
+func TestClientFetchFollowsRefPagination(t *testing.T) {
+	client, counting := newCountedClient(t, "dispatch_contents")
+	fetch := dispatch.NewClientFetch(client)
+
+	refs, err := fetch.Refs(rid("o", "paged"))
+	if err != nil {
+		t.Fatalf("Refs returned an error: %v", err)
+	}
+	want := []string{"aardvark", "main", "zebra"}
+	if len(refs) != len(want) {
+		t.Fatalf("refs = %+v, want the whole set %v across both pages (R24)", refs, want)
+	}
+	for i, w := range want {
+		if refs[i].Name != w || refs[i].IsTag {
+			t.Errorf("ref %d = %+v, want the branch %q", i, refs[i], w)
+		}
+	}
+	if n := counting.countExact("/repos/o/paged/branches"); n != 2 {
+		t.Errorf("the branch walk made %d requests, want 2 (a page and its rel=next)", n)
+	}
+}
+
 // TestOpeningAtTheDiscoveredDefaultBranchIssuesNoRepositoryRead is R23's Budget claim measured at
 // the wire. The Workflows tab hands the pane the default branch discovery already carried, so the
 // form's whole open costs one request, the Contents read R5 requires, and the GET /repos/{o}/{r} it

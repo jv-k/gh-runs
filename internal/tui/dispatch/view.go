@@ -81,7 +81,8 @@ func (m Model) View() string {
 }
 
 // refLine is R4's always-visible target ref, focusable as the first row so a picker can advance it
-// (R23, R24). It labels the ref a branch or a tag when the picker knows which (R24).
+// (R23, R24). It labels the ref a branch or a tag when the picker knows which, and where a set is
+// held it lists that set beneath, which is what AC8 asks the picker to show.
 func (m Model) refLine() string {
 	mark := nomark
 	label := "Ref: " + textsan.Sanitize(m.ref)
@@ -93,10 +94,53 @@ func (m Model) refLine() string {
 	if kind != "" {
 		label += styleDim.Render("  (" + kind + ")")
 	}
-	if m.cursor == 0 && m.canPickRefs() {
+	switch {
+	case m.refsLoading:
+		label += styleDim.Render("  listing branches and tags…")
+	case m.refsErr != "":
+		label += styleErr.Render("  " + textsan.Sanitize(m.refsErr))
+	case m.cursor == 0 && m.canPickRefs():
 		label += styleDim.Render("  " + m.profile.ToggleSelect.Help().Key + " to switch")
 	}
-	return mark + label
+	out := mark + label
+	if list := m.refListLines(); list != "" {
+		out += "\n" + list
+	}
+	return out
+}
+
+// refListLines is AC8's list: the branches the picker holds and then the tags, each group named so
+// the two are distinguishable, with the selected ref marked. Cycling one ref at a time satisfies
+// "distinguishable" through the label beside the ref, but AC8 also says the picker lists them, and a
+// list nobody can see is not one. It shows only while the ref row has focus, so the form the goldens
+// fix at rest is unchanged, and only once a set is held, so it costs nothing until the operator asks.
+func (m Model) refListLines() string {
+	if m.cursor != 0 || len(m.refs) == 0 {
+		return ""
+	}
+	var branches, tags []string
+	for _, r := range m.refs {
+		name := textsan.Sanitize(r.Name)
+		if r.Name == m.ref {
+			name = "[" + name + "]"
+		}
+		if r.IsTag {
+			tags = append(tags, name)
+		} else {
+			branches = append(branches, name)
+		}
+	}
+	var b strings.Builder
+	if len(branches) > 0 {
+		b.WriteString(styleDim.Render(indent + "branches: " + strings.Join(branches, " | ")))
+	}
+	if len(tags) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(styleDim.Render(indent + "tags: " + strings.Join(tags, " | ")))
+	}
+	return b.String()
 }
 
 // canPickRefs reports whether the picker has somewhere to go: a set holding more than the current

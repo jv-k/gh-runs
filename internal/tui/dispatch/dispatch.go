@@ -114,6 +114,12 @@ type RefsLoaded struct {
 type Dispatched struct {
 	Result ops.DispatchResult
 	Err    error
+
+	// issued is the submission this outcome belongs to, stamped by the Cmd that sent it. It is
+	// unexported because only this package issues a Dispatch, and it is carried rather than inferred
+	// so an outcome settles the record it came from rather than whatever the pane happens to hold
+	// when it lands, which may be a different Workflow entirely.
+	issued dispatchTarget
 }
 
 // Model is the dispatch form pane's state. It holds the parsed schema, the per-input current values,
@@ -140,6 +146,16 @@ type Model struct {
 	// failed, or was pre-seeded by the opener. Open resets it, which is what makes a session one
 	// open of the form.
 	refsAsked bool
+	// refsLoading and refsErr are the picker's own pending and failure state, shown on the ref row
+	// rather than on the shared status line. The status line carries Dispatch outcomes, and a picker
+	// that borrowed it would either wipe an outcome or be wiped by one depending on which arrived
+	// last, which is a race over a line the operator reads to know whether a Run was created.
+	refsLoading bool
+	refsErr     string
+	// refHome is the ref the form opened on, which the picker's cycle keeps reachable even when the
+	// enumeration does not name it. It is the branch R23 chose, and losing the way back to it would
+	// make the picker a one-way door.
+	refHome string
 
 	form         Form
 	values       map[string]string
@@ -153,53 +169,73 @@ type Model struct {
 	editName  string
 	editInput textinput.Model
 
-	// inflight and latched are the two halves of the re-submit guard, and neither is reset by Open
-	// or Close. A Dispatch creates a real Run, so the only acceptable failure mode is refusing a
-	// Dispatch the operator wanted, never issuing one they did not.
+	// issued is the re-submit guard: every Dispatch this pane has sent, keyed by the whole
+	// submission, and it is not reset by Open or Close. A Dispatch creates a real Run, so the only
+	// acceptable failure mode is refusing a Dispatch the operator wanted, never issuing one they
+	// did not.
 	//
-	// inflight is a Dispatch this pane issued whose outcome has not arrived. It blocks a second
-	// press whether the form stayed open or was closed and reopened, which a form-scoped flag could
-	// not: Open resets the form, and a POST does not stop being in flight because the window it was
-	// typed into went away.
+	// The guard compares rather than releases. An earlier form of it released the latch whenever a
+	// value changed, which is a different predicate from "this submission differs from the one
+	// already sent" and has four ways through: toggling a boolean and toggling it back, leaving a
+	// ref and returning, and above all the reopen after an outcome landed on a closed pane, where
+	// R25 persisted nothing, R9 forces the required input to be retyped, and the retyping released
+	// the latch on the very submission it was holding. Keying on the submission makes every one of
+	// those a match, and makes a genuinely different Dispatch a different key with nothing to do.
 	//
-	// latched is the target of the Dispatch this pane issued and did not see rejected, so a stray
-	// press after success cannot repeat it. It releases on a rejection (which created no Run, so a
-	// retry is right) and on a change to the ref or to any input value (which makes the next submit
-	// a different Dispatch rather than a repeat of the one already made, R25's premise).
-	inflight   bool
-	latched    *dispatchTarget
-	latchedRun int64 // the Run the latched Dispatch created, 0 when its outcome reached a closed pane
+	// The map is shared across the Model's copies, which for a latch is the safe direction: a copy
+	// that lags still sees what was sent.
+	issued map[dispatchTarget]issueState
 
 	status    string
 	statusErr bool
 	result    *ops.DispatchResult // R16: the Run the Dispatch created, shown until the form closes
 }
 
-// dispatchTarget identifies one Dispatch for the latch: the repository, the Workflow and the ref.
-// The submitted inputs are deliberately not part of it. A form closed mid-POST loses the values it
-// was submitted with, because Open resets them and R25 persists only on a success the closed pane
-// never sees, so a key including them would stop matching on reopen, which is the one case the latch
-// exists for.
+// dispatchTarget identifies one whole Dispatch: the repository, the Workflow, the ref, and the
+// inputs actually sent. Two submissions equal in all four are the same Dispatch, and issuing the
+// second creates a duplicate Run of the first.
 type dispatchTarget struct {
 	repo     domain.RepoID
 	workflow int64
 	ref      string
+	inputs   string // the inputs map canonically encoded, so the key stays comparable
 }
 
-// target is the Dispatch the form would issue right now, which the latch compares against.
+// issueState is what became of one issued Dispatch: still in flight, or done and carrying the Run
+// the response reported (R16). A rejected Dispatch is removed rather than recorded, because it
+// created no Run and its submission must stay issuable.
+type issueState struct {
+	inflight bool
+	runID    int64
+}
+
+// target is the Dispatch the form would issue right now, which the guard looks up.
 func (m Model) target() dispatchTarget {
-	return dispatchTarget{repo: m.repo, workflow: m.workflow.ID, ref: m.ref}
+	return dispatchTarget{
+		repo:     m.repo,
+		workflow: m.workflow.ID,
+		ref:      m.ref,
+		inputs:   encodeInputs(m.buildInputs()),
+	}
+}
+
+// encodeInputs renders the inputs map as a canonical string for the guard's key. encoding/json sorts
+// a map's keys, so two equal maps encode identically whatever order they were built in. Marshalling
+// a map[string]string cannot fail; were it to, the empty encoding would only make two submissions
+// compare equal that are not, which refuses a Dispatch rather than issuing one, and that is the
+// direction a write path should fail in.
+func encodeInputs(in map[string]string) string {
+	b, err := json.Marshal(in)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // statusDispatching is the pending line a Dispatch in flight shows. Open restores it when the form
-// is reopened over a POST that has not resolved, so a reopened form states what it is doing rather
-// than looking ready to do it again.
+// is reopened over a POST for this Workflow that has not resolved, so a reopened form states what it
+// is doing rather than looking ready to do it again.
 const statusDispatching = "dispatching…"
-
-// statusListingRefs is the pending line the picker's lazy enumeration shows (R24). applyRefs clears
-// it only when it is still the line showing, so a Dispatch outcome that landed while the list was in
-// flight is not wiped by its arrival.
-const statusListingRefs = "listing branches and tags…"
 
 // Options carries the pane's construction seams. main.go fills them: Profile is the resolved
 // keybinding set, Fetch reads the YAML and the environments over the shared client, Ops dispatches
@@ -222,6 +258,7 @@ func New(opts Options) Model {
 		dispatcher: opts.Ops,
 		store:      opts.Store,
 		editInput:  ti,
+		issued:     make(map[dispatchTarget]issueState),
 	}
 }
 
@@ -237,7 +274,13 @@ func (m Model) Open(t Target) (Model, tea.Cmd) {
 	m.eligReason = t.EligReason
 	m.ref = t.Ref
 	m.refs = t.Refs
-	m.refsAsked = len(t.Refs) > 0 // an opener-supplied set is the picker set; nothing is fetched
+	// An opener-supplied set is the picker set and suppresses the fetch, but only when it is a set
+	// worth having. A single entry is not a picker, and treating it as one would leave the session
+	// with no way to reach any other ref.
+	m.refsAsked = len(t.Refs) > 1
+	m.refsLoading = false
+	m.refsErr = ""
+	m.refHome = t.Ref
 	m.form = Form{}
 	m.values = nil
 	m.environments = nil
@@ -249,10 +292,10 @@ func (m Model) Open(t Target) (Model, tea.Cmd) {
 	m.status = ""
 	m.statusErr = false
 	m.result = nil
-	// inflight, latched and latchedRun are the re-submit guard and are deliberately not reset here.
-	// Resetting them is exactly what let closing the form mid-POST and reopening it issue a second
-	// Dispatch, and a second Dispatch is a second Run.
-	if m.inflight {
+	// issued is the re-submit guard and is deliberately not reset here. Resetting it is exactly what
+	// let closing the form mid-POST and reopening it issue a second Dispatch, and a second Dispatch
+	// is a second Run.
+	if m.inflightHere() {
 		m.status = statusDispatching
 	}
 	// R2's fixed order: when the opener names no ref, resolve the repository's default branch first
@@ -344,6 +387,7 @@ func (m Model) applyRef(msg RefResolved) (Model, tea.Cmd) {
 	} else {
 		m.ref = msg.Ref
 	}
+	m.refHome = m.ref // the resolved branch is the one the picker's cycle must keep reachable
 	return m, m.loadYAMLCmd()
 }
 
@@ -376,17 +420,37 @@ func (m Model) applyYAML(msg YAMLLoaded) (Model, tea.Cmd) {
 }
 
 // settle records a Dispatch's outcome in the re-submit guard, whether or not the form is still open.
-// The in-flight half always clears, because the POST resolved. The done-latch survives a success, so
-// a stray press cannot repeat it, and releases on a rejection, which created no Run and is therefore
-// worth retrying.
+// The pane issued the POST, so it must not forget it because the window closed. The outcome is
+// matched to the submission that produced it rather than to whatever the pane holds now, so a second
+// Workflow's outcome cannot clear the first Workflow's record.
+//
+// A success stays recorded with its Run, so a stray press cannot repeat it. A rejection is removed,
+// because it created no Run and the same submission must stay issuable.
 func (m Model) settle(msg Dispatched) Model {
-	m.inflight = false
-	if msg.Err != nil {
-		m.latched = nil
+	rec, ok := m.issued[msg.issued]
+	if !ok {
 		return m
 	}
-	m.latchedRun = msg.Result.RunID
+	if msg.Err != nil {
+		delete(m.issued, msg.issued)
+		return m
+	}
+	rec.inflight = false
+	rec.runID = msg.Result.RunID
+	m.issued[msg.issued] = rec
 	return m
+}
+
+// inflightHere reports whether a Dispatch of the Workflow now on screen has not resolved, which Open
+// reads to say so rather than paint a form that looks ready. It is per Workflow rather than per pane,
+// because an unrelated Workflow's POST is not this form's business.
+func (m Model) inflightHere() bool {
+	for k, rec := range m.issued {
+		if rec.inflight && k.repo == m.repo && k.workflow == m.workflow.ID {
+			return true
+		}
+	}
+	return false
 }
 
 // applyDispatched records a Dispatch's outcome on the open form. On success it shows the Run ID from
@@ -498,33 +562,25 @@ func (m Model) cycleFocused() (Model, tea.Cmd) {
 	return m, nil
 }
 
-// setValue writes one input's value and releases the done-latch when the value actually changed.
-// Every operator-driven change to the form goes through it, so "the submission is different from the
-// one already dispatched" has one definition rather than one per control. A no-op edit (enter over an
-// unchanged field, or cycling a select with nothing to cycle through) changes nothing and therefore
-// releases nothing.
+// setValue writes one input's value. It is the one door every operator-driven change to the form
+// goes through, which is what lets the submission be compared as a whole rather than tracked change
+// by change.
 func (m *Model) setValue(name, value string) {
-	if m.values[name] == value {
-		return
-	}
 	m.values[name] = value
-	m.latched = nil
 }
 
 // applyRefs adopts the enumerated branches and tags as the picker set (R24). The current ref is left
 // alone: the operator asked for the list, not for a different ref, and R4 says which ref will run
-// must never be ambiguous. A failure keeps the form on the ref it holds and says so, and refsAsked
-// stays set, so a picker that could not be listed is not retried on every press.
+// must never be ambiguous. A failure keeps the form on the ref it holds and says so on the ref row,
+// and refsAsked stays set, so a picker that could not be listed is not retried on every press.
 func (m Model) applyRefs(msg RefsLoaded) (Model, tea.Cmd) {
+	m.refsLoading = false
 	if msg.Err != nil {
-		m.status = "could not list refs: " + msg.Err.Error()
-		m.statusErr = true
+		m.refsErr = "could not list refs: " + msg.Err.Error()
 		return m, nil
 	}
+	m.refsErr = ""
 	m.refs = msg.Refs
-	if m.status == statusListingRefs {
-		m.status, m.statusErr = "", false
-	}
 	return m, nil
 }
 
@@ -539,15 +595,13 @@ func (m Model) applyRefs(msg RefsLoaded) (Model, tea.Cmd) {
 func (m Model) cycleRef() (Model, tea.Cmd) {
 	if !m.refsAsked && m.fetcher != nil {
 		m.refsAsked = true // R24: at most once per picker session, whatever the enumeration returns
-		m.status, m.statusErr = statusListingRefs, false
+		m.refsLoading = true
+		m.refsErr = ""
 		return m, m.loadRefsCmd()
 	}
-	if len(m.refs) == 0 {
+	names := m.cycleNames()
+	if len(names) < 2 {
 		return m, nil
-	}
-	names := make([]string, len(m.refs))
-	for i, r := range m.refs {
-		names[i] = r.Name
 	}
 	next := cycle(names, m.ref)
 	if next == m.ref {
@@ -559,27 +613,36 @@ func (m Model) cycleRef() (Model, tea.Cmd) {
 	return m, m.loadYAMLCmd()
 }
 
+// cycleNames is the order the picker walks. It is the enumerated set, plus the ref the form opened
+// on when the enumeration did not name it, so the loop is always closed and the ref R23 chose is
+// always reachable again. Without that, a ref the listing does not carry (a SHA, or a branch past the
+// pages walked) sends the first press to the alphabetically first entry and the opening ref can never
+// be cycled back to, which is a one-way door on a form whose whole promise is that the ref that will
+// run is never ambiguous (R4).
+//
+// It is keyed to the opening ref rather than to the current one, because the current one rejoins the
+// enumerated set after a single press and the loop would close over the wrong thing from then on.
+func (m Model) cycleNames() []string {
+	names := make([]string, 0, len(m.refs)+1)
+	listed := false
+	for _, r := range m.refs {
+		names = append(names, r.Name)
+		if r.Name == m.refHome {
+			listed = true
+		}
+	}
+	if !listed && m.refHome != "" {
+		names = append(names, m.refHome)
+	}
+	return names
+}
+
 // submit dispatches the form, gating first on the two things that cost no request: R14's push gate
 // and R9's required inputs. An ineligible repository or a Workflow that is not dispatchable issues
 // nothing and states why (R14, AC6). A required input with no value issues nothing and names the
 // input (R9, AC3). Otherwise it builds the inputs map and dispatches, and the API is the final
 // authority on the rest (R14).
 func (m Model) submit() (Model, tea.Cmd) {
-	if m.inflight {
-		// A Dispatch this pane issued has not resolved. A second x must not create a second Run,
-		// whether the form stayed open or was closed and reopened over the POST.
-		m.status = "a Dispatch is already in flight for this Workflow"
-		m.statusErr = true
-		return m, nil
-	}
-	if m.latched != nil && *m.latched == m.target() {
-		// The done-latch: this exact Dispatch has already been made. Changing the ref or any input
-		// value releases it, so a deliberate second Dispatch is one edit away and an accidental one
-		// is impossible.
-		m.status = m.alreadyDispatched()
-		m.statusErr = true
-		return m, nil
-	}
 	if m.loadErr != "" || !m.form.Dispatchable {
 		m.status = "this Workflow declares no workflow_dispatch trigger at this ref"
 		m.statusErr = true
@@ -595,26 +658,42 @@ func (m Model) submit() (Model, tea.Cmd) {
 		m.statusErr = true
 		return m, nil
 	}
+	// The guard comes after the gates above so it only ever speaks about a submission that would
+	// otherwise have gone out. This exact Dispatch, the same Workflow at the same ref with the same
+	// inputs, has already been sent, so sending it again would create a duplicate Run. Changing the
+	// ref or any input makes the next submit a different key with nothing recorded against it, which
+	// is how a deliberate second Dispatch gets through and an accidental one does not.
+	key := m.target()
+	if rec, ok := m.issued[key]; ok {
+		m.status = refusal(rec)
+		m.statusErr = true
+		return m, nil
+	}
 	if m.dispatcher == nil {
 		return m, nil
 	}
-	m.inflight = true
-	target := m.target()
-	m.latched = &target
-	m.latchedRun = 0
+	if m.issued == nil {
+		m.issued = make(map[dispatchTarget]issueState)
+	}
+	m.issued[key] = issueState{inflight: true}
 	m.status = statusDispatching
 	m.statusErr = false
-	return m, m.dispatchCmd()
+	return m, m.dispatchCmd(key)
 }
 
-// alreadyDispatched is the done-latch's refusal, naming the Run where the outcome was seen and
-// saying how to make a deliberate second Dispatch. A form reopened over a Dispatch whose outcome
-// landed on a closed pane has no Run to name, so it says so rather than reporting Run 0.
-func (m Model) alreadyDispatched() string {
-	if m.latchedRun == 0 {
-		return "already dispatched at " + m.ref + ". Change the ref or an input to dispatch again"
+// refusal states why a submission was not sent, and how to make a genuinely new one. The Run is
+// named where one is recorded, which is every settled success under R16: the response carries the
+// Run ID, so a settled Dispatch with none is a 200 the API is not documented to return, and printing
+// "Run 0" for it would be worse than saying nothing.
+func refusal(rec issueState) string {
+	switch {
+	case rec.inflight:
+		return "this Dispatch is already in flight"
+	case rec.runID == 0:
+		return "this Dispatch has already been made. Change the ref or an input to dispatch again"
+	default:
+		return fmt.Sprintf("this Dispatch has already been made, Run %d. Change the ref or an input to dispatch again", rec.runID)
 	}
-	return fmt.Sprintf("already dispatched at %s, Run %d. Change the ref or an input to dispatch again", m.ref, m.latchedRun)
 }
 
 // missingRequired returns the name of the first required input with no value, or empty when every
@@ -649,9 +728,10 @@ func (m Model) serializedInputLength() int {
 	return len(b)
 }
 
-// dispatchCmd issues the Dispatch through ops on a Cmd, returning a Dispatched message. With no
-// dispatcher wired it is nil, which is the golden path.
-func (m Model) dispatchCmd() tea.Cmd {
+// dispatchCmd issues the Dispatch through ops on a Cmd, returning a Dispatched message tagged with
+// the submission that produced it, so the guard settles the right record however many are in flight.
+// With no dispatcher wired it is nil, which is the golden path.
+func (m Model) dispatchCmd(key dispatchTarget) tea.Cmd {
 	if m.dispatcher == nil {
 		return nil
 	}
@@ -659,7 +739,7 @@ func (m Model) dispatchCmd() tea.Cmd {
 	req := ops.DispatchRequest{Repo: m.repo, WorkflowID: m.workflow.ID, Ref: m.ref, Inputs: m.buildInputs()}
 	return func() tea.Msg {
 		res, err := d.Dispatch(context.Background(), req)
-		return Dispatched{Result: res, Err: err}
+		return Dispatched{Result: res, Err: err, issued: key}
 	}
 }
 

@@ -91,3 +91,46 @@ interactions:
             Content-Type: ["application/json; charset=utf-8"]
             X-Ratelimit-Remaining: ["4985"]
             X-Ratelimit-Reset: ["1789000000"]
+    # o/paged's branches span two pages, so the walk has to follow rel="next" to see the whole set.
+    # The matcher compares the URL path and not the query, so these two interactions are told apart
+    # by the order they are replayed in, which is the order the walk requests them.
+    - id: 7
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/paged/branches?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"aardvark","commit":{"sha":"eee"}},{"name":"main","commit":{"sha":"fff"}}]'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            Link:
+                - '<https://api.github.com/repos/o/paged/branches?per_page=100&page=2>; rel="next", <https://api.github.com/repos/o/paged/branches?per_page=100&page=2>; rel="last"'
+            X-Ratelimit-Remaining: ["4984"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 8
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/paged/branches?per_page=100&page=2
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"zebra","commit":{"sha":"ggg"}}]'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            Link:
+                - '<https://api.github.com/repos/o/paged/branches?per_page=100>; rel="prev", <https://api.github.com/repos/o/paged/branches?per_page=100>; rel="first"'
+            X-Ratelimit-Remaining: ["4983"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 9
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/paged/tags?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '[]'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4982"]
+            X-Ratelimit-Reset: ["1789000000"]

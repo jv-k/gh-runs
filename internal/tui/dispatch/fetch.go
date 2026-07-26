@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/ghlink"
 )
 
 // Requester issues a request through the transport chain and returns the response for the caller to
@@ -39,10 +40,11 @@ func NewClientFetch(client Requester) ClientFetch {
 //
 // This is the fallback path, not the ordinary one. default_branch rides the /user/repos payload
 // discovery already reads, so the Workflows tab hands the pane the branch it discovered and R23
-// costs no request (repo-discovery R7, AC8). This call remains for the one case discovery cannot
-// answer: a record persisted before discovery carried the field, reloaded warm so no pass has
-// refreshed it. Answering with a guess there would put the form on the wrong ref, which R4 says must
-// never be ambiguous, so one request is the right price for that session.
+// costs no request (repo-discovery R7a, AC7). This call remains for the case discovery cannot
+// answer: a record persisted before discovery carried the field. Nothing refreshes such a record on
+// a warm start, so that session keeps paying this request per form open until the local-store is
+// rebuilt (issue #100). Answering with a guess instead would put the form on the wrong ref, which R4
+// says must never be ambiguous, so one request is the right price.
 func (c ClientFetch) DefaultBranch(repo domain.RepoID) (string, error) {
 	resp, err := c.client.Request(http.MethodGet, "repos/"+repo.Owner+"/"+repo.Name, nil)
 	if err != nil {
@@ -133,9 +135,9 @@ func (c ClientFetch) Environments(repo domain.RepoID) ([]string, error) {
 // form only needed for convenience. A branches failure is an error, because a picker with no
 // branches is not a picker.
 //
-// Each side is one page at the API's ceiling. A repository with more refs than that lists the first
-// page, and R23's default branch is reachable regardless because the pane holds it as the ref before
-// the picker is ever opened.
+// Both listings follow the Link header's rel="next" to exhaustion, the same walk discovery's
+// enumeration takes. A single page would silently truncate a large repository's branches, and the
+// truncation is not harmless: the ref the picker opened on could be absent from the set it lists.
 func (c ClientFetch) Refs(repo domain.RepoID) ([]Ref, error) {
 	branches, err := c.refNames(refsPath(repo, "branches"))
 	if err != nil {
@@ -155,23 +157,40 @@ func (c ClientFetch) Refs(repo domain.RepoID) ([]Ref, error) {
 	return out, nil
 }
 
-// refNames reads a branch or tag listing, both of which are arrays of objects carrying a name. The
-// two endpoints differ in what else they carry and in nothing this reads.
+// refNames reads a branch or tag listing to exhaustion, both of which are arrays of objects carrying
+// a name. The two endpoints differ in what else they carry and in nothing this reads. It trusts
+// rel="next" rather than a count, exactly as discovery's enumeration does (ADR-0005), and stops when
+// the server stops offering a next page.
 func (c ClientFetch) refNames(path string) ([]string, error) {
+	var names []string
+	for path != "" {
+		page, next, err := c.refPage(path)
+		if err != nil {
+			return nil, err
+		}
+		names = append(names, page...)
+		path = next
+	}
+	return names, nil
+}
+
+// refPage reads one page of a branch or tag listing and returns its names and the next page's URL,
+// empty when the listing is exhausted. The caller owns the loop and this owns the body.
+func (c ClientFetch) refPage(path string) ([]string, string, error) {
 	resp, err := c.client.Request(http.MethodGet, path, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var payload []struct {
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	names := make([]string, 0, len(payload))
 	for _, p := range payload {
@@ -179,7 +198,7 @@ func (c ClientFetch) refNames(path string) ([]string, error) {
 			names = append(names, p.Name)
 		}
 	}
-	return names, nil
+	return names, ghlink.Next(resp.Header.Get("Link")), nil
 }
 
 // contentsPath is the Contents API endpoint for a file at a ref (R5). The ref is query-escaped so a

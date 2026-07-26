@@ -211,8 +211,14 @@ type Record struct {
 	// the dispatch form's ref picker defaults to it without spending a request of its
 	// own (workflow-dispatch R23, AC8). A record persisted before this field existed
 	// reloads with it empty, which reads as "not known here" rather than as a wrong
-	// branch: the dispatch pane then resolves the default branch itself, and the next
-	// pass fills the field in.
+	// branch: the dispatch pane resolves the default branch itself there, and lands on
+	// the right ref at the cost of one request per form open.
+	//
+	// Nothing repairs such a record in place. A warm start skips the pass, and Reprobe
+	// carries the previous record forward and updates only HasRuns, so the field stays
+	// empty until a full pass rewrites it or the local-store is deleted (local-store
+	// R11, and issue #100 for the carry-forward). The degradation is cost, not
+	// correctness.
 	DefaultBranch string `json:"default_branch"`
 
 	// Known is true once enumeration or adoption has recorded this repository's

@@ -454,10 +454,11 @@ func (m Model) openDispatch() (Model, tea.Cmd) {
 		Repo:     row.repo,
 		Workflow: row.wf,
 		Eligible: true,
-		// R23: the default branch rides the same enumeration payload the push gate above rides
-		// (repo-discovery R7), so pre-selecting it costs no request, exactly as the gate does
-		// (AC6, AC8). Where a record persisted before discovery carried the field names none,
-		// this is empty and the pane resolves the default branch itself rather than guessing.
+		// workflow-dispatch R23: the default branch rides the same enumeration payload the push
+		// gate above rides (repo-discovery R7a), so pre-selecting it costs no request, exactly as
+		// the gate does (workflow-dispatch AC6 and AC8). Where a record persisted before discovery
+		// carried the field names none, this is empty and the pane resolves the default branch
+		// itself rather than guessing.
 		Ref: repo.DefaultBranch,
 	})
 	return m, cmd
