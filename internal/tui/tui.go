@@ -30,6 +30,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/tui/approval"
 	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
@@ -161,6 +162,12 @@ type Model struct {
 	// key (ADR-0011: a setting reachable from any tab cannot belong to one). It is not a tab
 	// and not a fourth peer; the root holds it directly and routes keys to it while it is open.
 	settings settings.Model
+
+	// terminalDark is what the terminal last reported about its own background, which the
+	// auto theme derives its palette from (settings R6). It starts dark, which is gh's
+	// fallback and the set every view carried before the theme existed, and the terminal's
+	// answer replaces it as soon as it arrives.
+	terminalDark bool
 }
 
 // New returns the root over opts. The Feed occupies Runs and starts focused (R2); Storage and
@@ -208,25 +215,41 @@ func New(opts Options) Model {
 	// persister so it is the authority for the running instance (R17): it edits its own copy
 	// and writes changed keys back, and does not re-read the file while running.
 	set := settings.New(opts.Profile, opts.Config, opts.SaveSettings)
-	return Model{
+	m := Model{
 		tabs: []tab{
 			feedTab{m: f.SetActive(true)},
 			workflowsTab{m: wf},
 			storageTab{m: st},
 		},
-		active:      0,
-		profile:     opts.Profile,
-		updates:     opts.Updates,
-		readout:     opts.Readout,
-		repos:       opts.Repos,
-		revalidated: opts.Revalidated,
-		settings:    set,
+		active:       0,
+		profile:      opts.Profile,
+		updates:      opts.Updates,
+		readout:      opts.Readout,
+		repos:        opts.Repos,
+		revalidated:  opts.Revalidated,
+		settings:     set,
+		terminalDark: true,
 	}
+	// The palette is applied at construction so the first frame is already painted in the
+	// theme the config resolved, rather than repainting once the terminal answers (R6).
+	return m.applyPalette()
 }
 
-// Init starts the engine adapter and the coarse tick.
+// applyPalette resolves the theme the Settings pane holds against the terminal's reported
+// background and makes it the palette every view paints with (settings R6). The pane is the
+// authority for the running instance (R17), so this reads its config rather than the one the
+// root was constructed with, which is what makes a theme change apply from the next frame.
+func (m Model) applyPalette() Model {
+	palette.Use(palette.ResolveAppearance(m.settings.Config().Theme, m.terminalDark))
+	return m
+}
+
+// Init starts the engine adapter and the coarse tick, and asks the terminal for its
+// background colour so the auto theme has something to derive its palette from (R6). The
+// query is a message rather than a blocking read, so a terminal that never answers costs
+// nothing and the dark default stands.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.listen(), tickCmd())
+	return tea.Batch(m.listen(), tickCmd(), tea.RequestBackgroundColor)
 }
 
 // listen is ADR-0015's receive-one-then-reschedule adapter: it blocks on the engine
@@ -267,6 +290,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.BackgroundColorMsg:
+		// The terminal answered the query Init sent. An auto theme follows it, as gh does,
+		// and an explicit dark or light ignores it (settings R6). It is broadcast onward
+		// like any other data message, so a component that wants it is not cut off.
+		m.terminalDark = msg.IsDark()
+		next, cmd := m.applyPalette().broadcast(msg)
+		return next, cmd
 
 	case scheduler.Event:
 		// Every member of ADR-0015's catalog travels the one channel and takes the one
@@ -312,7 +343,9 @@ func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.settings.IsOpen() {
 		var cmd tea.Cmd
 		m.settings, cmd = m.settings.Update(k)
-		return m, cmd
+		// A theme change applies from the next frame rather than the next launch, the second
+		// setting the running view applies to itself after the keybinding profile (R17).
+		return m.applyPalette(), cmd
 	}
 	if m.tabs[m.active].CapturesInput() {
 		return m.routeKeyToActive(k)

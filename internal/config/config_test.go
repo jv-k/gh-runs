@@ -341,6 +341,88 @@ func TestKeybindingProfileRejectsThird(t *testing.T) {
 	}
 }
 
+// TestThemeDefaultsToAuto pins settings R6 and AC1: with no config file the theme is
+// auto, the member that derives its palette from the terminal background as gh does,
+// and the rest of the defaults are undisturbed (R3).
+func TestThemeDefaultsToAuto(t *testing.T) {
+	dir := t.TempDir()
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, diags := config.Load(env, config.Flags{})
+
+	if len(diags) != 0 {
+		t.Fatalf("Load with no config file returned diagnostics: %v", diags)
+	}
+	if cfg.Theme != config.ThemeAuto {
+		t.Fatalf("Theme = %q, want the default %q", cfg.Theme, config.ThemeAuto)
+	}
+	if cfg.Budget != config.TierNormal || cfg.KeybindingProfile != config.KeybindingStandard {
+		t.Fatalf("adding the theme disturbed another default: %+v", cfg)
+	}
+}
+
+// TestThemeReadFromFile pins that each of R6's explicit members is read back, so a
+// person who wrote dark or light gets it rather than the auto default.
+func TestThemeReadFromFile(t *testing.T) {
+	for _, want := range []config.Theme{config.ThemeDark, config.ThemeLight, config.ThemeAuto} {
+		dir := t.TempDir()
+		writeConfig(t, dir, "theme: "+string(want)+"\n")
+		env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+		cfg, diags := config.Load(env, config.Flags{})
+
+		if len(diags) != 0 {
+			t.Fatalf("a valid theme should emit no diagnostic, got: %v", diags)
+		}
+		if cfg.Theme != want {
+			t.Fatalf("Theme = %q, want %q", cfg.Theme, want)
+		}
+	}
+}
+
+// TestInvalidThemeRejected pins settings R6 and R14: the set is small and fixed, so a
+// value outside it keeps the auto default and produces one actionable diagnostic naming
+// every valid member, the shape AC4 fixes for the keybinding profile.
+func TestInvalidThemeRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "theme: solarized\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, diags := config.Load(env, config.Flags{})
+
+	if cfg.Theme != config.ThemeAuto {
+		t.Fatalf("Theme = %q, want the default %q to stand after a rejection", cfg.Theme, config.ThemeAuto)
+	}
+	if len(diags) != 1 {
+		t.Fatalf("want exactly one diagnostic, got %d: %v", len(diags), diags)
+	}
+	for _, want := range []string{"solarized", "auto", "dark", "light"} {
+		if !strings.Contains(diags[0].Message, want) {
+			t.Fatalf("diagnostic %q does not mention %q", diags[0].Message, want)
+		}
+	}
+}
+
+// TestThemesAreTheValidatedSet pins that the exported accessor the Settings view cycles
+// is the set Load validates against, so the view can never offer a member the loader
+// would reject, and that a caller cannot reorder the loader's own registry.
+func TestThemesAreTheValidatedSet(t *testing.T) {
+	got := config.Themes()
+	want := []config.Theme{config.ThemeAuto, config.ThemeDark, config.ThemeLight}
+	if len(got) != len(want) {
+		t.Fatalf("Themes() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Themes() = %v, want %v", got, want)
+		}
+	}
+	got[0] = "tampered"
+	if config.Themes()[0] != config.ThemeAuto {
+		t.Fatal("Themes() handed out the registry itself; a caller must not be able to change it")
+	}
+}
+
 // TestUnknownKeyWarnsAndContinues pins settings R14/AC7: an unrecognised key
 // produces a generic diagnostic naming it and does not fail the run, so the
 // defaults stand and a future 2.1 key can arrive without a migration.

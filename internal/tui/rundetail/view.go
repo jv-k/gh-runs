@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
 
@@ -38,37 +39,37 @@ const (
 // the only evidence on screen that anything happened (R17, R19).
 var (
 	styleIdentity  = lipgloss.NewStyle().Bold(true)
-	styleRunNumber = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
-	styleBadge     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffaf00"))
+	styleRunNumber = lipgloss.NewStyle().Foreground(palette.Muted)
+	styleBadge     = lipgloss.NewStyle().Bold(true).Foreground(palette.Attention)
 	styleHeader    = lipgloss.NewStyle().Bold(true)
-	styleDim       = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
-	styleStepName  = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
-	styleDeleted   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ff5f5f"))
-	stylePaused    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ff5f5f"))
+	styleDim       = lipgloss.NewStyle().Foreground(palette.Muted)
+	styleStepName  = lipgloss.NewStyle().Foreground(palette.Muted)
+	styleDeleted   = lipgloss.NewStyle().Bold(true).Foreground(palette.Danger)
+	stylePaused    = lipgloss.NewStyle().Bold(true).Foreground(palette.Danger)
 )
 
 // statusColour maps each known Status to a distinct colour (R6's principle, applied in the
 // pane). An unknown Status renders in the default foreground, verbatim.
-var statusColour = map[domain.Status]string{
-	domain.StatusQueued:     "#d7af00",
-	domain.StatusInProgress: "#00afff",
-	domain.StatusCompleted:  "#8a8a8a",
-	domain.StatusWaiting:    "#af87ff",
-	domain.StatusRequested:  "#00d7af",
-	domain.StatusPending:    "#ffaf00",
+var statusColour = map[domain.Status]palette.Colour{
+	domain.StatusQueued:     palette.Queued,
+	domain.StatusInProgress: palette.Accent,
+	domain.StatusCompleted:  palette.Muted,
+	domain.StatusWaiting:    palette.Waiting,
+	domain.StatusRequested:  palette.Requested,
+	domain.StatusPending:    palette.Attention,
 }
 
 // conclusionColour maps each known Conclusion to a distinct colour.
-var conclusionColour = map[domain.Conclusion]string{
-	domain.ConclusionSuccess:        "#5faf5f",
-	domain.ConclusionFailure:        "#ff5f5f",
-	domain.ConclusionCancelled:      "#8a8a8a",
-	domain.ConclusionSkipped:        "#8a8a8a",
-	domain.ConclusionTimedOut:       "#ff875f",
-	domain.ConclusionNeutral:        "#8a8a8a",
-	domain.ConclusionActionRequired: "#ffaf00",
-	domain.ConclusionStale:          "#8a8a8a",
-	domain.ConclusionStartupFailure: "#ff5f5f",
+var conclusionColour = map[domain.Conclusion]palette.Colour{
+	domain.ConclusionSuccess:        palette.Passed,
+	domain.ConclusionFailure:        palette.Danger,
+	domain.ConclusionCancelled:      palette.Muted,
+	domain.ConclusionSkipped:        palette.Muted,
+	domain.ConclusionTimedOut:       palette.Warn,
+	domain.ConclusionNeutral:        palette.Muted,
+	domain.ConclusionActionRequired: palette.Attention,
+	domain.ConclusionStale:          palette.Muted,
+	domain.ConclusionStartupFailure: palette.Danger,
 }
 
 // View renders the pane to a frame from held state alone, with no live terminal and no
@@ -298,7 +299,7 @@ func concludedText(status domain.Status, c domain.Conclusion) string {
 // value so it renders verbatim rather than being collapsed to a word.
 func statusStyle(s domain.Status) lipgloss.Style {
 	if c, ok := statusColour[s]; ok {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(c))
+		return lipgloss.NewStyle().Foreground(c)
 	}
 	return lipgloss.NewStyle()
 }
@@ -307,7 +308,7 @@ func statusStyle(s domain.Status) lipgloss.Style {
 // unrecognised value.
 func conclusionStyle(c domain.Conclusion) lipgloss.Style {
 	if col, ok := conclusionColour[c]; ok {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(col))
+		return lipgloss.NewStyle().Foreground(col)
 	}
 	return lipgloss.NewStyle()
 }

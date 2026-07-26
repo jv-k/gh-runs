@@ -1,6 +1,8 @@
 package settings_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,6 +22,7 @@ func defaultConfig() config.Config {
 		BreakerFailures:         50,
 		DiscoveryRefreshMinutes: 5,
 		KeybindingProfile:       config.KeybindingStandard,
+		Theme:                   config.ThemeAuto,
 		WorkflowsScope:          config.ScopeAllRepos,
 		StorageScope:            config.ScopeAllRepos,
 	}
@@ -177,6 +180,95 @@ func TestCyclesBudgetTier(t *testing.T) {
 		m = send(m, "space")
 		if m.Config().Budget != w {
 			t.Fatalf("Budget = %q, want %q after a cycle", m.Config().Budget, w)
+		}
+	}
+}
+
+// TestCyclesTheme pins settings R6 and R17: the theme selector cycles through exactly the
+// three members config validates, wraps, and persists each change. The view and the file
+// are the same setting, so a member the loader would reject can never be reached here.
+func TestCyclesTheme(t *testing.T) {
+	r := &recorder{}
+	m := focus(t, open(r), "theme")
+
+	if m.Config().Theme != config.ThemeAuto {
+		t.Fatalf("Theme = %q, want the default %q", m.Config().Theme, config.ThemeAuto)
+	}
+	for _, want := range []config.Theme{config.ThemeDark, config.ThemeLight, config.ThemeAuto} {
+		m = send(m, "space")
+		if m.Config().Theme != want {
+			t.Fatalf("Theme = %q, want %q after a cycle", m.Config().Theme, want)
+		}
+		if len(r.saved) == 0 || r.last().Theme != want {
+			t.Fatalf("cycling the theme to %q did not persist it (R17)", want)
+		}
+	}
+	if m.Config().KeybindingProfile != config.KeybindingStandard {
+		t.Errorf("cycling the theme disturbed another setting: %+v", m.Config())
+	}
+}
+
+// TestThemeEditWritesOnlyThatKey pins settings AC11 through the real persister rather than
+// the recorder: cycling the theme in the view and leaving writes theme and nothing else,
+// with unrelated comments, key order and unknown keys intact in the file.
+func TestThemeEditWritesOnlyThatKey(t *testing.T) {
+	dir := t.TempDir()
+	appDir := filepath.Join(dir, "gh-runs")
+	if err := os.MkdirAll(appDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := "# My gh-runs config\n" +
+		"budget: normal # a share of the allowance\n" +
+		"theme: auto\n" +
+		"future_thing: 42\n"
+	path := filepath.Join(appDir, "config.yml")
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := func(key string) (string, bool) {
+		if key == "XDG_CONFIG_HOME" {
+			return dir, true
+		}
+		return "", false
+	}
+	save := func(prev, next config.Config) error { return config.Save(env, prev, next) }
+
+	m := settings.New(keys.Standard, defaultConfig(), save).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = send(focus(t, m, "theme"), "space")
+	m = send(m, "esc") // leave the pane, as quitting does
+
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(written)
+	if !strings.Contains(got, "theme: dark") {
+		t.Errorf("the view did not write the theme it holds (%q):\n%s", m.Config().Theme, got)
+	}
+	for _, want := range []string{
+		"# My gh-runs config",
+		"budget: normal",
+		"a share of the allowance",
+		"future_thing: 42",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the write discarded %q (R17, AC11):\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "budget") > strings.Index(got, "theme") {
+		t.Errorf("the write reordered the keys; budget must stay first:\n%s", got)
+	}
+}
+
+// TestThemeRowIsRendered pins settings R6, R17 and AC12: the view carries a theme row
+// showing the current member and, when focused, the set it cycles through, so the Settings
+// view and the config file are the same settings.
+func TestThemeRowIsRendered(t *testing.T) {
+	view := strings.ToLower(focus(t, open(&recorder{}), "theme").View())
+	for _, want := range []string{"theme", "auto", "dark", "light"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the Settings view does not render %q on the theme row (R6, AC12):\n%s", want, view)
 		}
 	}
 }

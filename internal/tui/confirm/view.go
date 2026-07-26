@@ -8,6 +8,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
 
@@ -33,12 +34,12 @@ const (
 // over View() is byte-stable on any machine (ADR-0013).
 var (
 	styleTitle   = lipgloss.NewStyle().Bold(true)
-	styleWarn    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ff875f"))
+	styleWarn    = lipgloss.NewStyle().Bold(true).Foreground(palette.Warn)
 	stylePrompt  = lipgloss.NewStyle().Bold(true)
-	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
+	styleDim     = lipgloss.NewStyle().Foreground(palette.Muted)
 	styleHeader  = lipgloss.NewStyle().Bold(true)
-	styleTyped   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00afff"))
-	styleArchive = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff5f5f"))
+	styleTyped   = lipgloss.NewStyle().Bold(true).Foreground(palette.Accent)
+	styleArchive = lipgloss.NewStyle().Foreground(palette.Danger)
 )
 
 // View renders the pane from held state alone, with no live terminal and no network

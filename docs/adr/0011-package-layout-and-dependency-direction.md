@@ -14,6 +14,7 @@ The canon says what to build and never says where the code goes. Sixteen feature
     ├── keys/                Both keybinding profiles, as data. Imports nothing, see below.
     ├── filter/              The filter engine. Predicates over Runs, see below.
     ├── config/              settings, as a file and as precedence. Not the view.
+    ├── palette/             The two colour sets the theme chooses between, and the colour profile. See below.
     ├── ghclient/            go-gh construction, host qualification, the GH_TOKEN contract.
     ├── store/               local-store. The RoundTripper, ETags, payloads.
     ├── governor/            rate-governor. Paces writes, publishes the Budget Readout.
@@ -53,6 +54,7 @@ Expanded, the edges that matter:
 | `keys` | nothing internal | anything |
 | `config` | `domain` | everything but `domain` |
 | `filter` | `domain` | everything but `domain` |
+| `palette` | `config` | everything but `config` |
 | `notify` | `domain` | everything but `domain` |
 | `ghclient` | `domain` | `store`, `governor` |
 | `store` | `domain`, `clock` | `ghclient`, `governor`, `scheduler` |
@@ -68,6 +70,14 @@ Expanded, the edges that matter:
 **`clock` imports nothing, and anything may import it.** The injected clock is needed by `store` (local-store R17), `governor` (rate-governor R21), `scheduler` (polling-scheduler R20), `discovery` (repo-discovery R21) and `ops` (purge R27, run-lifecycle R26). `domain` is the only other package that imports nothing, and it is the wrong home: this ADR declares `domain` free of I/O, and reading the wall clock is I/O wearing a very small hat. A package of its own costs one directory and keeps that declaration true.
 
 **`keys` is a package for the same reason `clock` is one, and it is a package rather than a tab's private code for the same reason `filter` is.** [live-run-feed](../features/live-run-feed/requirements.md) R7a declares both profiles as one registry, and its AC18 asserts a property over the whole of it ("no binding in either uses Cmd"). That assertion is over a data table and needs no terminal, so filing it under `tui` would put a pure enumeration in the one subtree whose tests exist to paint frames. It imports nothing of ours and everything above it may read it, which is `clock`'s shape exactly. `key.Binding` comes from `charm.land/bubbles/v2/key`, so the package depends on bubbles and on nothing else.
+
+**`palette` is a package for the reason `config` is not the Settings view.** [settings](../features/settings/requirements.md) R6's theme picks a colour set and R15a's resolver picks a colour profile, and both are presentation rather than file, precedence or defaults. Putting them in `config` would work and would put a colour library in the import path of `governor`, `scheduler`, `ops` and `cli`, every one of which merely reads a setting. So `palette` holds the two colour sets and the profile ladder, it imports `config` for the Theme and the Env and nothing else of ours, and `main.go` and every `tui` package read it. The arrow runs one way, exactly as `filter`'s does.
+
+**A colour role resolves as it renders, and that is what lets the theme reach a package-level style.** A role is a pair, a dark value and a light one, behind a `color.Color` whose resolution reads an ambient appearance. The appearance is written three times in a run, on construction, on the terminal's background answer, and on a theme change in the Settings view, all three on the update loop, and it is read on every frame.
+
+**lipgloss v2's own recommendation was tried first and it cannot reach a package-level style, which is the whole argument.** `lipgloss.LightDark(isDark)` returns a function, so a colour resolved through it needs the flag in scope at the point of the call. Every view here declares its styles as package-level `var`s, 77 of them, and the flag is not in scope there. Adopting it therefore means threading a palette through 10 constructors and 202 call sites, all of them in view code the goldens cover, to move a value that changes three times a run.
+
+**The shape we took is lipgloss's `compat` package, and that package labels itself a compatibility shim rather than the v2 pattern.** Its own documentation says it "is impure because it uses global variables, is not thread-safe, and only works with the default standard I/O streams", and the v2 upgrade guide marks `LightDark` recommended against compat's quick path. Three differences make the shape safe here where compat's is not. Ours is atomic where compat's is a plain variable. Ours reads no I/O stream, because the terminal's background arrives as a Bubble Tea message rather than a query. And the only `View()` call site in Bubble Tea v2 runs immediately after `Update` on the same goroutine, so no frame can be rendered while a write is in flight. **A future maintainer should read this as a decision that holds while those three hold, and not as charm endorsing ambient colour state.** The setter returns its restore, so a golden may take a frame under either appearance without leaking one into the next test.
 
 **`filter` is a package, not a tab's private code.** [cli-surface](../features/cli-surface/requirements.md) says the Feed's "filter engine has to exist regardless. Flags are a thin adapter over it", and names [live-run-feed](../features/live-run-feed/requirements.md) as its owner. That cannot mean `tui/feed` owns it, because `cli` would have to import a tab and nothing imports `tui`. So the engine is `internal/filter`, over `domain` alone, and `cli`, `ops` and `tui/feed` are three consumers of one implementation. It precedes all three. [ADR-0016](./0016-the-filter-representation.md) later added a fourth: the Feed's filters are applied server-side and the scheduler owns the polls, so the scheduler's control surface takes the active Filter, and its row above carries `filter`.
 

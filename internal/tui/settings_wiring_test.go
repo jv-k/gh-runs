@@ -19,6 +19,7 @@ func wiringConfig() config.Config {
 		BreakerFailures:         50,
 		DiscoveryRefreshMinutes: 5,
 		KeybindingProfile:       config.KeybindingStandard,
+		Theme:                   config.ThemeAuto,
 		WorkflowsScope:          config.ScopeAllRepos,
 		StorageScope:            config.ScopeAllRepos,
 	}

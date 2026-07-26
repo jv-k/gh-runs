@@ -44,6 +44,7 @@ type row int
 const (
 	rowBudget row = iota
 	rowProfile
+	rowTheme
 	rowWorkflowsScope
 	rowStorageScope
 	rowConfirmThreshold
@@ -56,7 +57,7 @@ const (
 // as opposed to a numeric row that opens an editor (enter).
 func (r row) isSelector() bool {
 	switch r {
-	case rowBudget, rowProfile, rowWorkflowsScope, rowStorageScope:
+	case rowBudget, rowProfile, rowTheme, rowWorkflowsScope, rowStorageScope:
 		return true
 	default:
 		return false
@@ -82,6 +83,8 @@ func (r row) configKey() string {
 		return "budget"
 	case rowProfile:
 		return "keybinding_profile"
+	case rowTheme:
+		return "theme"
 	case rowWorkflowsScope:
 		return "workflows_scope"
 	case rowStorageScope:
@@ -256,6 +259,8 @@ func (m Model) applyCycle() Model {
 		if p, ok := keys.ForName(string(m.cfg.KeybindingProfile)); ok {
 			m.profile = p
 		}
+	case rowTheme:
+		m.cfg.Theme = nextTheme(m.cfg.Theme)
 	case rowWorkflowsScope:
 		m.cfg.WorkflowsScope = nextScope(m.cfg.WorkflowsScope)
 	case rowStorageScope:
@@ -314,9 +319,9 @@ func clampRow(r row) row {
 	return r
 }
 
-// nextTier, nextProfile and nextScope advance a value to the next in its valid set,
-// wrapping, over the exported set config validates against so the view offers exactly what
-// the loader accepts (R5, R8, R19).
+// nextTier, nextProfile, nextTheme and nextScope advance a value to the next in its valid
+// set, wrapping, over the exported set config validates against so the view offers exactly
+// what the loader accepts (R5, R6, R8, R19).
 func nextTier(t config.Tier) config.Tier {
 	set := config.Tiers()
 	for i, v := range set {
@@ -331,6 +336,16 @@ func nextProfile(p config.KeybindingProfile) config.KeybindingProfile {
 	set := config.KeybindingProfiles()
 	for i, v := range set {
 		if v == p {
+			return set[(i+1)%len(set)]
+		}
+	}
+	return set[0]
+}
+
+func nextTheme(t config.Theme) config.Theme {
+	set := config.Themes()
+	for i, v := range set {
+		if v == t {
 			return set[(i+1)%len(set)]
 		}
 	}

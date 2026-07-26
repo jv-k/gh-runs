@@ -3,6 +3,7 @@
 
   Budget                    [1;38;2;0;175;255mnormal[m
   Keybinding profile        [1;38;2;0;175;255mvim[m
+  Theme                     [1;38;2;0;175;255mdark[m
   Workflows scope           [1;38;2;0;175;255mthis-repo[m
   Storage scope             [1;38;2;0;175;255mthis-repo[m
   Confirmation threshold    [1;38;2;0;175;255m50[m

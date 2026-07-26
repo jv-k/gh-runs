@@ -178,13 +178,49 @@ func scopeList() string {
 	return strings.Join(names, ", ")
 }
 
-// Tiers, KeybindingProfiles and Scopes return the valid values of each selector
+// Theme selects the palette. There are exactly three: auto derives it from the terminal
+// background as gh does, and dark and light state it outright (settings R6). The set is
+// small and fixed rather than a gallery, and NO_COLOR overrides every member of it (R15),
+// which ColorProfile enforces.
+type Theme string
+
+const (
+	ThemeAuto  Theme = "auto"
+	ThemeDark  Theme = "dark"
+	ThemeLight Theme = "light"
+)
+
+// themes is the valid theme set, the single source for validation and the diagnostic
+// that lists the valid values (R6, R14). auto leads because it is the default.
+var themes = []Theme{ThemeAuto, ThemeDark, ThemeLight}
+
+// valid reports whether t is one of the three recognised themes.
+func (t Theme) valid() bool {
+	for _, v := range themes {
+		if t == v {
+			return true
+		}
+	}
+	return false
+}
+
+// themeList renders the valid themes for a diagnostic (R14).
+func themeList() string {
+	names := make([]string, len(themes))
+	for i, t := range themes {
+		names[i] = string(t)
+	}
+	return strings.Join(names, ", ")
+}
+
+// Tiers, KeybindingProfiles, Scopes and Themes return the valid values of each selector
 // setting in the order the diagnostics list them, exported so the Settings view offers
 // exactly the set Load validates against and cycles it in a documented order. Each
 // returns a copy, so a caller cannot reorder or extend the registry the loader reads.
 func Tiers() []Tier                           { return append([]Tier(nil), tiers...) }
 func KeybindingProfiles() []KeybindingProfile { return append([]KeybindingProfile(nil), profiles...) }
 func Scopes() []Scope                         { return append([]Scope(nil), scopes...) }
+func Themes() []Theme                         { return append([]Theme(nil), themes...) }
 
 // Config is the resolved settings the rest of the tool reads.
 type Config struct {
@@ -205,6 +241,10 @@ type Config struct {
 	// KeybindingProfile selects the motion set, Standard or Vim (settings R5). An
 	// unrecognised profile is rejected and the default stands.
 	KeybindingProfile KeybindingProfile
+	// Theme selects the palette: auto, dark or light, defaulting to auto (settings R6).
+	// An unrecognised theme is rejected and the default stands. It never reaches whether
+	// colour is emitted at all, which is NO_COLOR's to decide (R15, ColorProfile).
+	Theme Theme
 	// WorkflowsScope and StorageScope are the two tabs' independent repository scopes
 	// (settings R19). Each is all-repos or this-repo, defaults to all-repos, and is
 	// settable without disturbing the other. An unrecognised value is rejected and the
@@ -233,6 +273,7 @@ func Load(env Env, flags Flags) (Config, []Diagnostic) {
 		BreakerFailures:         breakerFailuresDefault,
 		DiscoveryRefreshMinutes: discoveryRefreshDefault,
 		KeybindingProfile:       KeybindingStandard,
+		Theme:                   ThemeAuto,
 		WorkflowsScope:          ScopeAllRepos,
 		StorageScope:            ScopeAllRepos,
 	}
@@ -341,6 +382,19 @@ func resolveFile(cfg Config, data []byte, diags []Diagnostic) (Config, []Diagnos
 				diags = append(diags, Diagnostic{Message: fmt.Sprintf(
 					"keybinding_profile: %q is not a valid profile; using %q. Valid profiles: %s",
 					string(p), KeybindingStandard, profileList())})
+			}
+		case "theme":
+			var t Theme
+			if node.Decode(&t) != nil {
+				diags = append(diags, typeErr(key, "one of "+themeList(), node))
+			} else if t.valid() {
+				cfg.Theme = t
+			} else {
+				// The set is small and fixed, so a fourth member is rejected rather than
+				// adopted, and the message names every valid one (R6, R14).
+				diags = append(diags, Diagnostic{Message: fmt.Sprintf(
+					"theme: %q is not a valid theme; using %q. Valid themes: %s",
+					string(t), ThemeAuto, themeList())})
 			}
 		case "workflows_scope":
 			cfg.WorkflowsScope, diags = resolveScope(key, node, cfg.WorkflowsScope, diags)
@@ -539,6 +593,7 @@ func changedKeys(prev, next Config) []change {
 	add(prev.BreakerFailures != next.BreakerFailures, "purge_breaker_failures", next.BreakerFailures)
 	add(prev.DiscoveryRefreshMinutes != next.DiscoveryRefreshMinutes, "discovery_refresh_minutes", next.DiscoveryRefreshMinutes)
 	add(prev.KeybindingProfile != next.KeybindingProfile, "keybinding_profile", string(next.KeybindingProfile))
+	add(prev.Theme != next.Theme, "theme", string(next.Theme))
 	add(prev.WorkflowsScope != next.WorkflowsScope, "workflows_scope", string(next.WorkflowsScope))
 	add(prev.StorageScope != next.StorageScope, "storage_scope", string(next.StorageScope))
 	return changes

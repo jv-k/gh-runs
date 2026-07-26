@@ -8,6 +8,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/tui/settings"
 )
 
@@ -16,6 +17,11 @@ import (
 // environment, so these bytes are stable on any machine (ADR-0013). One of them is AC12's
 // absence assertion, made byte-exact here and by name in TestRejectedSettingsNeverAppear.
 // Regenerate with: go test ./internal/tui/settings/ -run Golden -update.
+//
+// **No test in this package may take t.Parallel.** The palette's appearance is ambient
+// (ADR-0011), so every golden but the light one is taken under the default dark set, and a
+// parallel test holding Light would paint another test's frame in the wrong palette. The
+// failure is a golden diff of colour bytes with nothing in it to say why.
 
 // TestGoldenDefaultView fixes the view a fresh install shows: every setting at its default,
 // the Budget row focused, the discovery refresh row present (AC12), and no row for any of
@@ -26,14 +32,42 @@ func TestGoldenDefaultView(t *testing.T) {
 	goldie.New(t).Assert(t, "default_view", []byte(m.View()))
 }
 
+// TestGoldenThemeFocused fixes the theme row under the cursor: the member in force, the
+// three the set offers, and the intent-level description, which is what makes AC12's
+// "renders a theme row" byte-exact rather than a claim (settings R6, R18).
+func TestGoldenThemeFocused(t *testing.T) {
+	m := settings.New(keys.Standard, defaultConfig(), nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focusWith(t, m, "down", "theme")
+	goldie.New(t).Assert(t, "theme_focused", []byte(m.View()))
+}
+
+// TestGoldenLightPalette fixes the same frame under the light palette, which is the theme
+// setting's whole observable effect (settings R6). Every other golden in the suite is taken
+// under the dark palette, the default, so this one is where the light set is pinned: the
+// text and the layout are the dark golden's, and every colour differs.
+func TestGoldenLightPalette(t *testing.T) {
+	// The default is left behind rather than restored, so a stray appearance stops here
+	// rather than walking forward into the next test.
+	defer palette.Use(palette.Dark)
+	palette.Use(palette.Light)
+
+	m := settings.New(keys.Standard, defaultConfig(), nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focusWith(t, m, "down", "theme")
+	goldie.New(t).Assert(t, "theme_focused_light", []byte(m.View()))
+}
+
 // TestGoldenEditingNumber fixes the numeric editor mid-entry: the discovery refresh row is
-// being typed, showing the buffer and caret, with the two scopes flipped to this-repo and
-// the profile on Vim, so the frame also proves the non-default values render (R12, R19, R20).
+// being typed, showing the buffer and caret, with the two scopes flipped to this-repo, the
+// profile on Vim and the theme on dark, so the frame also proves the non-default values
+// render (R6, R12, R19, R20).
 func TestGoldenEditingNumber(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.WorkflowsScope = config.ScopeThisRepo
 	cfg.StorageScope = config.ScopeThisRepo
 	cfg.KeybindingProfile = config.KeybindingVim
+	cfg.Theme = config.ThemeDark
 	m := settings.New(keys.Vim, cfg, nil).Open()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = focusWith(t, m, "j", "discovery_refresh_minutes")

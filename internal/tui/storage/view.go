@@ -10,6 +10,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
 
@@ -34,13 +35,17 @@ const (
 var (
 	styleTitle     = lipgloss.NewStyle().Bold(true)
 	styleHeader    = lipgloss.NewStyle().Bold(true)
-	styleDim       = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a"))
-	styleTombstone = lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a")) // a Tombstone reclaims nothing (R9)
-	styleCache     = lipgloss.NewStyle().Foreground(lipgloss.Color("#5fafff"))
-	styleArtifact  = lipgloss.NewStyle().Foreground(lipgloss.Color("#87d787"))
-	styleSelected  = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffaf00"))
-	styleWarn      = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff875f"))
-	styleArchived  = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff5f5f"))
+	styleDim       = lipgloss.NewStyle().Foreground(palette.Muted)
+	styleTombstone = lipgloss.NewStyle().Foreground(palette.Muted) // a Tombstone reclaims nothing (R9)
+	styleCache     = lipgloss.NewStyle().Foreground(palette.Selected)
+	styleArtifact  = lipgloss.NewStyle().Foreground(palette.Positive)
+	// styleSelected deliberately does not take palette.Selected: this tab paints its Cache
+	// rows in that role already, so a selection in it would be invisible. The role names the
+	// colour, never the row, and swapping this to palette.Selected is a behaviour change that
+	// the Storage golden will report as a diff rather than as the bug it is.
+	styleSelected = lipgloss.NewStyle().Foreground(palette.Attention)
+	styleWarn     = lipgloss.NewStyle().Foreground(palette.Warn)
+	styleArchived = lipgloss.NewStyle().Foreground(palette.Danger)
 )
 
 // View renders the tab from held state alone, with no live terminal and no network (R25).
