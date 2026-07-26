@@ -145,6 +145,28 @@ func TestWorkflowToggleSkipsIneligibleWithoutTouchingTheWire(t *testing.T) {
 	}
 }
 
+// TestWorkflowToggleForbiddenReportsTheAPIReason pins R7 against the measured authorization
+// 403: a toggle the API rejects for permissions is one PUT and one failure carrying the
+// API's own words, never a rate limit. Enable and disable are documented on the workflows
+// page, so the doc URL names the Workflow rather than the /disable segment the path ends in,
+// and the governor reads it as authorization on the first response (rate-governor open
+// question 1). None of purge R19a's three backoffs is spent on it, and the tab has a reason
+// to surface rather than a generic rejection (AC3).
+func TestWorkflowToggleForbiddenReportsTheAPIReason(t *testing.T) {
+	h := newHarness(t, "workflow_toggle_forbidden", 50, 50)
+	sum := runToggle(t, h, ops.OpDisable, activeWorkflow(9002, "o", "r"), snapshot(writableRepo("o", "r")))
+
+	if got := h.counting.countMethod("PUT"); got != 1 {
+		t.Errorf("issued %d PUTs, want 1; an authorization 403 must not spend R19a's backoffs (R7)", got)
+	}
+	if sum.FailedCount() != 1 || sum.Acted != 0 || sum.Skipped != 0 {
+		t.Errorf("summary = failed %d, acted %d, skipped %d; want 1/0/0 (R7)", sum.FailedCount(), sum.Acted, sum.Skipped)
+	}
+	if len(sum.Failures) != 1 || !strings.Contains(sum.Failures[0].Reason, "Resource not accessible by personal access token") {
+		t.Errorf("failure groups = %+v, want one carrying the API's own 403 text (R7, AC3)", sum.Failures)
+	}
+}
+
 // TestWorkflowToggleFrictionIsNone pins that enable and disable price at FrictionNone, the
 // no-confirmation level a reversible toggle takes (R5, R8): the workflow-management canon asks
 // for no graduated confirmation, so ToggleWorkflow confirms with NoInput and shows no modal.

@@ -1,0 +1,145 @@
+---
+version: 2
+# A repository fetch has no sub-path, so its last segment is the repository's NAME,
+# which the user chose. Discovery's R22 adoption and the Dispatch form both issue this
+# request. If a name reached the doc-URL correspondence test, a user owning a repository
+# called "rest" or "overview" would turn a genuine secondary limit into an authorization
+# reading, and open question 1 is emphatic about that direction: the governor would not
+# back off, would not hold, and would keep issuing into the limit.
+#
+# Each response here is a real secondary-limit shape: no Retry-After, a healthy
+# x-ratelimit-remaining, and a documentation_url pointing at a rate-limit page. Every one
+# must classify as rate limiting however the repository is named.
+interactions:
+    # The current rate-limits page against a repository named "rest". The classifier
+    # already requires the doc path to contain /rest, so this name is the sharpest case.
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/someone/rest
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","documentation_url":"https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4952"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # The legacy page GitHub still emits, against a repository named "overview", which is
+    # a whole path segment of it. A segment comparison alone would read this as
+    # authorization, which is why only a known resource noun may match at all.
+    - id: 1
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/someone/overview
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","documentation_url":"https://docs.github.com/rest/overview/resources-in-the-rest-api#secondary-rate-limits"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4951"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # A repository named "resources", which the singular step would reduce to "resource",
+    # a substring of resources-in-the-rest-api. The widening must not open a door here.
+    - id: 2
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/someone/resources
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","documentation_url":"https://docs.github.com/free-pro-team@latest/rest/overview/resources-in-the-rest-api#secondary-rate-limits"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4950"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # A Workflow file the Dispatch form reads, in a repository whose YAML sits under a
+    # directory named rest. The contents endpoint puts a user-chosen path in the terminal
+    # position too, so the same rule has to cover it.
+    - id: 3
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/repos/someone/app/contents/docs/rest
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","documentation_url":"https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4949"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403
+    # The control: the same repository fetch answering the repository reference page is
+    # still an authorization outcome, so the rule above is not "always rate limiting".
+    - id: 4
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.github.com
+        headers: {}
+        url: https://api.github.com/user/repos
+        method: GET
+      response:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/repos/repos#list-repositories-for-the-authenticated-user"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Remaining:
+                - "4948"
+            X-Ratelimit-Reset:
+                - "1789000000"
+        status: 403 Forbidden
+        code: 403

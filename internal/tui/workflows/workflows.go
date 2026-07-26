@@ -378,15 +378,18 @@ func (m Model) applyToggle(res toggleResultMsg) (Model, tea.Cmd) {
 
 // toggleFailure states why a toggle did not take effect, so a rejection is reported as a
 // permission failure rather than as a bug (R7). It reads the API's own reason where Execute
-// grouped one, and falls back to a bounded-retry authorization skip otherwise (rate-governor
-// R19a): a fine-grained PAT's 403 can be classified as a rate limit on this endpoint and
-// reclassified as an authorization failure after three backoffs, which is still a permission
-// failure to report, never a success.
+// grouped one, from the failures first and then from the skips: a fine-grained PAT's 403 can
+// be classified as a rate limit on this endpoint and reclassified as an authorization skip
+// after purge R19a's bounded backoffs, which is still a permission failure to report, never a
+// success, and its reason carries the API's words too. The generic line is the last resort,
+// for a rejection that arrived with nothing to quote.
 func toggleFailure(res toggleResultMsg) string {
 	verb := actionVerb(res.op)
-	for _, f := range res.sum.Failures {
-		if f.Reason != "" {
-			return "could not " + verb + ": " + f.Reason
+	for _, groups := range [][]ops.FailureGroup{res.sum.Failures, res.sum.Skips} {
+		for _, g := range groups {
+			if g.Reason != "" {
+				return "could not " + verb + ": " + g.Reason
+			}
 		}
 	}
 	return "could not " + verb + ": the API rejected it (a permission failure)"

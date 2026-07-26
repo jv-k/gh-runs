@@ -18,6 +18,9 @@ import (
 const maxRateLimitRetries = 3
 
 // FailureGroup is one reason among R22's grouped failures, with a count (AC18).
+// Summary.Skips groups the skips the same way, because a skip that carries a reason is
+// the same pair counted differently: what the API (or the eligibility gate) said, and
+// how many Items it was said about.
 type FailureGroup struct {
 	Reason string
 	Count  int
@@ -35,11 +38,17 @@ type Summary struct {
 	Acted   int // a lifecycle mutation the API accepted: cancel's 202, a re-run's 201 (run-lifecycle R4, R8). Never a deletion, so it writes no R29 log line (R24)
 	Skipped int // eligibility, in-progress and the R19a reclassification (R11, R12, R19a)
 
-	Failures     []FailureGroup // R22, grouped by reason
-	CircuitBroke bool           // R21: consecutive failures reached the breaker
-	Cancelled    bool           // R16: the user interrupted the Purge
-	LogFailed    bool           // R29: the deletion log could not be written
-	Reason       string         // why the Purge stopped early, else empty
+	Failures []FailureGroup // R22, grouped by reason
+	// Skips groups the skip reasons, R22's shape applied to what Skipped counts. A skip
+	// is not a failure and never enters Failures or FailedCount, but AC14a records it
+	// "with its reason", and on the R19a path that reason is the API's verbatim 403.
+	// Without it a surface has a count and no words, and reports a permission failure as
+	// a generic rejection (workflow-management R7, AC3).
+	Skips        []FailureGroup
+	CircuitBroke bool   // R21: consecutive failures reached the breaker
+	Cancelled    bool   // R16: the user interrupted the Purge
+	LogFailed    bool   // R29: the deletion log could not be written
+	Reason       string // why the Purge stopped early, else empty
 
 	failed []Item // the failed Items, for R22's retry-only-the-failures keystroke
 }
@@ -64,13 +73,29 @@ func (s Summary) StoppedEarly() bool { return s.CircuitBroke || s.LogFailed || s
 // addFailure records a failure under its reason, keeping first-seen group order.
 func (s *Summary) addFailure(item Item, reason string) {
 	s.failed = append(s.failed, item)
-	for i := range s.Failures {
-		if s.Failures[i].Reason == reason {
-			s.Failures[i].Count++
-			return
+	s.Failures = groupByReason(s.Failures, reason)
+}
+
+// addSkip records a skip under its reason, keeping first-seen group order. It records
+// no Item: a skip is not R22's retry set, so nothing here reaches Failed() or the exit
+// code (cli-surface R17). A reasonless skip is counted in Skipped and grouped nowhere.
+func (s *Summary) addSkip(reason string) {
+	if reason == "" {
+		return
+	}
+	s.Skips = groupByReason(s.Skips, reason)
+}
+
+// groupByReason adds one reason to a group list, incrementing an existing group or
+// appending a new one, so first-seen order is the order a surface renders (R22, AC18).
+func groupByReason(groups []FailureGroup, reason string) []FailureGroup {
+	for i := range groups {
+		if groups[i].Reason == reason {
+			groups[i].Count++
+			return groups
 		}
 	}
-	s.Failures = append(s.Failures, FailureGroup{Reason: reason, Count: 1})
+	return append(groups, FailureGroup{Reason: reason, Count: 1})
 }
 
 // verdict is Execute's classification of one DELETE response.
@@ -190,6 +215,7 @@ func (o *Ops) executeSet(ctx context.Context, plan Plan, log logSink,
 				}
 			}
 			sum.Skipped++
+			sum.addSkip(string(item.Skip))
 			continue
 		}
 		res, lerr := attempt(ctx, log, item)
@@ -208,6 +234,7 @@ func (o *Ops) executeSet(ctx context.Context, plan Plan, log logSink,
 			failureStreak = 0
 		case dispSkipped:
 			sum.Skipped++ // transparent to the breaker: a skip is neither success nor failure
+			sum.addSkip(res.reason)
 		case dispFailed:
 			sum.addFailure(item, res.reason)
 			failureStreak++
@@ -257,7 +284,9 @@ func (o *Ops) deleteItem(ctx context.Context, log logSink, item Item) (itemResul
 		}
 		v := classifyDelete(resp)
 		reason := ""
-		if v == verdictFailed {
+		if v == verdictFailed || v == verdictRateLimited {
+			// A rate limit's reason is read too, and kept: if the retries run out, R19a's
+			// skip is recorded with what the API actually said (AC14a).
 			reason = failureReason(resp)
 		}
 		_ = resp.Body.Close()
@@ -271,9 +300,10 @@ func (o *Ops) deleteItem(ctx context.Context, log logSink, item Item) (itemResul
 			if rateLimitStreak >= maxRateLimitRetries {
 				// R19a: after three consecutive rate-limit classifications on the same
 				// Run, reclassify as an authorization failure and skip under R20. It is a
-				// skip, not a failure, so it does not advance the breaker (AC14a).
-				reason := "rate limit persisted after retries; skipped as an authorization failure"
-				return itemResult{disp: dispSkipped}, log.write(skipLine(item, reason))
+				// skip, not a failure, so it does not advance the breaker (AC14a). The
+				// reason is this last response's, the freshest words the API gave.
+				skip := retryBoundSkipReason(reason)
+				return itemResult{disp: dispSkipped, reason: skip}, log.write(skipLine(item, skip))
 			}
 			continue
 		case verdictGone:
@@ -284,7 +314,7 @@ func (o *Ops) deleteItem(ctx context.Context, log logSink, item Item) (itemResul
 			// R12, AC16a: a Run recorded completed at crawl but now in progress. The
 			// API's write-time rejection is the guard, synchronous with the write, so it
 			// is recorded as a skip and no cancel is issued for it.
-			return itemResult{disp: dispSkipped}, log.write(skipLine(item, string(SkipNotCompleted)))
+			return itemResult{disp: dispSkipped, reason: string(SkipNotCompleted)}, log.write(skipLine(item, string(SkipNotCompleted)))
 		default: // verdictFailed
 			return itemResult{disp: dispFailed, reason: reason}, log.write(failLine(item, reason))
 		}
@@ -330,6 +360,27 @@ func failureReason(resp *http.Response) string {
 	return fmt.Sprintf("HTTP %d", resp.StatusCode)
 }
 
+// retryBoundSkipReason is the reason R19a's reclassification records once the bounded
+// re-attempts are spent, carrying the API's own words from the last one. AC14a records
+// the skip "with its reason", and the reason a reader needs is what the API said, not
+// that we stopped retrying: on the expected case, a fine-grained PAT's 403, those words
+// name the missing permission. Without them a surface has a count and no explanation
+// (workflow-management R7, AC3).
+//
+// It states what was done rather than what was wrong, because R19a's reclassification is
+// a decision under uncertainty and the two candidate causes stay indistinguishable. A
+// genuine secondary limit that outlasted the backoffs is recorded here too, and calling
+// that an authorization failure outright would assert the one thing this classification
+// cannot know. Quoting the API is what lets the reader tell them apart.
+// apiReason is empty only if the response carried nothing to quote.
+func retryBoundSkipReason(apiReason string) string {
+	base := fmt.Sprintf("still rejected after %d attempts, so the backoff was abandoned and the Run skipped (R19a)", maxRateLimitRetries)
+	if apiReason == "" {
+		return base
+	}
+	return base + ". The API said: " + apiReason
+}
+
 // notCancelableReason is the recorded reason for a 409 from cancel. It names force-cancel
 // as the escalation so the surface offering it reads the reason, never the raw status
 // (run-lifecycle R5, R6, AC6). In a bulk cancel a 409 is a raced completion and a skip
@@ -368,7 +419,8 @@ func (o *Ops) mutateItem(ctx context.Context, op Operation, debug bool, item Ite
 			// Run is reclassified as an authorization skip and the operation proceeds (AC14a).
 			rateLimitStreak++
 			if rateLimitStreak >= maxRateLimitRetries {
-				return itemResult{disp: dispSkipped, reason: "rate limit persisted after retries; skipped as an authorization failure"}, nil
+				// The reason is this last response's, the freshest words the API gave.
+				return itemResult{disp: dispSkipped, reason: retryBoundSkipReason(reason)}, nil
 			}
 			continue
 		}
@@ -389,7 +441,9 @@ func (o *Ops) mutateItem(ctx context.Context, op Operation, debug bool, item Ite
 // is surfaced rather than pre-judged (R15, AC15).
 func classifyLifecycle(op Operation, resp *http.Response) (disposition, string) {
 	if governor.RateLimited(resp) {
-		return dispRetry, ""
+		// The reason rides along unused on every retry but the last: if the retries run
+		// out, R19a's skip is recorded with what the API actually said (AC14a).
+		return dispRetry, failureReason(resp)
 	}
 	code := resp.StatusCode
 	switch op {

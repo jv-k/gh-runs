@@ -1,0 +1,32 @@
+---
+version: 2
+# Run 1's cancel answers the measured authorization 403: a fine-grained PAT's message, no
+# Retry-After, a healthy x-ratelimit-remaining, and a documentation_url pointing at cancel's
+# OWN reference page (rate-governor open question 1). Cancel is documented on the
+# workflow-runs page, so the doc URL names the Run rather than the /cancel segment the
+# request path ends in. It is taped ONCE: a re-attempt has no tape, so spending any of
+# R19a's three backoffs on it would fail the replay. Run 2 then cancels cleanly, proving the
+# operation carried on past a permission failure (run-lifecycle R3, R20).
+interactions:
+    - id: 0
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/1/cancel
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#cancel-a-workflow-run"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4321"]
+    - id: 1
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/runs/2/cancel
+      response:
+        status: 202 Accepted
+        code: 202
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4320"]
+            X-Ratelimit-Reset: ["1789000000"]

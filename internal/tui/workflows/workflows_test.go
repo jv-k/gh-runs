@@ -273,6 +273,37 @@ func TestFailedToggleSurfacesAndLeavesStateUnchanged(t *testing.T) {
 	}
 }
 
+// TestBoundedRetrySkipSurfacesTheAPIReason pins R7 and AC3 on the other shape a rejected
+// toggle arrives in: a 403 the governor read as a rate limit is retried at most three times
+// and then reclassified as an authorization skip (purge R19a). A skip is not a failure, so
+// the Summary carries no failure group and the reason travels in Skips. The tab must still
+// report the API's own words rather than a generic rejection.
+func TestBoundedRetrySkipSurfacesTheAPIReason(t *testing.T) {
+	tog := &stubToggler{result: ops.Summary{
+		Skipped: 1,
+		Skips: []ops.FailureGroup{{
+			Reason: "still rejected after 3 attempts, so the backoff was abandoned and the Run skipped (R19a). The API said: HTTP 403: Resource not accessible by personal access token",
+			Count:  1,
+		}},
+	}}
+	m := newWorkflows(t, 100, 20, tog, nil, writable("o", "r"))
+	m = fetched(m, workflows.RepoWorkflows{
+		Repo:      rid("o", "r"),
+		Complete:  true,
+		Workflows: []domain.Workflow{workflow(1, "CI", ".github/workflows/ci.yml", domain.StateActive, rid("o", "r"))},
+	})
+	m = send(m, "r")
+
+	m = act(t, m, "s") // the toggle is attempted and skipped after the bounded backoffs
+	got := m.View()
+	if !strings.Contains(got, "could not disable") || !strings.Contains(got, "Resource not accessible by personal access token") {
+		t.Errorf("a bounded-retry authorization skip did not surface the API's own reason (R7, AC3, R19a):\n%s", got)
+	}
+	if strings.Contains(got, "disabled_manually") {
+		t.Errorf("a skipped toggle changed the displayed state; it must stay as the API last reported (AC3):\n%s", got)
+	}
+}
+
 // TestToggleInertWithoutToggler pins the fail-closed default: with no toggler wired (a golden
 // test, or before ops is available), the toggle key is inert and issues no command.
 func TestToggleInertWithoutToggler(t *testing.T) {
