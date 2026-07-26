@@ -57,7 +57,10 @@ var (
 	// and one colour they would read as a single condition.
 	styleFailed   = lipgloss.NewStyle().Bold(true).Foreground(palette.Failing)
 	styleSelected = lipgloss.NewStyle().Foreground(palette.Selected)
-	styleDim      = lipgloss.NewStyle().Foreground(palette.Muted)
+	// styleCancelRequested is AC5's indicator. It takes the attention hue and no Conclusion
+	// colour, because the request is outstanding and no outcome has landed (R4).
+	styleCancelRequested = lipgloss.NewStyle().Foreground(palette.Attention)
+	styleDim             = lipgloss.NewStyle().Foreground(palette.Muted)
 	// styleBadge is the approvals badge, in the same purple the waiting Status carries, so the
 	// count of Runs awaiting a decision reads as the awaiting hue (approvals R8).
 	styleBadge = lipgloss.NewStyle().Bold(true).Foreground(palette.Waiting)
@@ -354,7 +357,7 @@ func (m Model) renderRow(r domain.Run, isCursor, isSelected bool) string {
 	repoCell := decorate(m.actionStyle(r.Repo)).Render(truncPad(textsan.Sanitize(repoLabel(r)), repoW))
 	workflowCell := decorate(lipgloss.NewStyle()).Render(truncPad(textsan.Sanitize(workflowLabel(r)), workflowW))
 	statusCell := decorate(statusStyle(r.Status)).Render(truncPad(textsan.Sanitize(string(r.Status)), statusW))
-	conclusionCell := decorate(conclusionStyle(r.Conclusion)).Render(truncPad(textsan.Sanitize(conclusionText(r)), conclusionW))
+	conclusionCell := decorate(m.conclusionCellStyle(r)).Render(truncPad(textsan.Sanitize(m.conclusionCellText(r)), conclusionW))
 	runIDCell := decorate(lipgloss.NewStyle()).Render(truncPad(strconv.FormatInt(r.ID, 10), runIDW))
 	startedCell := decorate(lipgloss.NewStyle()).Render(truncPad(formatStarted(r), startedW))
 
@@ -410,9 +413,44 @@ func conclusionStyle(c domain.Conclusion) lipgloss.Style {
 	return lipgloss.NewStyle()
 }
 
-// conclusionText is the Conclusion cell's text: empty for any Run not completed, because
-// Conclusion is null until Status reaches completed (R5). It never substitutes a
-// Conclusion-like value in its place.
+// cancelRequestedText is run-lifecycle AC5's cancellation-requested indicator: the words
+// a row carries between a cancel being asked for and a poll observing what became of it.
+//
+// It is a present participle deliberately. `cancelled` is a Conclusion and `completed` is
+// a Status, and the whole of R4 and R7 is that neither may be shown before the API says
+// so, so the indicator has to be a word that is neither and cannot be misread as either.
+// It sits in the Conclusion cell because that cell is empty for exactly as long as the
+// indicator is true: Conclusion is null until Status reaches completed (R5), and the poll
+// that fills it is the poll that retires this.
+const cancelRequestedText = "cancelling…"
+
+// conclusionCellText is the Conclusion cell's text. It is empty for any Run not completed,
+// because Conclusion is null until Status reaches completed (R5), and it never substitutes
+// a Conclusion-like value in its place. The one thing that shows in that empty cell is
+// AC5's indicator, and only for a Run this Feed has actually requested a cancellation for.
+func (m Model) conclusionCellText(r domain.Run) string {
+	if r.Status != domain.StatusCompleted {
+		if _, requested := m.cancelRequested[r.ID]; requested {
+			return cancelRequestedText
+		}
+		return ""
+	}
+	return string(r.Conclusion)
+}
+
+// conclusionCellStyle colours the cell. The indicator takes the attention hue rather than
+// any Conclusion's colour, so it does not read as an outcome that has landed (R4).
+func (m Model) conclusionCellStyle(r domain.Run) lipgloss.Style {
+	if r.Status != domain.StatusCompleted {
+		if _, requested := m.cancelRequested[r.ID]; requested {
+			return styleCancelRequested
+		}
+	}
+	return conclusionStyle(r.Conclusion)
+}
+
+// conclusionText is the Conclusion cell's text for a Run with no pending request against
+// it (R5). It is the shape every surface but the live rows renders.
 func conclusionText(r domain.Run) string {
 	if r.Status != domain.StatusCompleted {
 		return ""

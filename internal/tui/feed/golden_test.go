@@ -214,3 +214,22 @@ func TestGoldenNavigatedToWorkflowWithNoRuns(t *testing.T) {
 
 	goldie.New(t).Assert(t, "navigated_no_runs", []byte(m.View()))
 }
+
+// TestGoldenCancelRequested fixes AC5's frame: an in-progress Run with a cancellation
+// requested carries the indicator where its Conclusion will eventually go, and the
+// completed Run beside it, whose cancel the poll has already settled, carries the
+// cancelled Conclusion the API reported and no indicator at all. A test over the model
+// can assert the Conclusion is empty. Only a golden proves the row says something.
+func TestGoldenCancelRequested(t *testing.T) {
+	m := newFeed(100, 5)
+	id := repoID("cli", "cli")
+	m = discovered(m, repo("cli", "cli", true, false))
+	m = feedRuns(m, id,
+		mkRun(29516338954, "cli", "cli", "CI", domain.StatusInProgress, "", t0),
+		mkRun(29516338001, "cli", "cli", "Release", domain.StatusCompleted, domain.ConclusionCancelled, t0.Add(-time.Hour)),
+	)
+	// Held state alone: a cancellation was requested for the running Run. The completed
+	// one carries no record, because the poll that reported it completed retired it.
+	m.cancelRequested[29516338954] = struct{}{}
+	goldie.New(t).Assert(t, "cancel_requested", []byte(m.View()))
+}

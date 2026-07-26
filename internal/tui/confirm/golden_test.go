@@ -67,7 +67,9 @@ func TestGoldenYNModal(t *testing.T) {
 // R17): the same modal shape as a Purge, with the verb tracking the operation, so the
 // y/N prompt reads "Cancel these Runs?" rather than "Delete these Runs?". A single-repo
 // set of three cancels below the threshold confirms with y/N (R18's bulk case still
-// confirms, and the single-Run asymmetry is the Feed's, not the pane's).
+// confirms, and the single-Run asymmetry is the Feed's, not the pane's). It also fixes
+// R5 and AC6's offer: the frame carries force-cancel as the named escalation, which is
+// the one line that distinguishes a cancel modal from a Purge's.
 func TestGoldenCancelModal(t *testing.T) {
 	items := []ops.Item{
 		ops.RunItem(gRun(201, "octo", "hello", "CI", domain.StatusInProgress, "", gStart(20, 10))),

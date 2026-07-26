@@ -3,5 +3,6 @@
   octo/hello              3
 
 [1m  Cancel these Runs? [y/N][m
+[38;2;138;138;138m  A Run that is not cancelable needs force-cancel: press C to escalate.[m
 
 [38;2;138;138;138m  Press v to inspect the frozen set.  n/esc to cancel.[m

@@ -20,6 +20,8 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **R4.** Cancel is asynchronous. A 202 means the request was accepted, not that the Run was cancelled. The tool MUST show that cancellation was requested and MUST NOT optimistically display a `cancelled` Conclusion. Only a subsequent poll observing the Run's actual transition may do that.
 
+**The indicator records the request, not the response, and that is what R4 asks for.** A bulk operation streams counts rather than per-Item outcomes, so no surface can key a per-row marker on that row's own 202. The marker goes up when the request is issued for a Run the eligibility gate did not skip, and it comes down on the poll that observes the Run reach Status `completed`, which is the same observation that reveals the Conclusion. So the marker and the Conclusion cell can never both be filled, which is the property AC5 turns on. A Run the API answers with a 409 is not cancelable, which in practice means it has already completed, so its own Status retires the marker. The 409's words reach the operator on the operation's summary, where R5 has them name force-cancel.
+
 **R5.** A 409 from cancel means the Run is not cancelable. The tool MUST present this as a fact about the Run's Status rather than as an error, and MUST offer force-cancel where the gate in R2 permits it.
 
 **R6.** Force-cancel MUST be a distinct operation against a distinct endpoint, offered as the escalation for when plain cancel does not take effect. It MUST NOT be the default, and MUST NOT be silently substituted for cancel. The tool MUST offer it on a 409 from plain cancel (R5), and otherwise on demand as an escalation the user chooses. It MUST NOT infer from a timer that an accepted cancel is stuck, because an asynchronous cancel has no reliable stuck-signal.
@@ -41,6 +43,8 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 **R13.** Re-run failed Jobs MUST be a distinct operation from re-run, offered only where the Run has Jobs that failed. Both are re-runs and both MUST obey R8 through R12.
 
 **R14.** Re-run and re-run failed Jobs MUST each offer a debug-logging option at the point of invocation, defaulting to off. Both endpoints accept `enable_debug_logging`, and `gh run rerun` exposes `--debug` alongside `--failed`.
+
+**Re-running one Job is a fifth operation and is not in 2.0.0 scope ([#106](https://github.com/jv-k/gh-runs/issues/106)).** gh offers `gh run rerun --job <id>` against a Job endpoint, and R1 fixes this feature at exactly four operations, all of which act on a Run. The non-interactive surface therefore mirrors every `gh run rerun` flag except `-j/--job`, which is left off rather than accepted and widened to the whole Run: re-running a Run when the operator named one Job spends Actions minutes they did not ask to spend, and R12 makes the prior Attempt's Jobs unreachable in the process. What it would cost is recorded on the issue.
 
 **R15.** The tool MUST NOT hide, disable, or pre-emptively reject a re-run based on the Run's age. If the API rejects a re-run, the tool MUST surface the API's own reason. This follows R3: the API is the authority, and the age limit described in open question 1 is unverified.
 
