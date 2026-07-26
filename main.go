@@ -582,11 +582,17 @@ func (c clients) tuiOptions(d tuiDeps) tui.Options {
 		StorageFetch:    storage.ClientFetch(client),
 		StorageOps:      d.Ops,
 		StorageDownload: c.storageDownload(d.Downloads),
-		// The Storage tab's scope is stated by nobody yet, so it runs the all-repos default R0
-		// fixes (storage-reclamation R0), exactly as the Workflows tab does. Its resolver is
-		// wired regardless, so this-repo is a path that resolves rather than a path that
-		// exists: this-repo means the repository of the working directory (settings R19), and
-		// where there is none the tab falls back to all-repos and says so.
+		// The Storage tab's scope is the loaded setting, and this is the wire settings R19 was
+		// missing: the loader decoded storage_scope, the Settings view rendered it and toggled
+		// it, and nothing read it, so a config file stating this-repo was accepted and then
+		// ignored. The two scopes stay separate settings feeding separate tabs, which is what
+		// R19 means by independent.
+		//
+		// this-repo means the repository of the working directory, resolved by the same
+		// resolver discovery's fast path takes, with the GH_TOKEN-aware error it already
+		// translates. Where there is none the tab falls back to all-repos and says so, so the
+		// resolver is wired under either scope.
+		StorageScope:       storage.Scope(d.Config.StorageScope),
 		StorageCurrentRepo: currentRepoID,
 		// The Workflows tab reads each repository's Workflow list over the same client, so the
 		// store revalidates and the governor accounts each request (workflow-management R1), and
@@ -594,11 +600,9 @@ func (c clients) tuiOptions(d tuiDeps) tui.Options {
 		// and travels the one write path every other write does (R5).
 		WorkflowFetch: workflows.ClientFetch(client),
 		WorkflowOps:   d.Ops,
-		// The tab's scope is stated by nobody yet, so it runs the all-repos default R0 fixes
-		// (workflow-management R0). Its resolver is wired regardless: this-repo means the
-		// repository of the working directory (settings R19), which is the same resolver
-		// discovery's fast path takes, with the GH_TOKEN-aware error it already translates.
-		// Where there is none, the tab falls back to all-repos and says so.
+		// The tab's scope is the loaded setting, the other half of the same wire, and the two
+		// are read separately so scoping one tab leaves the other alone (settings R19).
+		WorkflowScope:       workflows.Scope(d.Config.WorkflowsScope),
 		WorkflowCurrentRepo: currentRepoID,
 		// The dispatch form the Workflows tab opens reads the Workflow YAML at a ref and the
 		// repository's environments over the same client (workflow-dispatch R5, R7), triggers the
