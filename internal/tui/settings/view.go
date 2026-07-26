@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
+	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
@@ -47,6 +48,11 @@ func (m Model) View() string {
 	if m.saveErr != nil {
 		lines = append(lines, styleWarn.Render("Settings could not be saved: "+textsan.Sanitize(m.saveErr.Error())))
 	}
+	if m.editErr != "" {
+		// An entry the editor could not parse is named rather than dropped in silence,
+		// which is the loader's R14 rule applied to input arriving by keystroke.
+		lines = append(lines, styleWarn.Render(textsan.Sanitize(m.editErr)))
+	}
 	lines = append(lines, "")
 	for r := row(0); r < rowCount; r++ {
 		lines = append(lines, m.rowLine(r))
@@ -66,7 +72,7 @@ func (m Model) rowLine(r row) string {
 	marker := "  "
 	label := padLabel(m.label(r))
 	if focused {
-		if m.editing && r.isNumber() {
+		if m.editing && r.isEditable() {
 			marker = styleCaret.Render("> ")
 		} else {
 			marker = styleActive.Render("> ")
@@ -82,6 +88,9 @@ func (m Model) rowLine(r row) string {
 	if focused && r.isNumber() && !m.editing {
 		line += "  " + styleDim.Render("("+m.boundHint(r)+")")
 	}
+	if focused && r.isList() && !m.editing {
+		line += "  " + styleDim.Render("(enter to edit, comma separated)")
+	}
 	return line
 }
 
@@ -89,10 +98,32 @@ func (m Model) rowLine(r row) string {
 // row is being edited. Selectors show their chosen member; numbers show the integer, with
 // the discovery interval carrying its unit so the value reads as intent.
 func (m Model) valueCell(r row, focused bool) string {
-	if focused && m.editing && r.isNumber() {
-		return styleValue.Render(m.editBuf) + styleCaret.Render("_")
+	if focused && m.editing && r.isEditable() {
+		return styleValue.Render(textsan.Sanitize(m.tailOfBuffer())) + styleCaret.Render("_")
 	}
 	return styleValue.Render(textsan.Sanitize(m.rawValue(r)))
+}
+
+// tailOfBuffer is the part of the edit buffer that fits the value column, taken from the
+// end so the caret and the characters just typed stay visible. A long exclude list is
+// exactly the case that overflows, and scrolling sideways is what a person editing the end
+// of a line expects.
+func (m Model) tailOfBuffer() string {
+	room := m.valueRoom()
+	if room <= 0 || len(m.editBuf) <= room {
+		return m.editBuf
+	}
+	return m.editBuf[len(m.editBuf)-room:]
+}
+
+// valueRoom is how many characters the value column has, given the frame width the last
+// WindowSizeMsg set. It leaves one column for the caret. A pane that has not been sized
+// yet reports no constraint, so a headless render prints the value whole.
+func (m Model) valueRoom() int {
+	if m.width <= 0 {
+		return 0
+	}
+	return m.width - markerCol - labelWidth - 1
 }
 
 // rawValue is the plain text of a row's current value, before styling.
@@ -108,6 +139,8 @@ func (m Model) rawValue(r row) string {
 		return string(m.cfg.WorkflowsScope)
 	case rowStorageScope:
 		return string(m.cfg.StorageScope)
+	case rowExclude:
+		return repoList(m.cfg.Exclude, m.valueRoom())
 	case rowConfirmThreshold:
 		return strconv.Itoa(m.cfg.ConfirmThreshold)
 	case rowBreakerFailures:
@@ -133,6 +166,8 @@ func (m Model) label(r row) string {
 		return "Workflows scope"
 	case rowStorageScope:
 		return "Storage scope"
+	case rowExclude:
+		return "Excluded repositories"
 	case rowConfirmThreshold:
 		return "Confirmation threshold"
 	case rowBreakerFailures:
@@ -159,6 +194,8 @@ func (m Model) description(r row) string {
 		return "Which repositories the Workflows tab covers."
 	case rowStorageScope:
 		return "Which repositories the Storage tab covers."
+	case rowExclude:
+		return "Kept out of discovery and never polled. Naming one with -R still works."
 	case rowConfirmThreshold:
 		return "Deletions at or above this many make you type the count."
 	case rowBreakerFailures:
@@ -206,12 +243,25 @@ func (m Model) boundHint(r row) string {
 // the selected motion set rather than a hardcoded literal (R7a).
 func (m Model) helpLine() string {
 	move := m.profile.RowUp.Help().Key + "/" + m.profile.RowDown.Help().Key
-	parts := []string{
-		move + " move",
-		m.profile.ToggleSelect.Help().Key + " change",
-		m.profile.OpenDetail.Help().Key + " edit number",
-		m.profile.CloseDetail.Help().Key + " close",
+	// The help names what the focused row actually takes, rather than the union of every
+	// row's gestures. A footer offering "space change" on a row that ignores space, or
+	// "edit number" on a row that takes text, is the same class of untruth as a label
+	// promising behaviour the code does not have.
+	parts := []string{move + " move"}
+	switch {
+	case m.editing:
+		parts = append(parts,
+			m.profile.OpenDetail.Help().Key+" commit",
+			m.profile.CloseDetail.Help().Key+" cancel")
+		return strings.Join(parts[1:], "   ")
+	case m.cursor.isSelector():
+		parts = append(parts, m.profile.ToggleSelect.Help().Key+" change")
+	case m.cursor.isNumber():
+		parts = append(parts, m.profile.OpenDetail.Help().Key+" edit number")
+	case m.cursor.isList():
+		parts = append(parts, m.profile.OpenDetail.Help().Key+" edit list")
 	}
+	parts = append(parts, m.profile.CloseDetail.Help().Key+" close")
 	return strings.Join(parts, "   ")
 }
 
@@ -221,6 +271,66 @@ func padLabel(s string) string {
 		return s
 	}
 	return s + strings.Repeat(" ", labelWidth-len(s))
+}
+
+// repoList renders R7's exclude list as text (R16: meaning never rides on colour). An
+// empty list reads "none" rather than blank, because a blank cell reads as broken where
+// "none" reads as a setting nobody has used. Each entry is spelled OWNER/REPO, the same
+// short form the config file carries.
+//
+// It names as many entries as the value column holds and counts the rest, rather than
+// stopping at a fixed number. The reference account excludes from 163 repositories to
+// reach the ~10 it cares about, so which repositories are on the list is the interesting
+// part and a small constant would hide most of it. room is the column width, and a room
+// of zero means unconstrained, which is what a pane no WindowSizeMsg has reached reports.
+func repoList(ids []domain.RepoID, room int) string {
+	if len(ids) == 0 {
+		return "none"
+	}
+	names := repoRefs(ids)
+	if room <= 0 {
+		return strings.Join(names, ", ")
+	}
+
+	shown, width := 0, 0
+	for i, name := range names {
+		next := width + len(name)
+		if i > 0 {
+			next += len(", ")
+		}
+		// Keep room for the ", and N more" tail whenever entries would be left over.
+		if next+len(tailFor(len(names)-i-1)) > room {
+			break
+		}
+		width, shown = next, i+1
+	}
+	if shown == 0 {
+		// Not even one entry fits beside its own tail. Naming the count alone is the
+		// honest fallback: a truncated repository name is a name that is not there.
+		return strconv.Itoa(len(names)) + " repositories"
+	}
+	return strings.Join(names[:shown], ", ") + tailFor(len(names)-shown)
+}
+
+// repoRefs spells identities the way the config file does, OWNER/REPO. It is what the row
+// renders and what the editor opens on, so the text a person edits is the text they would
+// have typed into config.yml (R17: the view and the file are the same settings). Every
+// identity 2.0.0 admits is a github.com one, so the host is never spelled (ADR-0009).
+func repoRefs(ids []domain.RepoID) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.Owner + "/" + id.Name
+	}
+	return out
+}
+
+// tailFor is the summary that follows the entries a row could name, empty when none were
+// left over.
+func tailFor(rest int) string {
+	if rest <= 0 {
+		return ""
+	}
+	return ", and " + strconv.Itoa(rest) + " more"
 }
 
 func joinTiers(ts []config.Tier) string {

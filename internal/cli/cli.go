@@ -95,6 +95,13 @@ type Deps struct {
 	// RepoSnapshot is the discovered capability data Plan gates eligibility on (purge
 	// R10), keyed by RepoID. main.go wires it from discovery; a test passes a fixed map.
 	RepoSnapshot func() (map[domain.RepoID]domain.Repo, error)
+	// Exclude is settings R7's exclude list, resolved by config. A repository named
+	// here is left alone, so naming one explicitly with -R or GH_REPO is refused before
+	// any request. Without this the invocation crawls the repository the person asked
+	// the tool to leave alone and then fails at Plan with a capability message, which
+	// names the wrong cause: the capability is unknown precisely because the exclusion
+	// kept it out of discovery.
+	Exclude []domain.RepoID
 }
 
 // The process exit codes, gh's documented taxonomy (cli-surface R17, verified

@@ -7,6 +7,7 @@ import (
 	"github.com/sebdah/goldie/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
+	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/tui/settings"
@@ -75,4 +76,41 @@ func TestGoldenEditingNumber(t *testing.T) {
 	m = send(m, "1")
 	m = send(m, "5")
 	goldie.New(t).Assert(t, "editing_number", []byte(m.View()))
+}
+
+// TestGoldenExcludeList fixes the frame R7's exclude row paints when it is set: the row
+// focused with its description and its edit hint, naming as many repositories as the
+// value column holds and counting the rest. It is the reference account's shape, where
+// 163 repositories are discovered and roughly 10 are wanted, so a list that overflows the
+// column is what a real config produces rather than a corner.
+func TestGoldenExcludeList(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Exclude = []domain.RepoID{
+		repo("jv-k", "dotfiles"),
+		repo("jv-k", "scratch"),
+		repo("acme", "vendored-fork"),
+		repo("acme", "archive"),
+		repo("acme", "legacy-pipeline"),
+	}
+	m := settings.New(keys.Standard, cfg, nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "exclude")
+	goldie.New(t).Assert(t, "exclude_list", []byte(m.View()))
+}
+
+// TestGoldenEditingExcludeList fixes the exclude editor mid-entry (R7, R17): the row is
+// open on the list as written with a new entry being typed, showing the buffer and the
+// caret. This is the frame AC11's gesture goes through, so it is the one worth pinning
+// byte for byte.
+func TestGoldenEditingExcludeList(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Exclude = []domain.RepoID{repo("jv-k", "dotfiles")}
+	m := settings.New(keys.Standard, cfg, nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "exclude")
+	m = send(m, "enter")
+	for _, k := range []string{",", " ", "a", "c", "m", "e", "/", "x"} {
+		m = send(m, k)
+	}
+	goldie.New(t).Assert(t, "editing_exclude_list", []byte(m.View()))
 }

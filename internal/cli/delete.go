@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
@@ -111,7 +114,7 @@ func runDelete(deps Deps, f *deleteFlags) error {
 	}
 	plan, err := deps.Purge.Plan(ops.OpDelete, items, snapshot)
 	if err != nil {
-		return err
+		return namingTheExclusion(deps, sc.repos, err)
 	}
 
 	if f.dryRun {
@@ -212,4 +215,31 @@ func exitFromSummary(sum ops.Summary) error {
 	default:
 		return nil
 	}
+}
+
+// namingTheExclusion adds the real cause to a planning failure over a repository the
+// config excludes. Exclusion keeps a repository out of discovery (settings R7), so it
+// carries no recorded capability, and Plan refuses a repository absent from the
+// eligibility snapshot (purge R10, ADR-0019). That refusal is correct and stays: it is
+// the fail-closed rule, and the operator's own config produced the state it fails on.
+// What was wrong is the message, which named the snapshot and left the operator to
+// work out that a config line put the repository outside it.
+//
+// It is a diagnostic and never a refusal, which is the distinction settings R4 turns
+// on: an explicit -R outranks the config file, so the request proceeds as far as it
+// can and only the wording changes. A repository not on the list gets the original
+// error untouched.
+func namingTheExclusion(deps Deps, repos []domain.RepoID, err error) error {
+	var named []string
+	for _, id := range repos {
+		if slices.Contains(deps.Exclude, id) {
+			named = append(named, id.Owner+"/"+id.Name)
+		}
+	}
+	if len(named) == 0 {
+		return err
+	}
+	return fmt.Errorf(
+		"%w. Your config's exclude list names %s, so discovery never recorded capability there: remove it from exclude to act on it",
+		err, strings.Join(named, ", "))
 }

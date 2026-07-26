@@ -140,6 +140,30 @@ func withCurrent(f func() (domain.RepoID, error)) harnessOption {
 	return func(o *discovery.Options) { o.Current = f }
 }
 
+// withExclude sets settings R7's resolved exclude list, which main.go fills from the
+// loaded config (discovery may not import config, ADR-0011, so it takes the resolved
+// identities).
+func withExclude(ids ...domain.RepoID) harnessOption {
+	return func(o *discovery.Options) { o.Exclude = ids }
+}
+
+// relaunch builds a second Discovery over the same transport chain and the same store,
+// as a later launch of the tool would, but with a different exclude list. It reuses the
+// store rather than opening a second Transport over the directory because only the
+// first holds the advisory write lock (local-store R21): a second would be a reader and
+// could persist nothing, which would make a document-lifecycle test measure the lock
+// instead of the document.
+func (h *harness) relaunch(exclude ...domain.RepoID) *discovery.Discovery {
+	return discovery.New(discovery.Options{
+		Client:  h.client,
+		Store:   h.store,
+		Budget:  h.gov,
+		Clock:   h.clk,
+		Refresh: 5 * time.Minute,
+		Exclude: exclude,
+	})
+}
+
 // newHarness assembles the chain over the named cassette. The store's directory is
 // a fresh temp dir unless the test reuses one to simulate a restart (AC7).
 func newHarness(t *testing.T, cassetteName string, dir string, opts ...harnessOption) *harness {

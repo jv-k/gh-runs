@@ -1,6 +1,9 @@
 package domain
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // HostGitHub is the one host gh-runs 2.0.0 serves (ADR-0009). Repository identity is
 // host-qualified everywhere, and every construction site rejects any other host by
@@ -29,6 +32,52 @@ func NewRepoID(host, owner, name string) (RepoID, error) {
 		return RepoID{}, &InvalidRepoError{Owner: owner, Name: name}
 	}
 	return RepoID{Host: HostGitHub, Owner: owner, Name: name}, nil
+}
+
+// ParseRepoRef parses a [HOST/]OWNER/REPO selector into a host-qualified identity. The
+// bare OWNER/REPO form defaults to github.com, and an explicit github.com/OWNER/REPO is
+// accepted and means the same repository (ADR-0009, cli-surface R8, AC7). A host segment
+// is told from an owner segment by the part count, matching gh's own parse.
+//
+// It is the shape parse, and it lives beside NewRepoID because those two together are
+// what every textual repository selector needs: the CLI's -R and GH_REPO, and settings
+// R7's exclude list. Two copies of this switch could drift into accepting different
+// spellings on the flag and in the config file, which is the same class of hole the
+// single validation home closes for the charset.
+//
+// Surrounding whitespace is trimmed, so `-R " o/r"` and a config entry indented past
+// its dash both resolve. A YAML list is the reason: an entry's leading space is the
+// file's formatting rather than the operator's intent, and a flag that rejected what
+// the config file accepted would be the drift this function exists to prevent. Nothing
+// inside the value is trimmed, so a segment carrying a space still fails the charset
+// check in NewRepoID.
+func ParseRepoRef(ref string) (RepoID, error) {
+	parts := strings.Split(strings.TrimSpace(ref), "/")
+	var host, owner, name string
+	switch len(parts) {
+	case 2:
+		host, owner, name = HostGitHub, parts[0], parts[1]
+	case 3:
+		host, owner, name = parts[0], parts[1], parts[2]
+	default:
+		return RepoID{}, &RepoRefFormatError{Ref: ref}
+	}
+	if owner == "" || name == "" {
+		return RepoID{}, &RepoRefFormatError{Ref: ref}
+	}
+	return NewRepoID(host, owner, name)
+}
+
+// RepoRefFormatError reports a selector that is not [HOST/]OWNER/REPO shaped at all, as
+// distinct from one that is well shaped and names an unsupported host or an out-of-charset
+// segment. It names what it rejected and claims nothing more, the same rule the other two
+// identity errors follow.
+type RepoRefFormatError struct {
+	Ref string
+}
+
+func (e *RepoRefFormatError) Error() string {
+	return "invalid repository " + strconv.Quote(e.Ref) + ": expected the [HOST/]OWNER/REPO format"
 }
 
 // validOwner reports whether owner is a syntactically valid GitHub account name:

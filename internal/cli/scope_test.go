@@ -104,3 +104,122 @@ func TestExplicitGitHubHostEqualsBareForm(t *testing.T) {
 		t.Errorf("expected Run 301 in output\n%s", bare.stdout.String())
 	}
 }
+
+// TestExcludedWorkingDirectoryStillScopesToThatRepository pins cli-surface R22's MUST
+// against the exclude list: "Inside a repository, no -R MUST mean that repository,
+// matching gh, so R2's parity holds." The exclude list governs discovery, the Feed and
+// polling (settings R7), and the working directory is none of those.
+//
+// An earlier revision let an excluded working directory fall through to the fan-out
+// limb, which broke R22 and turned a one-request invocation into a full one. The
+// deletion consequence is worse and TestExcludedWorkingDirectoryNeverEscalatesADelete
+// pins it: the same fall-through silently rescoped `gh runs delete --all --yes` from
+// one repository to the whole account.
+func TestExcludedWorkingDirectoryStillScopesToThatRepository(t *testing.T) {
+	h := newHarness(t, "list_fanout").
+		withCurrent(gh("acme", "alpha")).
+		withExclude(gh("acme", "alpha")).
+		withDiscovered(gh("acme", "alpha"), gh("acme", "beta"), gh("acme", "gamma"))
+
+	if code := h.run("list"); code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%q", code, h.stderr.String())
+	}
+	if n := h.counting.count(); n != 1 {
+		t.Fatalf("wire requests = %d, want 1 (this repository alone, R22)", n)
+	}
+	for _, repo := range []string{"acme/beta", "acme/gamma"} {
+		if n := h.counting.countMatching("/repos/" + repo + "/"); n != 0 {
+			t.Errorf("%s was requested (%d) but the tool was launched inside alpha", repo, n)
+		}
+	}
+}
+
+// TestExcludedWorkingDirectoryNeverEscalatesADelete is the blocking case, asserted at
+// the wire. delete reads resolveScope's repositories and never inspects whether the
+// scope was a fan-out, so an excluded working directory falling through to the fan-out
+// limb rescoped a one-repository delete to every discovered repository. Nothing
+// downstream caught it: ops.FrictionTypedCount accepts NonInteractiveYes, so the --yes
+// the operator passed for one repository satisfied the friction for the account.
+//
+// --all-repos exists precisely so that account-wide deletion is asked for by name
+// (cli-surface R22, ADR-0022), and a config line must never supply it implicitly. The
+// crawl is where the escalation first becomes visible on the wire, so that is where
+// this asserts: the repositories the operator did not name receive nothing.
+func TestExcludedWorkingDirectoryNeverEscalatesADelete(t *testing.T) {
+	h := newHarness(t, "delete_all").
+		withCurrent(gh("o", "r")).
+		withExclude(gh("o", "r")).
+		withDiscovered(gh("o", "r"), gh("acme", "beta"), gh("acme", "gamma"))
+
+	h.runDriven("delete", "--all", "--yes")
+
+	if n := h.counting.countMatching("/repos/o/r/actions/runs"); n == 0 {
+		t.Error("the working-directory repository was not crawled at all")
+	}
+	for _, repo := range []string{"acme/beta", "acme/gamma"} {
+		if n := h.counting.countMatching("/repos/" + repo + "/"); n != 0 {
+			t.Errorf("delete reached %s (%d requests), a repository the operator never named", repo, n)
+		}
+	}
+}
+
+// TestExcludedRepositoryStillReachableByName pins settings R4's precedence against R7's
+// exclude list: "flags, then environment, then config file, then defaults (highest
+// first)." A config list may not refuse an explicit flag.
+//
+// An earlier revision refused -R and GH_REPO for an excluded repository, which inverted
+// that precedence and, with the working-directory limb, left no path in the tool that
+// could reach an excluded repository at all. That is the wrong end state twice over:
+// the reason to exclude a repository is polling cost, so the excluded set is the
+// noisiest repositories, which are exactly the ones a Purge targets. R7 enumerates the
+// three surfaces exclusion closes, discovery, the Feed and all polling, and a
+// present-tense instruction typed by name is none of them.
+func TestExcludedRepositoryStillReachableByName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  map[string]string
+	}{
+		{"repo flag", []string{"list", "-R", "cli/cli"}, nil},
+		{"GH_REPO", []string{"list"}, map[string]string{"GH_REPO": "cli/cli"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, "list_clicli").withExclude(gh("cli", "cli"))
+			for k, v := range tc.env {
+				h.env[k] = v
+			}
+			if code := h.run(tc.args...); code != 0 {
+				t.Fatalf("exit = %d, want 0: an explicit flag outranks the config file (R4); stderr=%q",
+					code, h.stderr.String())
+			}
+			if !strings.Contains(h.stdout.String(), "301") {
+				t.Errorf("expected Run 301 in output\n%s", h.stdout.String())
+			}
+		})
+	}
+}
+
+// TestExcludedRepositoryDeleteNamesTheRealCause is the diagnostic this whole line of
+// review started from. Deleting in an excluded repository fails, because exclusion kept
+// it out of discovery and Plan refuses a repository with no recorded capability (purge
+// R10). The failure is correct; the message was not, naming the eligibility snapshot
+// and leaving the operator to work out that a config line put it there.
+//
+// The fix is a diagnostic and not a refusal, which is the distinction settings R4 turns
+// on: the explicit request proceeds as far as it can, and only the message changes.
+func TestExcludedRepositoryDeleteNamesTheRealCause(t *testing.T) {
+	h := newHarness(t, "delete_all").
+		withExclude(gh("o", "r")).
+		withEmptySnapshot()
+
+	if code := h.runDriven("delete", "-R", "o/r", "--all", "--yes"); code == 0 {
+		t.Fatal("exit = 0, want non-zero: an unrecorded capability must fail closed")
+	}
+	msg := h.stderr.String()
+	if !strings.Contains(msg, "exclude") || !strings.Contains(msg, "o/r") {
+		t.Errorf("the failure does not name the exclude list as the cause; stderr=%q", msg)
+	}
+	if h.logExists() {
+		t.Error("a refused plan wrote a deletion log")
+	}
+}

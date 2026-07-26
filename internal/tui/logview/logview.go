@@ -324,8 +324,14 @@ func (m Model) handleSearchKey(k tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 		}
 		return m, nil, true
 	}
-	if s := k.String(); len(s) == 1 {
-		m.searchInput += s
+	// Text is the characters the press actually produced, not String(), which names a key
+	// rather than spelling it: String() answers "space" for the space bar, so a
+	// length-one test over it refused the one character that separates words and a query
+	// like "error: connection refused" could never be typed. Reading Text keeps the
+	// buffer to printable input without that hole, because a press that produces no text
+	// carries none.
+	if len(k.Text) > 0 {
+		m.searchInput += k.Text
 	}
 	return m, nil, true
 }

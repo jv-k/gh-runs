@@ -38,6 +38,26 @@ type scope struct {
 //     one (gh's rule, so R2 parity holds).
 //  5. Otherwise a fan-out across the discovered set, rather than gh's dead end
 //     (R22): no repository means all repositories, not an error.
+//
+// Settings R7's exclude list deliberately reaches none of these branches. R7 closes
+// three surfaces by name, discovery, the Feed and all polling, and every branch here is
+// an operator naming a repository in the present tense: -R and GH_REPO spell it, and
+// the working directory is what gh's precedence and R22's MUST both fix as "that
+// repository". Settings R4 puts flags and environment above the config file, so a
+// config list refusing a flag would invert the precedence that document fixes.
+//
+// Two earlier attempts here were wrong in opposite directions, and tests now pin both.
+// Refusing an excluded -R inverted R4 and, together with the working-directory branch,
+// left no path in the tool that could reach an excluded repository at all, which is the
+// wrong end state: the reason to exclude is polling cost, so the excluded set is the
+// noisiest repositories, which are precisely a Purge's targets. Falling an excluded
+// working directory through to the fan-out broke R22's MUST and, because delete uses
+// this scope's repositories without inspecting whether it fanned out, silently rescoped
+// `gh runs delete --all --yes` from one repository to the whole account.
+//
+// The exclusion is still visible here, in the fan-out set alone: Discovered is
+// discovery's poll set, which the exclusion has already been applied to. That is R7's
+// third surface and the only one this function owns.
 func resolveScope(deps Deps, f *listFlags) (scope, error) {
 	if host, ok := deps.Getenv("GH_HOST"); ok && host != "" {
 		if !strings.EqualFold(host, hostGitHub) {
@@ -92,30 +112,14 @@ func fanOutScope(deps Deps) (scope, error) {
 
 // parseRepoArg parses a [HOST/]OWNER/REPO selector into a host-qualified identity
 // (cli-surface R8, R9). The bare OWNER/REPO form defaults to github.com, and an
-// explicit github.com/OWNER/REPO is accepted and treated identically (AC7). A host
-// segment carrying a dot is how the three-part and two-part forms are told apart,
-// matching gh's own parse. The split shape is checked here, then domain.NewRepoID
-// does the host-check and the charset validation, so -R and GH_REPO cannot
-// interpolate an owner or name outside GitHub's charset into the request URL path
-// (security hardening, R18). That is the one validation home discovery also uses,
-// so the invariant has no second construction site.
+// explicit github.com/OWNER/REPO is accepted and treated identically (AC7).
+//
+// Both the shape parse and the validation live in domain, so -R, GH_REPO and settings
+// R7's exclude list accept exactly the same spellings and reject exactly the same ones.
+// Keeping a private copy of the switch here left the charset with one home and the
+// shape with two, which is the same class of hole one home closes.
 func parseRepoArg(arg string) (domain.RepoID, error) {
-	parts := strings.Split(arg, "/")
-	var host, owner, name string
-	switch len(parts) {
-	case 2:
-		host, owner, name = hostGitHub, parts[0], parts[1]
-	case 3:
-		host, owner, name = parts[0], parts[1], parts[2]
-	default:
-		return domain.RepoID{}, fmt.Errorf(
-			"invalid repository %q: expected the [HOST/]OWNER/REPO format", arg)
-	}
-	if owner == "" || name == "" {
-		return domain.RepoID{}, fmt.Errorf(
-			"invalid repository %q: expected the [HOST/]OWNER/REPO format", arg)
-	}
-	return domain.NewRepoID(host, owner, name)
+	return domain.ParseRepoRef(arg)
 }
 
 // unsupportedHost is the class-neutral rejection for the GH_HOST route (cli-surface

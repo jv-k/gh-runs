@@ -1,0 +1,167 @@
+---
+version: 2
+interactions:
+    # A three-repository account, taped both unconditionally and conditionally, so the
+    # same fixture serves several sessions over one store directory: the first session's
+    # probes are unconditional, and every later session carries the ETags the store
+    # persisted and answers 304. That is what a real warm cache does (R12), and it is
+    # what makes the exclude-list staleness test measure the document's lifecycle rather
+    # than a cassette running out of interactions.
+
+    # Interaction 0: enumeration, one page, three repositories, no next.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '[{"name":"alpha","full_name":"jv-k/alpha","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"beta","full_name":"jv-k/beta","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"gamma","full_name":"jv-k/gamma","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false}]'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"enum-1"'
+            X-Ratelimit-Remaining:
+                - "4000"
+    # Interaction 1: the same enumeration, conditional. Nothing changed, so a 304 the
+    # store reconstitutes from its held body at zero primary cost.
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all
+        headers:
+            If-None-Match:
+                - '"enum-1"'
+      response:
+        status: 304 Not Modified
+        code: 304
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: ''
+        headers:
+            Etag:
+                - '"enum-1"'
+            X-Ratelimit-Remaining:
+                - "4000"
+    # Interaction 2: alpha's probe. It has a Run, so it enters the poll set.
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":1,"workflow_runs":[{"id":101,"status":"completed","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"alpha-v1"'
+            X-Ratelimit-Remaining:
+                - "3999"
+    # Interaction 3: alpha's conditional re-probe.
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+        headers:
+            If-None-Match:
+                - '"alpha-v1"'
+      response:
+        status: 304 Not Modified
+        code: 304
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: ''
+        headers:
+            Etag:
+                - '"alpha-v1"'
+            X-Ratelimit-Remaining:
+                - "3999"
+    # Interaction 4: beta's probe. It has a Run.
+    - id: 4
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/beta/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":1,"workflow_runs":[{"id":201,"status":"completed","name":"CI"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"beta-v1"'
+            X-Ratelimit-Remaining:
+                - "3998"
+    # Interaction 5: beta's conditional re-probe.
+    - id: 5
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/beta/actions/runs
+        headers:
+            If-None-Match:
+                - '"beta-v1"'
+      response:
+        status: 304 Not Modified
+        code: 304
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: ''
+        headers:
+            Etag:
+                - '"beta-v1"'
+            X-Ratelimit-Remaining:
+                - "3998"
+    # Interaction 6: gamma's probe. Its Run list is empty, so it stays out of the poll set.
+    - id: 6
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/gamma/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":0,"workflow_runs":[]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"gamma-v1"'
+            X-Ratelimit-Remaining:
+                - "3997"
+    # Interaction 7: gamma's conditional re-probe.
+    - id: 7
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/gamma/actions/runs
+        headers:
+            If-None-Match:
+                - '"gamma-v1"'
+      response:
+        status: 304 Not Modified
+        code: 304
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: ''
+        headers:
+            Etag:
+                - '"gamma-v1"'
+            X-Ratelimit-Remaining:
+                - "3997"

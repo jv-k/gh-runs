@@ -40,6 +40,14 @@ func (d *Discovery) FastPath(ctx context.Context, emit func(Record)) (id domain.
 	if id, err = newRepoID(id.Host, id.Owner, id.Name); err != nil {
 		return domain.RepoID{}, false, err
 	}
+	// settings R7: an excluded repository receives zero requests, and the terminal
+	// happening to sit inside it is not an exception (AC5). It reports unresolved with
+	// no error, because there is no fast-path repository for this session and that is a
+	// configured choice rather than a failure: an error here would surface R14's
+	// GH_TOKEN instruction for a person who has no such problem.
+	if d.excluded(id) {
+		return domain.RepoID{}, false, nil
+	}
 	res := d.probe(ctx, id)
 	if res.err != nil {
 		return id, false, res.err
@@ -125,6 +133,13 @@ func (d *Discovery) isKnownMember(id domain.RepoID) bool {
 func (d *Discovery) adopt(ctx context.Context, id domain.RepoID, emit func(Record)) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// Adoption is the one other request that does not travel through fanOut, so it
+	// carries the exclusion check too and the rule has no hole (settings R7, AC5).
+	// FastPath already refuses an excluded launch repository, so this is unreachable
+	// through Discover; enforcing it here is what keeps that true of any caller.
+	if d.excluded(id) {
+		return nil
 	}
 	path := fmt.Sprintf("repos/%s/%s", id.Owner, id.Name)
 	resp, err := d.opts.Client.Request(http.MethodGet, path, nil)

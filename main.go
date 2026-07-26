@@ -128,6 +128,11 @@ func run() int {
 	// main.go is the one place that knows all three, exactly as it is for the
 	// transport chain itself (ADR-0011). CurrentRepo is the fast-path resolver with
 	// the GH_TOKEN-aware error R14 requires.
+	//
+	// Exclude is settings R7's exclude list, resolved by config and handed over the same
+	// seam as the refresh interval: discovery may not import config (ADR-0011), so
+	// main.go is where a setting becomes an argument. Exclusion removes a repository
+	// from discovery, the Feed and all polling, so it receives zero requests (AC5).
 	disc := discovery.New(discovery.Options{
 		Client:  client,
 		Store:   transport,
@@ -135,6 +140,7 @@ func run() int {
 		Clock:   clk,
 		Refresh: time.Duration(cfg.DiscoveryRefreshMinutes) * time.Minute,
 		Current: ghclient.CurrentRepo,
+		Exclude: cfg.Exclude,
 	})
 
 	// The write engine. It is the only DELETE path and the only writer of the deletion
@@ -171,6 +177,10 @@ func run() int {
 		Stderr:  os.Stderr,
 		Clock:   clk,
 		Purge:   purge,
+		// The same exclude list discovery got (settings R7), so naming an excluded
+		// repository with -R is refused before any request rather than crawled and then
+		// failed at Plan with a capability message that names the wrong cause.
+		Exclude: cfg.Exclude,
 		// RepoSnapshot is the capability data Plan gates eligibility on (purge R10). It
 		// carries only Known repositories, so a repository in scope but not yet
 		// enumerated is absent and Plan fails closed rather than guessing (repo-discovery

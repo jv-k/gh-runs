@@ -225,6 +225,21 @@ func (h *harness) withDiscovered(ids ...domain.RepoID) *harness {
 	return h
 }
 
+// withExclude sets settings R7's exclude list, which main.go fills from the loaded
+// config.
+func (h *harness) withExclude(ids ...domain.RepoID) *harness {
+	h.deps.Exclude = ids
+	return h
+}
+
+// withEmptySnapshot empties the eligibility snapshot, the state main.go produces for a
+// repository discovery never recorded (purge R10: Plan fails closed rather than
+// guessing). An excluded repository is exactly that state.
+func (h *harness) withEmptySnapshot() *harness {
+	h.snapshot = map[domain.RepoID]domain.Repo{}
+	return h
+}
+
 // run executes the command with args and returns its process exit code
 // (cli-surface R17). Output is captured in the harness buffers.
 func (h *harness) run(args ...string) int {
