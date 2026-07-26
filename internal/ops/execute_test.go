@@ -65,6 +65,39 @@ func TestExecuteMixedOutcomes(t *testing.T) {
 	}
 }
 
+// TestSummaryRecordsWhichItemsSucceeded pins the record a surface adjusts its own figures
+// from (storage-reclamation R24, AC12). The counters say how many concluded each way and
+// the failure set says which ones did not, but until now nothing said which Items the
+// operation actually took effect on, and the two are not the same question: an Item can be
+// skipped at Plan time, skipped by a 409 mid-walk, or never reached because the pass stopped
+// early. A surface that has to subtract exactly the deleted objects' bytes cannot derive
+// that set from counts.
+//
+// The same cassette as the mixed-outcomes pass: Run 1 answers 204 and Run 2 answers 404,
+// which R18 counts as success because the object is gone either way. Run 3's 409 and Run 4's
+// 403 are not successes and must not appear.
+func TestSummaryRecordsWhichItemsSucceeded(t *testing.T) {
+	h := newHarness(t, "delete_mixed", 50, 50)
+	c := h.confirmed(t, ops.OpDelete, items("o", "r", 1, 2, 3, 4), snapshot(writableRepo("o", "r")))
+	sum := runPurge(t, h, c)
+
+	got := sum.Succeeded
+	if len(got) != 2 {
+		t.Fatalf("Succeeded recorded %d Items, want the 204 and the 404 (R18, R24)", len(got))
+	}
+	if got[0].ID != 1 || got[1].ID != 2 {
+		t.Errorf("Succeeded = ids %d and %d, want 1 (deleted) then 2 (gone), in attempt order", got[0].ID, got[1].ID)
+	}
+	if n := sum.Deleted + sum.Gone; len(got) != n {
+		t.Errorf("Succeeded has %d Items against %d deleted-plus-gone; the record and the counters must agree", len(got), n)
+	}
+	for _, it := range got {
+		if it.ID == 3 || it.ID == 4 {
+			t.Errorf("Succeeded carries Run %d, which was skipped or failed rather than deleted", it.ID)
+		}
+	}
+}
+
 // TestExecuteSkipsIneligibleWithoutAttempting pins AC15: an Item stamped ineligible at
 // Plan time is recorded as skipped and never has a DELETE issued for it. Two eligible
 // Runs delete; the read-only Run is skipped with no wire request.

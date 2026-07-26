@@ -143,6 +143,14 @@ type Options struct {
 	// and writes no deletion-log line, and R14's expired Artifact is refused here rather than
 	// discovered by a request.
 	StorageDownload storage.Downloader
+	// StorageScope is the set of repositories the Storage tab covers, all-repos or this-repo,
+	// and StorageCurrentRepo resolves what this-repo means (storage-reclamation R0, settings
+	// R19). They are the Workflows tab's pair applied to the other scoped surface, and they
+	// are chosen once at construction for the same reason: narrowing the scope while running
+	// also means dropping the held storage, because the tab accumulates each repository as it
+	// arrives and would otherwise leave the wider scope's rows and its rollup on screen.
+	StorageScope       storage.Scope
+	StorageCurrentRepo func() (domain.RepoID, bool)
 	// WorkflowFetch reads one repository's Workflow list for the Workflows tab, and WorkflowOps
 	// enables or disables one Workflow through the shared ops engine (workflow-management R1,
 	// R5). main.go wires both over the same client and ops, so a toggle is paced by the
@@ -263,6 +271,9 @@ func New(opts Options) Model {
 		Repos:    opts.Repos,
 		Ops:      opts.StorageOps,
 		Download: opts.StorageDownload,
+
+		Scope:       opts.StorageScope,
+		CurrentRepo: opts.StorageCurrentRepo,
 	})
 	// The Workflows tab reads the same discovered repositories: it fans one Workflow-list
 	// request out over them (R0) and reads their permissions and archived flags to gate enable

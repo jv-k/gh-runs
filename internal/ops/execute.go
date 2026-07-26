@@ -51,6 +51,25 @@ type Summary struct {
 	LogFailed    bool   // R29: the deletion log could not be written
 	Reason       string // why the Purge stopped early, else empty
 
+	// Succeeded is the Items the operation took effect on, in attempt order: a deletion the
+	// API accepted, an object already gone (R18), and a lifecycle mutation it accepted. It
+	// exists because a surface that adjusts its own figures by what was destroyed needs the
+	// objects, not a count: Reclamation subtracts exactly the deleted rows' sizes from the
+	// displayed totals (storage-reclamation R24, AC12), and the sizes ride on the frozen
+	// Cache and Artifact each Item carries.
+	//
+	// A count cannot stand in for it. An Item can be skipped at Plan time, skipped by a 409
+	// mid-walk, or never reached because the breaker, a log failure or a cancellation stopped
+	// the pass, and none of those is derivable from the frozen set and the tallies.
+	//
+	// It is exported where the retry set beside it is not, and the difference is authority.
+	// Failed() feeds R22's re-attempt without a fresh confirmation, so a caller must not be
+	// able to assemble one. This record authorises nothing: it is read to subtract bytes
+	// already destroyed. Keeping it unexported would put the frame a surface renders out of
+	// reach of the fabricated Summary that ADR-0015 makes the golden seam, which is the same
+	// reason FailedCount reads the exported groups.
+	Succeeded []Item
+
 	failed []Item // the failed Items, for R22's retry-only-the-failures keystroke
 
 	// op and debug are the pass's provenance, stamped by executeSet from the Plan. They
@@ -98,7 +117,7 @@ func (s Summary) Failed() []Item {
 // break, a log failure or a cancellation. The CLI states how to resume (R24).
 func (s Summary) StoppedEarly() bool { return s.CircuitBroke || s.LogFailed || s.Cancelled }
 
-// snapshot deep-copies the tally's three slices, so a frame crossing the progress
+// snapshot deep-copies the tally's four slices, so a frame crossing the progress
 // channel carries a Summary the running walk cannot mutate afterwards. groupByReason
 // increments a group's Count in place, so an aliased slice would be a live data race
 // between the operation's goroutine and the surface's (ADR-0015). The Items themselves
@@ -107,6 +126,7 @@ func (s Summary) snapshot() Summary {
 	s.Failures = append([]FailureGroup(nil), s.Failures...)
 	s.Skips = append([]FailureGroup(nil), s.Skips...)
 	s.failed = append([]Item(nil), s.failed...)
+	s.Succeeded = append([]Item(nil), s.Succeeded...)
 	return s
 }
 
@@ -348,12 +368,15 @@ func (o *Ops) executeSet(ctx context.Context, plan Plan, log logSink, emit progr
 		switch res.disp {
 		case dispDeleted:
 			sum.Deleted++
+			sum.Succeeded = append(sum.Succeeded, item)
 			failureStreak = 0 // a success resets the breaker (R21)
 		case dispGone:
 			sum.Gone++
+			sum.Succeeded = append(sum.Succeeded, item)
 			failureStreak = 0
 		case dispActed:
 			sum.Acted++ // a 202/201 the API accepted (run-lifecycle R4, R8)
+			sum.Succeeded = append(sum.Succeeded, item)
 			failureStreak = 0
 		case dispSkipped:
 			sum.Skipped++ // transparent to the breaker: a skip is neither success nor failure

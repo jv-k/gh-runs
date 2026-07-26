@@ -7,6 +7,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
 )
 
@@ -55,6 +56,58 @@ func TestWorkflowScopeReachesTheTab(t *testing.T) {
 // (R0's default).
 func TestWorkflowScopeDefaultsToAllRepos(t *testing.T) {
 	hit := rootWithWorkflowScope(t, "", nil)
+
+	if len(*hit) != 2 {
+		t.Fatalf("the default scope fanned out over %v, want every discovered repository (R0)", *hit)
+	}
+}
+
+// rootWithStorageScope builds a root whose Storage tab runs under one scope, recording which
+// repositories its fan-out fetched, then focuses that tab and refreshes it. The Storage tab
+// is the third, so it takes two tab presses to reach.
+func rootWithStorageScope(t *testing.T, scope storage.Scope, current func() (domain.RepoID, bool)) *[]domain.RepoID {
+	t.Helper()
+	hit := &[]domain.RepoID{}
+	repos := []domain.Repo{
+		{ID: repoID("cli", "cli"), Permissions: domain.Permissions{Push: true}},
+		{ID: repoID("acme", "infra"), Permissions: domain.Permissions{Push: true}},
+	}
+	m := New(Options{
+		Profile: keys.Standard,
+		Repos:   func() []domain.Repo { return repos },
+		StorageFetch: func(id domain.RepoID) storage.RepoStorage {
+			*hit = append(*hit, id)
+			return storage.RepoStorage{Repo: id, ArtifactsComplete: true}
+		},
+		StorageScope:       scope,
+		StorageCurrentRepo: current,
+	})
+	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = step(t, m, press("tab")) // focus the Workflows tab
+	m = step(t, m, press("tab")) // focus the Storage tab
+	drainInto(t, m, press("r"))  // refresh, which is what fans out
+	return hit
+}
+
+// TestStorageScopeReachesTheTab pins that [storage-reclamation] R0's scope is wired end to
+// end from the root's seams: constructed under this-repo, the Storage tab's fan-out covers
+// the working directory's repository alone. R0 requires both code paths to exist and both to
+// be correct, and this asserts the one the setting will drive is real rather than notional.
+func TestStorageScopeReachesTheTab(t *testing.T) {
+	hit := rootWithStorageScope(t, storage.ScopeThisRepo, func() (domain.RepoID, bool) {
+		return repoID("acme", "infra"), true
+	})
+
+	if len(*hit) != 1 || (*hit)[0] != repoID("acme", "infra") {
+		t.Fatalf("this-repo fanned out over %v, want acme/infra alone (R0)", *hit)
+	}
+}
+
+// TestStorageScopeDefaultsToAllRepos pins R0's default: with no scope stated, the fan-out
+// covers every discovered repository, which is what leads with the per-repository rollup and
+// answers "which of my repositories is hoarding Caches?".
+func TestStorageScopeDefaultsToAllRepos(t *testing.T) {
+	hit := rootWithStorageScope(t, "", nil)
 
 	if len(*hit) != 2 {
 		t.Fatalf("the default scope fanned out over %v, want every discovered repository (R0)", *hit)

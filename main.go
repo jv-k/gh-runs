@@ -582,6 +582,12 @@ func (c clients) tuiOptions(d tuiDeps) tui.Options {
 		StorageFetch:    storage.ClientFetch(client),
 		StorageOps:      d.Ops,
 		StorageDownload: c.storageDownload(d.Downloads),
+		// The Storage tab's scope is stated by nobody yet, so it runs the all-repos default R0
+		// fixes (storage-reclamation R0), exactly as the Workflows tab does. Its resolver is
+		// wired regardless, so this-repo is a path that resolves rather than a path that
+		// exists: this-repo means the repository of the working directory (settings R19), and
+		// where there is none the tab falls back to all-repos and says so.
+		StorageCurrentRepo: currentRepoID,
 		// The Workflows tab reads each repository's Workflow list over the same client, so the
 		// store revalidates and the governor accounts each request (workflow-management R1), and
 		// it enables or disables one Workflow through the same ops engine, so a toggle is paced

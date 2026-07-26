@@ -105,10 +105,41 @@ func (m Model) summaryLine() string {
 		parts = append(parts, styleTombstone.Render(plural(tombstones, "tombstone")))
 	}
 	line := strings.Join(parts, styleDim.Render("   "))
-	if label := m.incompleteLabel(); label != "" {
-		line += "\n" + styleWarn.Render(label)
+	for _, note := range m.notes() {
+		line += "\n" + note
 	}
 	return line
+}
+
+// notes are the qualifying lines under the summary: what scope the fan-out ran under where
+// that is not the default, and where the enumeration is not the whole story. They are
+// counted by summaryChrome, so the frame and the row budget agree on how many lines the
+// chrome took. They arrive styled, because the two say different kinds of thing: a scope is
+// a statement of fact and an incomplete enumeration is a warning about the figures.
+func (m Model) notes() []string {
+	var out []string
+	if scope := m.scopeLabel(); scope != "" {
+		out = append(out, styleDim.Render(scope))
+	}
+	if label := m.incompleteLabel(); label != "" {
+		out = append(out, styleWarn.Render(label))
+	}
+	return out
+}
+
+// scopeLabel states the scope the fan-out ran under, and is empty under all-repos: the
+// default nobody chose says nothing, so an all-repos frame is unchanged (R0). Under
+// this-repo it names the repository the working directory resolved to, and where it resolved
+// to none it states the fallback to all-repos, which [settings] R19 requires be said rather
+// than answered with an empty view or a picker.
+func (m Model) scopeLabel() string {
+	if m.scope != ScopeThisRepo {
+		return ""
+	}
+	if id, ok := m.thisRepo(); ok {
+		return "scope this-repo: " + textsan.Sanitize(id.Owner+"/"+id.Name)
+	}
+	return "scope this-repo found no repository in this working directory, showing all-repos"
 }
 
 // totals is the grand rollup: R1's Cache figures summed across the in-scope repositories,
@@ -116,7 +147,7 @@ func (m Model) summaryLine() string {
 // counts.
 func (m Model) totals() (cacheBytes int64, cacheCount int, artifactReclaim int64, live, tombstones int) {
 	for _, id := range m.order {
-		st := m.storage[id.String()]
+		st := m.visible(id)
 		cacheBytes += st.ActiveCachesSizeInBytes
 		cacheCount += st.ActiveCachesCount
 		for _, a := range st.Artifacts {
@@ -137,7 +168,7 @@ func (m Model) totals() (cacheBytes int64, cacheCount int, artifactReclaim int64
 func (m Model) incompleteLabel() string {
 	var caches, artifacts int
 	for _, id := range m.order {
-		st := m.storage[id.String()]
+		st := m.visible(id)
 		if !st.cacheListComplete() {
 			caches++
 		}
@@ -174,7 +205,7 @@ func (m Model) rollupLines() []string {
 	}
 	rows := make([]rr, 0, len(m.order))
 	for _, id := range m.order {
-		st := m.storage[id.String()]
+		st := m.visible(id)
 		var art int64
 		for _, a := range st.Artifacts {
 			art += a.ReclaimableBytes()
@@ -351,17 +382,37 @@ func (m Model) contentWidth() int {
 	return m.width
 }
 
-// listCapacity is the number of merged-list rows the viewport shows, the height less the
-// summary, the rollup, the list header, the hint and the download status line when one is
-// showing. It floors at one so a tiny terminal still pages.
+// listCapacity is the number of merged-list rows the viewport shows: the height less every
+// line View paints around them. It floors at one so a tiny terminal still pages, which is
+// the one case where the frame is taller than the terminal and the root's own clamp is what
+// keeps it on screen.
 func (m Model) listCapacity() int {
-	chrome := 2 + m.rollupChrome() + 2 + m.statusChrome() // summary+blank, rollup, list header, hint(+blank), status
-	n := m.height - chrome
+	n := m.height - m.chromeLines()
 	if n < 1 {
 		return 1
 	}
 	return n
 }
+
+// chromeLines counts every line of the frame that is not a merged-list row, in the order
+// View appends them. It is derived from that composition rather than from a constant,
+// because an undercount here does not shrink the frame, it draws rows past the bottom of the
+// terminal and pushes the hint line naming the tab's keys off screen. That is what the
+// summary's incomplete label did: it is a second summary line under R2 and R3, and it was
+// counted as none.
+func (m Model) chromeLines() int {
+	chrome := m.summaryChrome() + m.rollupChrome()
+	chrome += 2 // the blank line before the list, and the list header
+	if m.hintLine() != "" {
+		chrome += 2 // the blank line before the hint, and the hint
+	}
+	return chrome + m.statusChrome()
+}
+
+// summaryChrome is the line count of the summary block: its one line of totals, plus each
+// qualifying note under it, the scope where it is not the default (R0) and the incomplete
+// label where the enumeration did not account for R1's figures (R2, R3).
+func (m Model) summaryChrome() int { return 1 + len(m.notes()) }
 
 // statusChrome is the line the download status occupies, zero while there is none (R13).
 func (m Model) statusChrome() int {
