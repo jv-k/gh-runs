@@ -17,7 +17,8 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/limiter"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/store"
-	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
+	storagetab "github.com/jv-k/gh-runs/v2/internal/tui/storage"
+	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
 )
 
 // blobMatcher matches a live request against a taped one on method and full URL. The full URL
@@ -125,7 +126,7 @@ func TestArtifactDownloadDoesNotFeedTheLocalStore(t *testing.T) {
 		dir := t.TempDir()
 		cl, _ := wiredClients(t, dir)
 
-		if _, err := storage.ClientDownload(cl.shared, t.TempDir())(artifact()); err != nil {
+		if _, err := storagetab.ClientDownload(cl.shared, t.TempDir())(artifact()); err != nil {
 			t.Fatalf("download: %v", err)
 		}
 		if n := storeEntries(t, dir); n == 0 {
@@ -146,4 +147,56 @@ func wiredClients(t *testing.T, dir string) (clients, *governor.Governor) {
 		t.Fatalf("build clients: %v", err)
 	}
 	return cl, gov
+}
+
+// TestTheConfiguredScopesReachTheTabs pins [settings] R19 at the composition root, which is
+// the one place the loaded scopes and the tabs that read them meet. Both tabs carry both code
+// paths and both resolvers are wired, so the setting was decoded, validated, rendered as a
+// Settings row and then read by nobody: a config file stating this-repo was accepted and
+// silently ignored, which is worse than an unrecognised key.
+//
+// The assertion is over the value the root is handed rather than over the tabs, because the
+// tabs already have tests for what each scope fans out over. What was missing is the wire.
+//
+// The four combinations pin R19's independence directly: the two scopes are separate
+// settings, so scoping one tab must leave the other alone, and a single field feeding both
+// would pass any one row of this table.
+func TestTheConfiguredScopesReachTheTabs(t *testing.T) {
+	all, this := config.ScopeAllRepos, config.ScopeThisRepo
+	for _, tc := range []struct {
+		name          string
+		workflows     config.Scope
+		storage       config.Scope
+		wantWorkflows workflows.Scope
+		wantStorage   storagetab.Scope
+	}{
+		{"both default", all, all, workflows.ScopeAllRepos, storagetab.ScopeAllRepos},
+		{"both this-repo", this, this, workflows.ScopeThisRepo, storagetab.ScopeThisRepo},
+		{"workflows alone", this, all, workflows.ScopeThisRepo, storagetab.ScopeAllRepos},
+		{"storage alone", all, this, workflows.ScopeAllRepos, storagetab.ScopeThisRepo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cl, gov := wiredClients(t, t.TempDir())
+			opts := cl.tuiOptions(tuiDeps{
+				Config:    config.Config{WorkflowsScope: tc.workflows, StorageScope: tc.storage},
+				Profile:   keys.Standard,
+				Clock:     clockwork.NewFakeClock(),
+				Scheduler: scheduler.New(scheduler.Options{}),
+				Governor:  gov,
+				Downloads: t.TempDir(),
+			})
+
+			if opts.WorkflowScope != tc.wantWorkflows {
+				t.Errorf("workflows_scope %q reached the tab as %q, want %q (R19)", tc.workflows, opts.WorkflowScope, tc.wantWorkflows)
+			}
+			if opts.StorageScope != tc.wantStorage {
+				t.Errorf("storage_scope %q reached the tab as %q, want %q (R19)", tc.storage, opts.StorageScope, tc.wantStorage)
+			}
+			// this-repo means the repository of the working directory, so a stated scope with no
+			// resolver behind it would fall back to all-repos and the setting would still not work.
+			if opts.WorkflowCurrentRepo == nil || opts.StorageCurrentRepo == nil {
+				t.Error("a tab was handed a scope with no working-directory resolver; this-repo would fall back to all-repos (R19)")
+			}
+		})
+	}
 }

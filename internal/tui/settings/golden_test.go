@@ -79,6 +79,21 @@ func TestGoldenEditingNumber(t *testing.T) {
 	goldie.New(t).Assert(t, "editing_number", []byte(m.View()))
 }
 
+// TestGoldenScopeFocused fixes the frame R19's scope row paints when it is focused: the row
+// with its description and the two members it cycles through, set to the non-default
+// this-repo. The description is the part worth pinning byte for byte, because it is what
+// tells a person the toggle takes effect at the next launch rather than under the refresh
+// key they would otherwise reach for. The other scope goldens carry the value and never the
+// focused row, so this wording was rendered by no golden at all.
+func TestGoldenScopeFocused(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.StorageScope = config.ScopeThisRepo
+	m := settings.New(keys.Standard, cfg, nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "storage_scope")
+	goldie.New(t).Assert(t, "scope_focused", []byte(m.View()))
+}
+
 // TestGoldenExcludeList fixes the frame R7's exclude row paints when it is set: the row
 // focused with its description and its edit hint, naming as many repositories as the
 // value column holds and counting the rest. It is the reference account's shape, where

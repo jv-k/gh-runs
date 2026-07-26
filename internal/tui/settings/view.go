@@ -198,10 +198,14 @@ func (m Model) description(r row) string {
 		return "Motion keys: Vim (k/j) or Standard (arrows)."
 	case rowTheme:
 		return "Palette: auto follows your terminal background. NO_COLOR overrides all three."
+	// Both scope rows say "starts" for the reason R9's launch filter does, and it is the
+	// requirement rather than a hedge: each tab chooses its scope at construction, because
+	// narrowing it also means dropping the held state, so a toggle takes effect at the next
+	// launch. The present tense would state something a person would test by pressing refresh.
 	case rowWorkflowsScope:
-		return "Which repositories the Workflows tab covers."
+		return "The Workflows tab starts covering these repositories."
 	case rowStorageScope:
-		return "Which repositories the Storage tab covers."
+		return "The Storage tab starts covering these repositories."
 	case rowLaunchFilter:
 		// It says "starts" rather than "now", and that is the requirement rather than a
 		// hedge: R9 settles the filter the Feed opens with, and a running Feed keeps

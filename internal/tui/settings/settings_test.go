@@ -172,6 +172,27 @@ func TestScopesToggleIndependently(t *testing.T) {
 	}
 }
 
+// TestTheScopeRowsSayTheyApplyAtLaunch pins that neither scope row promises an effect it
+// does not have. Both tabs choose their scope at construction, because narrowing it also
+// means dropping the held state: each accumulates one repository's data per fetch, so a
+// narrowed scope would leave the wider one's rows, and Storage's per-repository rollup, on
+// screen. A toggle therefore takes effect at the next launch.
+//
+// The wording follows R9's launch-filter row, which says "starts" rather than "now" for the
+// same reason and records that as the requirement rather than a hedge. A row reading "which
+// repositories the tab covers" states the present tense of something that will not change
+// until relaunch, which is the one reading a person would test by pressing refresh.
+func TestTheScopeRowsSayTheyApplyAtLaunch(t *testing.T) {
+	for _, key := range []string{"workflows_scope", "storage_scope"} {
+		t.Run(key, func(t *testing.T) {
+			m := focus(t, open(&recorder{}), key)
+			if got := m.View(); !strings.Contains(got, "starts") {
+				t.Errorf("the %s row does not say when it applies, so a toggle reads as immediate (R19, R9's precedent):\n%s", key, got)
+			}
+		})
+	}
+}
+
 // TestCyclesBudgetTier pins that the Budget selector cycles through its three named
 // tiers and wraps, the intent-level knob settings R8 admits.
 func TestCyclesBudgetTier(t *testing.T) {
