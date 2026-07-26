@@ -294,6 +294,7 @@ type harness struct {
 	gov      *governor.Governor
 	clk      *clockwork.FakeClock
 	ps       *fakePollSet
+	client   *ghclient.Client
 
 	mu      sync.Mutex
 	events  []Event
@@ -307,6 +308,11 @@ type harnessConfig struct {
 	pollSet   []domain.RepoID
 	budget    Budget         // nil means wire the governor
 	workflows WorkflowLister // nil means no Workflow list is resolved, the cadence tests' default
+	// wireWorkflows replaces workflows with a lister that reads the listing over the
+	// harness's own client, so the read travels the counted wire and the cassette exactly as
+	// it does in main.go. It is how a test counts the join's requests rather than a fake's
+	// calls.
+	wireWorkflows bool
 }
 
 // newHarness assembles the chain and the Scheduler, enables the settle probe, and
@@ -331,11 +337,16 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		budget = gov
 	}
 
-	s := New(Options{Client: client, PollSet: ps, Budget: budget, Clock: clk, Workflows: cfg.workflows})
+	lister := cfg.workflows
+	if cfg.wireWorkflows {
+		lister = wireWorkflowLister(client)
+	}
+
+	s := New(Options{Client: client, PollSet: ps, Budget: budget, Clock: clk, Workflows: lister})
 	s.settled = make(chan time.Duration, 1)
 	s.polled = make(chan struct{}, 4096)
 
-	h := &harness{s: s, counting: counting, gov: gov, clk: clk, ps: ps, updated: make(chan struct{}, 4096)}
+	h := &harness{s: s, counting: counting, gov: gov, clk: clk, ps: ps, client: client, updated: make(chan struct{}, 4096)}
 	h.drainWG.Add(1)
 	go func() {
 		defer h.drainWG.Done()

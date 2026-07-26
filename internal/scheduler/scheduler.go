@@ -128,6 +128,11 @@ type Budget interface {
 // knows both, exactly as it is for the store and the client (ADR-0011). It is nil
 // wherever no Workflow list is wired, and then nothing is stamped and the marker
 // stays dark, which is the honest reading of a join that was never made.
+//
+// It is called at most once per repository per process, whatever it returns, so an
+// implementation owes no memo of its own and pays for no backoff (workflowStates).
+// An incomplete listing is returned as what it is rather than as an error, so the
+// Workflows on the first page still resolve.
 type WorkflowLister func(domain.RepoID) ([]domain.Workflow, error)
 
 // Options carries the scheduler's seams. main.go fills them at stage 7: the client
@@ -160,10 +165,10 @@ type Scheduler struct {
 	lastETag map[string]string       // per repo: the ETag its last 200 carried, to spot a 304 (R19)
 
 	// wfStates is each repository's Workflow ID to State join, read once through the
-	// WorkflowLister and held for the process. An entry exists exactly when the list was
-	// read successfully, so a repository with no Workflows at all is remembered as read
-	// and never asked again, while one whose read failed is asked again on its next
-	// changed poll.
+	// WorkflowLister and held for the process. An entry exists once the read has been
+	// attempted, successfully or not, so the listing is read at most once per repository
+	// whatever it answered (workflowStates has the reasoning). A nil value is a read that
+	// failed, and answers the empty State for every Workflow ID.
 	wfStates map[string]map[int64]domain.State
 
 	// filt is the Feed's active filter, guarded by mu (ADR-0016). A poll derives its

@@ -1,11 +1,17 @@
 package scheduler
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/ghclient"
+	"github.com/jv-k/gh-runs/v2/internal/governor"
 )
 
 // legacy is the repository the workflow_state cassette answers for: two Runs, one on a
@@ -157,12 +163,17 @@ func TestUnresolvedWorkflowStateIsEmpty(t *testing.T) {
 	}
 }
 
-// TestUnreadableWorkflowListIsRetried pins that a failure is not cached. A 502 or a
-// transient 403 must not disable the marker for the rest of the session, so a repository
-// whose list has not been read yet asks again on its next changed poll, exactly as the
-// engine retries a failed poll on the repository's own cadence.
-func TestUnreadableWorkflowListIsRetried(t *testing.T) {
-	lister := &fakeLister{ws: legacyWorkflows(), err: errors.New("HTTP 502: Bad Gateway"), errN: 1}
+// TestWorkflowListIsReadOnceWhateverTheOutcome pins the bound on the failure path, which is
+// the one that has no natural end. A repository whose Workflow list answers 403 for a
+// fine-grained PAT would otherwise be re-read on every changed poll for the whole session,
+// silently, with no backoff and no cap, and at the fast tier that is a request every three
+// seconds for a listing that will not answer.
+//
+// The read is therefore attempted once per repository per process whatever it returns. The
+// cost is that a repository whose list failed keeps its marker dark until a restart, which
+// is the state the marker was in before it was wired at all, and never a false one.
+func TestWorkflowListIsReadOnceWhateverTheOutcome(t *testing.T) {
+	lister := &fakeLister{ws: legacyWorkflows(), err: errors.New("HTTP 403: Forbidden"), errN: 1}
 	h := newHarness(t, harnessConfig{
 		base:      openCassette(t, "workflow_state"),
 		pollSet:   []domain.RepoID{legacy},
@@ -177,16 +188,14 @@ func TestUnreadableWorkflowListIsRetried(t *testing.T) {
 		t.Fatalf("a Run stamped %q from a list that failed to read, want the empty State", got)
 	}
 
+	// A second changed poll, which the lister would now answer. It is not asked.
 	h.blockUntil(1)
 	h.clk.Advance(slowTarget)
 	h.waitPolls(t, 1)
 	h.waitUpdates(t, 1)
 
-	if got := lister.calls(legacy); got != 2 {
-		t.Errorf("the Workflow list was read %d times, want 2 (the failure was cached)", got)
-	}
-	if got := byRunID(h.updates()[1])[1].WorkflowState; got != domain.StateDeleted {
-		t.Errorf("the retry did not stamp the Run: State %q, want %q", got, domain.StateDeleted)
+	if got := lister.calls(legacy); got != 1 {
+		t.Errorf("the Workflow list was read %d times after a failure, want 1 (an unbounded retry)", got)
 	}
 }
 
@@ -206,5 +215,96 @@ func TestNoRunsReadsNoWorkflowList(t *testing.T) {
 
 	if got := lister.calls(empty); got != 0 {
 		t.Errorf("a repository with no Runs read its Workflow list %d times, want 0", got)
+	}
+}
+
+// wireWorkflowLister reads a repository's Workflow listing over the harness's client, the
+// same request main.go's lister makes through the same chain. A test using it counts the
+// join's real requests at countingRT rather than a fake's calls, which is the only way the
+// engine's shipped request profile is measured at all.
+func wireWorkflowLister(c *ghclient.Client) WorkflowLister {
+	return func(id domain.RepoID) ([]domain.Workflow, error) {
+		resp, err := c.Request(http.MethodGet, "repos/"+id.Owner+"/"+id.Name+"/actions/workflows?per_page=100", nil)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return nil, statusError(resp.StatusCode)
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		var page struct {
+			Workflows []domain.Workflow `json:"workflows"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, err
+		}
+		return page.Workflows, nil
+	}
+}
+
+// TestTheJoinCostsOneRequestPerRepository is the cost claim measured at the wire, with the
+// lister wired as it ships rather than faked. polling-scheduler R11 projects one request per
+// repository per interval, so a second request class in the poll path is exactly the kind of
+// thing that has to be counted rather than asserted.
+func TestTheJoinCostsOneRequestPerRepository(t *testing.T) {
+	h := newHarness(t, harnessConfig{
+		base:          openCassette(t, "workflow_state"),
+		pollSet:       []domain.RepoID{legacy},
+		wireWorkflows: true,
+	})
+	h.start(t)
+	h.waitPolls(t, 1)
+	h.waitUpdates(t, 1)
+	h.waitSettle(t, slowTarget)
+
+	if got := h.counting.countPath("/actions/runs"); got != 1 {
+		t.Errorf("cold-start Run listings = %d, want 1", got)
+	}
+	if got := h.counting.countPath("/actions/workflows"); got != 1 {
+		t.Errorf("cold-start Workflow listings = %d, want 1", got)
+	}
+	if got := byRunID(h.updates()[0])[1].WorkflowState; got != domain.StateDeleted {
+		t.Fatalf("the wired lister did not resolve the join: State %q, want %q", got, domain.StateDeleted)
+	}
+
+	// A second changed poll costs one Run listing and no second Workflow listing. The
+	// cassette would answer another, so this counts the memo and not the fixture.
+	h.blockUntil(1)
+	h.clk.Advance(slowTarget)
+	h.waitPolls(t, 1)
+	h.waitUpdates(t, 1)
+
+	if got := h.counting.countPath("/actions/runs"); got != 2 {
+		t.Errorf("Run listings after two polls = %d, want 2 (one per repository per interval)", got)
+	}
+	if got := h.counting.countPath("/actions/workflows"); got != 1 {
+		t.Errorf("Workflow listings after two polls = %d, want 1 (once per repository, not per poll)", got)
+	}
+}
+
+// TestExhaustionStopsTheJoinToo re-checks the assertion the wired feature could have voided.
+// orchestration_test's exhaustion case counts every wire request while paused and wants
+// zero, and it runs with no lister. The join reads from inside the poll goroutine, and a
+// paused loop spawns none, so the count stays zero with the feature on. Asserting it here
+// is what keeps that true if the read ever moves.
+func TestExhaustionStopsTheJoinToo(t *testing.T) {
+	resume := t0.Add(15 * time.Minute)
+	budget := &fakeBudget{}
+	budget.set(governor.Readout{Exhausted: true, Reset: resume})
+	h := newHarness(t, harnessConfig{
+		base:          openCassette(t, "workflow_state"),
+		pollSet:       []domain.RepoID{legacy},
+		budget:        budget,
+		wireWorkflows: true,
+	})
+	h.start(t)
+	h.waitSettle(t, resume.Sub(t0))
+
+	if got := h.counting.count(); got != 0 {
+		t.Errorf("wire requests while exhausted = %d, want 0 (the join must not poll past a pause)", got)
 	}
 }

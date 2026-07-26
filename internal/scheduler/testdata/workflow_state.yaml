@@ -48,3 +48,24 @@ interactions:
                 - '"legacy-v2"'
             X-Ratelimit-Remaining:
                 - "4999"
+    # Interaction 2: the repository's Workflow list, read once for the join, unconditional.
+    # It is replayable, so a second read would be answered rather than refused: a test that
+    # counts one read is measuring the engine's memo and not the fixture's patience.
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/legacy/actions/workflows?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":2,"workflows":[{"id":9001,"name":"Old Pipeline","path":".github/workflows/old.yml","state":"deleted"},{"id":9002,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"legacy-workflows-v1"'
+            X-Ratelimit-Remaining:
+                - "4998"
