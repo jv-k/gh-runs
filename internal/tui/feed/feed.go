@@ -409,26 +409,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		for _, r := range msg {
 			m.repos[r.ID.String()] = r
 		}
-		// Drop a failure for a repository that is no longer discovered. A repository
-		// deleted or made private upstream fails its next poll once, then leaves the
-		// poll set, so no Update can ever arrive to clear it and the indicator would
-		// assert a live condition nothing is testing anymore, undismissable for the
-		// rest of the session.
-		//
-		// This is a full set, pulled by the root rather than an incremental batch, so
-		// absence is meaningful. The empty case is not: at cold start nothing is
-		// discovered yet, and pruning against it would clear a failure the poll set
-		// still holds.
+		// Drop what a repository leaving the poll set has stranded. This is a full set,
+		// pulled by the root rather than an incremental batch, so absence is meaningful
+		// as soon as discovery can retire a repository at all, which is issue #115. The
+		// empty case is never meaningful: at cold start nothing is discovered yet, and
+		// pruning against it would clear a failure the poll set still holds.
 		if len(msg) > 0 {
-			for key := range m.failed {
-				if _, known := m.repos[key]; !known {
-					delete(m.failed, key)
-				}
-			}
+			m.pruneFailed(msg)
 			// A cancellation-requested mark waits on a poll of its repository, so it has the
-			// same undismissable failure mode and takes the same prune (R4a). It prunes
-			// against the arriving set rather than against m.repos, which is the accumulated
-			// union and so reports every repository ever discovered as still known.
+			// same undismissable failure mode and takes the same prune (R4a).
 			m.pruneCancelRequested(msg)
 		}
 		return m, nil
@@ -1111,6 +1100,34 @@ func (m *Model) markCancelRequested(p ops.Progress) {
 	}
 }
 
+// pruneFailed drops a recorded poll failure whose repository is absent from the discovered
+// set, so ADR-0015's RepoPollFailed indicator cannot outlive the poll set that was going to
+// clear it. A repository deleted or made private upstream fails its next poll once and then
+// leaves the poll set, so no Update can ever arrive to clear it.
+//
+// It reads the arriving set and not m.repos, for the reason pruneCancelRequested below
+// gives. Keyed by the host-qualified identity, matching where m.failed is written
+// (ADR-0009).
+//
+// This closes the Feed's half of the leak and not the whole of it. Discovery never forgets a
+// repository: internal/discovery holds records that nothing deletes from, and Known only
+// moves false to true, so the arriving set does not yet shrink when a repository is deleted
+// or made private. Absence here is meaningful the moment it does. See issue #115.
+func (m *Model) pruneFailed(discovered ReposDiscovered) {
+	if len(m.failed) == 0 {
+		return
+	}
+	live := make(map[string]bool, len(discovered))
+	for _, r := range discovered {
+		live[r.ID.String()] = true
+	}
+	for key := range m.failed {
+		if !live[key] {
+			delete(m.failed, key)
+		}
+	}
+}
+
 // pruneCancelRequested drops a mark whose repository is absent from the discovered set, so
 // a mark cannot outlive the poll set that was going to clear it (R4a). The caller has
 // already established that the set is non-empty, because an empty one is a cold start
@@ -1119,8 +1136,7 @@ func (m *Model) markCancelRequested(p ops.Progress) {
 // It reads the arriving set and not m.repos. m.repos is the accumulated union of every
 // discovery this session, kept that way because the capability gate must still answer for a
 // repository whose Runs are held from an earlier poll, so a repository that has left the
-// poll set is still "known" there. Pruning against it would therefore never drop anything,
-// which is the trap the failed map beside it is still in.
+// poll set is still "known" there. Pruning against it would therefore never drop anything.
 func (m *Model) pruneCancelRequested(discovered ReposDiscovered) {
 	live := make(map[domain.RepoID]bool, len(discovered))
 	for _, r := range discovered {

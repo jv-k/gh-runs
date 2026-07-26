@@ -120,9 +120,14 @@ func TestFailureReasonIsSanitised(t *testing.T) {
 // repository deleted or made private upstream fails once, then leaves the poll set, so
 // no Update can ever arrive to clear it. Without this the indicator would assert a
 // live condition nothing is testing anymore, undismissable for the rest of the session.
+//
+// The first discovery is what makes this the real sequence rather than a vacuous one: a
+// repository can only leave the poll set if it was in it, and a prune read against the
+// accumulated union of every discovery would report it as still known and drop nothing.
 func TestFailureClearsWhenTheRepositoryLeavesDiscovery(t *testing.T) {
 	m := newFeed(100, 24)
 	gone, stays := repoID("acme", "gone"), repoID("acme", "stays")
+	m, _ = m.Update(ReposDiscovered{{ID: gone}, {ID: stays}})
 	m = feedFailure(m, gone, errors.New("poll returned HTTP 404 Not Found"))
 	m = feedFailure(m, stays, errors.New("poll returned HTTP 502 Bad Gateway"))
 
