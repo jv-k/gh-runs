@@ -49,8 +49,9 @@ func TestForceCancelKeyOpensConfirmation(t *testing.T) {
 
 // TestSingleRerunTakesNoModal pins R18's asymmetry at the Feed: a single re-run over the
 // cursor Run prices at FrictionNone and opens no modal, because correcting a failed Run is
-// the Feed's most common action and neither destroys a Run. Launching it is the running
-// surface this stage defers, exactly as the Purge stage defers launching a confirmed Purge.
+// the Feed's most common action and neither destroys a Run. It still launches, which
+// TestSingleRerunLaunchesWithoutAModal pins; this test is the modal's absence alone, and
+// specifically that the Feed does not go on capturing input for a prompt nobody raised.
 func TestSingleRerunTakesNoModal(t *testing.T) {
 	m := newFeedWithOps(t)
 	m = m.Update2(press("down")) // engage; no selection, so the cursor Run is the set

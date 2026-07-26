@@ -14,24 +14,38 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
 
-// The Feed's column geometry (R4a). Four columns are fixed and never shrink; two
-// flex above their floors. The four fixed sum to 57, five single-space separators
-// make 62, and the two floors give 57 + 5 + 20 + 18 = 100, which is minWidth. Below
-// it the Feed paints no rows and states the width it needs (AC20). No width truncates
-// a value in either enum, because each column is sized to the longest member its enum
-// has (R6a).
+// The Feed's column geometry (R4a). A fixed gutter leads the row, four columns are fixed
+// and never shrink, and two flex above their floors. The gutter is 2, the four fixed sum
+// to 57, five single-space separators make 62, and the two floors give 2 + 57 + 5 + 20 + 16
+// = 100, which is minWidth. Below it the Feed paints no rows and states the width it needs
+// (AC20). No width truncates a value in either enum, because each column is sized to the
+// longest member its enum has (R6a).
+//
+// The gutter is funded out of workflowFloor rather than added to minWidth, so the 100-column
+// golden convention holds and no terminal that painted the Feed before stops doing so. It
+// carries row state that belongs to neither Status nor Conclusion: run-lifecycle R7 holds
+// those two fields to the API's own values, and a cancellation the tool has requested and the
+// API has not yet acted on is a fact about this process, not about either field (R4, AC5).
 const (
 	minWidth      = 100
+	gutterW       = 2  // one marker plus its trailing space; joined without a separator
 	statusW       = 11 // in_progress, the longest Status
 	conclusionW   = 15 // action_required and startup_failure, the longest Conclusions
 	runIDW        = 11 // measured: cli/cli serves 11-digit ids
 	startedW      = 20 // measured: 2026-07-15T16:39:00Z
 	repoFloor     = 20 // home-assistant/core is 19, kubernetes/kubernetes is 21
-	workflowFloor = 18 // chosen: what is left
+	workflowFloor = 16 // chosen: what is left once the gutter is funded
 	colSep        = " "
-	truncMarker   = "…"
-	startedLayout = "2006-01-02T15:04:05Z"
-	clockLayout   = "15:04"
+
+	// cancelRequestedMarker is the gutter's cancellation-requested indicator (R4, AC5). It is
+	// the cancel key's own letter, so the mark names the keystroke that produced it, and it is
+	// ASCII, so its display width is its rune count and the row arithmetic above holds on any
+	// terminal. blankMarker keeps an unmarked row's columns in the same places.
+	cancelRequestedMarker = "c"
+	blankMarker           = "  "
+	truncMarker           = "…"
+	startedLayout         = "2006-01-02T15:04:05Z"
+	clockLayout           = "15:04"
 
 	// failedNamesShown bounds how many repository names the failed-poll indicator
 	// spells out before it falls back to a count. The poll set runs to roughly 26
@@ -61,6 +75,11 @@ var (
 	// styleBadge is the approvals badge, in the same purple the waiting Status carries, so the
 	// count of Runs awaiting a decision reads as the awaiting hue (approvals R8).
 	styleBadge = lipgloss.NewStyle().Bold(true).Foreground(palette.Waiting)
+
+	// styleCancelRequested is the gutter's cancellation-requested marker (R4, AC5). It takes
+	// the attention hue rather than the danger one: an accepted cancel is a request in flight
+	// and an expected state, not a failure, and the Run it marks is still running.
+	styleCancelRequested = lipgloss.NewStyle().Bold(true).Foreground(palette.Attention)
 
 	// Action-state decoration on the repository cell, four visibly distinct renderings
 	// (R36's third golden). Offered is plain; the three refusals each differ.
@@ -122,6 +141,9 @@ func (m Model) View() string {
 	}
 	if a, ok := m.approvalBadgeLine(); ok {
 		top = append(top, a)
+	}
+	if c, ok := m.cancelRequestedLine(); ok {
+		top = append(top, c)
 	}
 	if f, ok := m.filterLine(); ok {
 		top = append(top, f)
@@ -323,13 +345,15 @@ func (m Model) headerLine() string {
 		truncPad("RUN ID", runIDW),
 		truncPad("STARTED", startedW),
 	}
-	return styleHeader.Render(strings.Join(cells, colSep))
+	// The gutter carries no heading. It holds row state rather than a field, and a heading
+	// over it would name a column the rows do not have.
+	return styleHeader.Render(blankMarker + strings.Join(cells, colSep))
 }
 
 // renderRow paints one Run in the fixed column order, with Status and Conclusion in
 // their own separately styled cells and an empty Conclusion below completed (R4, R5).
-// Cursor and selection decorate each cell so the row keeps its exact width (R4a): no
-// gutter fits at 100 columns.
+// Cursor and selection decorate each cell so the row keeps its exact width (R4a); the
+// leading gutter carries run-lifecycle R4's cancellation-requested indicator.
 func (m Model) renderRow(r domain.Run, isCursor, isSelected bool) string {
 	repoW, workflowW := m.flexWidths()
 
@@ -358,7 +382,17 @@ func (m Model) renderRow(r domain.Run, isCursor, isSelected bool) string {
 	runIDCell := decorate(lipgloss.NewStyle()).Render(truncPad(strconv.FormatInt(r.ID, 10), runIDW))
 	startedCell := decorate(lipgloss.NewStyle()).Render(truncPad(formatStarted(r), startedW))
 
-	return strings.Join([]string{repoCell, workflowCell, statusCell, conclusionCell, runIDCell, startedCell}, colSep)
+	// The gutter says a cancel or force-cancel was accepted for this Run and no poll has
+	// observed the transition yet (R4, AC5). It is deliberately not a Conclusion and not a
+	// Status: both of those cells go on showing exactly what the API last said, which for a
+	// Run still running means an empty Conclusion, and the mark disappears the moment a poll
+	// moves the Run to completed.
+	gutter := blankMarker
+	if m.cancelRequested[r.ID] {
+		gutter = decorate(styleCancelRequested).Render(cancelRequestedMarker) + " "
+	}
+
+	return gutter + strings.Join([]string{repoCell, workflowCell, statusCell, conclusionCell, runIDCell, startedCell}, colSep)
 }
 
 // flexWidths gives the two flex columns their width at the current terminal width: the
@@ -499,6 +533,25 @@ func (m Model) approvalBadgeLine() (string, bool) {
 	label := fmt.Sprintf("%d %s awaiting a decision (press %s to filter)",
 		n, plural(n, "run", "runs"), m.profile.ApprovalsFilter.Help().Key)
 	return styleBadge.Render(label), true
+}
+
+// cancelRequestedLine explains the gutter's marker while any row carries it (R4, AC5). It
+// is what makes a one-character gutter legible: the mark says which rows, and this says what
+// the mark means and that the answer has not arrived yet, which is the whole distinction R4
+// draws between a request being accepted and a Run being cancelled.
+//
+// It follows the approvals badge's rule and appears only while it is true, so it never
+// becomes permanent chrome. The count is of marked Runs held anywhere, not of marked rows on
+// screen: a filter can hide the Run whose cancel is outstanding, and a line that vanished
+// with it would report the request as over.
+func (m Model) cancelRequestedLine() (string, bool) {
+	n := len(m.cancelRequested)
+	if n == 0 {
+		return "", false
+	}
+	label := fmt.Sprintf("%s  cancellation requested for %d %s, awaiting the poll that observes it",
+		cancelRequestedMarker, n, plural(n, "run", "runs"))
+	return styleCancelRequested.Render(label), true
 }
 
 // failedLine is the failed-repository indicator, from ADR-0015's RepoPollFailed. It

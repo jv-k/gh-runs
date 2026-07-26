@@ -10,6 +10,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
+	"github.com/jv-k/gh-runs/v2/internal/ops"
 )
 
 // The goldens render the Feed's frame from held state alone, at R4a's 100 columns, with
@@ -43,6 +44,29 @@ func TestGoldenRowRendering(t *testing.T) {
 		mkRun(29516338001, "home-assistant", "core", "Release", domain.StatusCompleted, domain.ConclusionSuccess, t0.Add(-time.Hour)),
 	)
 	goldie.New(t).Assert(t, "row_rendering", []byte(m.View()))
+}
+
+// TestGoldenCancellationRequested fixes run-lifecycle AC5's frame. A test over the model can
+// assert that the mark is held; only a golden proves the row still says in_progress with an
+// empty Conclusion beside the marker, which is the whole of what R4 permits a 202 to claim.
+// The second Run is in the same repository and unmarked, so the gutter is shown to be a
+// per-row state and not a mode the whole list enters.
+func TestGoldenCancellationRequested(t *testing.T) {
+	m := newFeed(100, 5)
+	id := repoID("cli", "cli")
+	m = discovered(m, repo("cli", "cli", true, false))
+	running := mkRun(29516338954, "cli", "cli", "CI", domain.StatusInProgress, "", t0)
+	m = feedRuns(m, id,
+		running,
+		mkRun(29516338001, "cli", "cli", "Release", domain.StatusInProgress, "", t0.Add(-time.Hour)),
+	)
+	m = m.Update2(ops.Progress{
+		Op:   ops.OpCancel,
+		Kind: ops.KindRun,
+		Sum:  ops.Summary{Total: 1, Acted: 1, Succeeded: []ops.Item{ops.RunItem(running)}},
+		Done: true,
+	})
+	goldie.New(t).Assert(t, "cancellation_requested", []byte(m.View()))
 }
 
 // TestGoldenCapLabel fixes R36's second case: R24's honest cap label, "1,000 of

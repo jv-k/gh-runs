@@ -157,6 +157,19 @@ type Model struct {
 	// (R13, R13a, AC5). The persistent count keeps an off-filter selection visible.
 	selected map[int64]bool
 
+	// cancelRequested is keyed by Run ID: a cancel or force-cancel the API accepted and
+	// whose transition no poll has observed yet (run-lifecycle R4, AC5). Cancel is
+	// asynchronous, so a 202 licenses exactly this and nothing about the Conclusion, which
+	// stays whatever the API last said until a poll moves it.
+	//
+	// It is the Feed's own state rather than a field on the Run, because it is not a
+	// property of the Run at all: it is a property of a request this process made, it is
+	// true of no Run the API describes, and it dies with the session. An entry is cleared
+	// by recompute the moment a polled Run reaches Status completed, which is R4's "a
+	// subsequent poll observing the Run's actual transition" and the only authority the
+	// requirement grants.
+	cancelRequested map[int64]bool
+
 	cursor int // index into displayedIDs
 	top    int // first visible row, scrolled to keep the cursor on screen
 
@@ -272,18 +285,19 @@ func New(opts Options) Model {
 	// the held filter and the line a person can edit are one state (R22, R23).
 	ti.SetValue(opts.Filter.QueryString())
 	return Model{
-		active:      true,
-		profile:     opts.Profile,
-		setViewport: opts.SetViewport,
-		setFilter:   opts.SetFilter,
-		filter:      opts.Filter,
-		live:        make(map[string][]domain.Run),
-		current:     make(map[int64]domain.Run),
-		selected:    make(map[int64]bool),
-		repos:       make(map[string]domain.Repo),
-		totals:      make(map[string]capTotal),
-		failed:      make(map[string]repoFailure),
-		filterInput: ti,
+		active:          true,
+		profile:         opts.Profile,
+		setViewport:     opts.SetViewport,
+		setFilter:       opts.SetFilter,
+		filter:          opts.Filter,
+		live:            make(map[string][]domain.Run),
+		current:         make(map[int64]domain.Run),
+		selected:        make(map[int64]bool),
+		cancelRequested: make(map[int64]bool),
+		repos:           make(map[string]domain.Repo),
+		totals:          make(map[string]capTotal),
+		failed:          make(map[string]repoFailure),
+		filterInput:     ti,
 		detail: rundetail.New(rundetail.Options{
 			Fetch:      opts.DetailFetch,
 			Clock:      opts.Clock,
@@ -428,6 +442,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m, dcmd = m.retargetDetail()
 		return m, tea.Batch(m.publishFilter(), dcmd)
 
+	case ops.Progress:
+		// A running operation's frame, broadcast to every tab (ADR-0015). The Feed reads one
+		// thing from it: which Runs a cancel was accepted for, so their rows can say a
+		// cancellation is outstanding (R4, AC5). The tally, the remaining-time range and the
+		// terminal summary are the running-op surface's, not this tab's.
+		//
+		// Every frame carries the whole acted set rather than a delta, so re-reading a frame,
+		// or missing one, converges on the same marks.
+		m.markCancelRequested(msg)
+		return m, nil
+
 	case governor.Readout:
 		m.readout = msg
 		// The pane pauses on the same Budget as the Feed (run-detail R16), so it must see the
@@ -485,15 +510,15 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		// and fetching nothing to do it (approvals R9, AC8).
 		return m.toggleApprovalsFilter(), m.publishViewport()
 	case key.Matches(k, m.profile.Delete):
-		return m.openConfirm(ops.OpDelete), nil
+		return m.openConfirm(ops.OpDelete)
 	case key.Matches(k, m.profile.Cancel):
-		return m.openConfirm(ops.OpCancel), nil
+		return m.openConfirm(ops.OpCancel)
 	case key.Matches(k, m.profile.ForceCancel):
-		return m.openConfirm(ops.OpForceCancel), nil
+		return m.openConfirm(ops.OpForceCancel)
 	case key.Matches(k, m.profile.Rerun):
-		return m.openRerun(ops.OpRerun), nil
+		return m.openRerun(ops.OpRerun)
 	case key.Matches(k, m.profile.RerunFailed):
-		return m.openRerun(ops.OpRerunFailed), nil
+		return m.openRerun(ops.OpRerunFailed)
 	case key.Matches(k, m.profile.RowUp):
 		m.moveCursor(-1)
 	case key.Matches(k, m.profile.RowDown):
@@ -586,29 +611,34 @@ func (m Model) repoCapability(r domain.Run) (domain.Repo, bool) {
 // capability is not yet known, it stays closed, keeping the destructive action disabled
 // (repo-discovery R8, ADR-0019's fail-closed Plan).
 //
-// A single re-run or re-run-failed prices at FrictionNone (run-lifecycle R18): it takes
-// no confirmation, so the pane opens no modal (ADR-0019). Launching Execute over that
-// confirmed set is the running surface this stage defers, exactly as the Purge stage
-// defers launching a Purge from a confirmed delete Plan. Every other case opens the
-// graduated confirmation, which is one shared component reused unchanged.
-func (m Model) openConfirm(op ops.Operation) Model {
+// A single re-run or re-run-failed prices at FrictionNone (run-lifecycle R18): it takes no
+// confirmation, so the pane opens no modal and the operation launches straight from the
+// keystroke (ADR-0019). What R18 removes is the modal, not ops.Confirm: the launch still
+// runs the full chain, so the Plan is validated and the single-use Confirmed is minted on
+// the same path every other operation takes, and purge R9's "no route from a selection to a
+// write skips confirmation" stays a property of the type rather than of this branch. Every
+// other case opens the graduated confirmation, one shared component reused unchanged.
+func (m Model) openConfirm(op ops.Operation) (Model, tea.Cmd) {
 	if m.planner == nil {
-		return m
+		return m, nil
 	}
 	items := m.frozenSelection()
 	if len(items) == 0 {
-		return m
+		return m, nil
 	}
 	plan, err := m.planner.Plan(op, items, m.repoSnapshot())
 	if err != nil {
-		return m // fail closed: an unknown repository keeps the action disabled (repo-discovery R8)
+		return m, nil // fail closed: an unknown repository keeps the action disabled (repo-discovery R8)
 	}
 	if plan.Friction() == ops.FrictionNone {
-		return m // R18: a single re-run takes no modal; launching it is the deferred running surface
+		// R18, AC11: no modal, and no prompt to answer, so the Input is NoInput, which is
+		// exactly what FrictionNone accepts. Returning here without launching is the defect
+		// #61 fixed: it left the operator with neither a prompt nor a re-run.
+		return m, m.launch(plan, ops.NoInput())
 	}
 	m.confirm = m.confirm.Open(plan)
 	m.confirmOpen = true
-	return m
+	return m, nil
 }
 
 // openRerun raises a re-run or re-run-failed confirmation, applying run-detail R18's
@@ -622,9 +652,9 @@ func (m Model) openConfirm(op ops.Operation) Model {
 // Orphaned ones skipped, so they appear in the modal's skip lines exactly as a read-only
 // repository's Runs do. Dropping the whole operation instead would discard the healthy
 // Runs the operator selected beside them, silently, which R18 never asked for.
-func (m Model) openRerun(op ops.Operation) Model {
+func (m Model) openRerun(op ops.Operation) (Model, tea.Cmd) {
 	if orphanedOnly(m.frozenSelection()) {
-		return m // run-detail R18, AC15: nothing in the set can be re-run
+		return m, nil // run-detail R18, AC15: nothing in the set can be re-run
 	}
 	return m.openConfirm(op)
 }
@@ -737,13 +767,20 @@ func (m Model) handleConfirmKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 // broadcasts). Confirm and Start both happen inside the Cmd rather than in Update,
 // because Update must stay non-blocking and Start spawns.
 //
-// It is wired for the Purge alone at this stage. The surface it launches into is generic
-// over ops.Operation and so is the stream, so the bulk lifecycle mutations (#61) and
-// Reclamation (#64) join by removing this gate and wiring their own tab's confirmation,
-// not by building a second indicator. Until they do, a confirmed cancel closes the modal
-// and starts nothing, which is where run-lifecycle's execution issue picks it up.
+// Every verb this tab can freeze travels it: the Purge, and run-lifecycle's cancel,
+// force-cancel, re-run and re-run-failed (#61). The surface it launches into is generic
+// over ops.Operation and so is the stream, because a Purge and a bulk lifecycle mutation
+// are the same walk over a frozen set under the same failure contract, differing only in
+// the verb (run-lifecycle R21, R23, AC17). The Storage tab reached the same surface the same
+// way, by wiring its own confirmation to the one engine rather than building a second
+// indicator, which is what makes three launchers share one running-op pane.
+//
+// The operation is not gated here. It cannot be anything but one of those five: a Plan is
+// unforgeable and reaches this function only from this tab's own confirmation, whose keys
+// name the verb. A gate would restate the caller's own switch and go stale the way the
+// OpDelete one did.
 func (m Model) launch(plan ops.Plan, in ops.Input) tea.Cmd {
-	if m.planner == nil || plan.Operation() != ops.OpDelete {
+	if m.planner == nil {
 		return nil
 	}
 	planner := m.planner
@@ -1004,11 +1041,55 @@ func (m Model) cursorInList() bool {
 // (R9, R10). Otherwise it applies the changes at once (R10: idle, or a filtered view
 // being typed).
 func (m *Model) recompute() {
+	m.clearObservedCancellations()
 	next := m.liveView()
 	if m.cursorInList() {
 		m.repaintAndDefer(next)
 	} else {
 		m.applyView(next)
+	}
+}
+
+// markCancelRequested records the Runs a cancel or force-cancel was accepted for, so their
+// rows report an outstanding request (R4, AC5).
+//
+// It is cancel's alone among the operations that report 'acted'. A re-run is equally
+// accepted and equally mutates the row, but nothing about it is a cancellation: marking it
+// would paint a cancellation-requested indicator on a Run that is starting, which is the
+// opposite claim to the one the operator made.
+func (m *Model) markCancelRequested(p ops.Progress) {
+	if p.Op != ops.OpCancel && p.Op != ops.OpForceCancel {
+		return
+	}
+	if m.cancelRequested == nil {
+		m.cancelRequested = make(map[int64]bool)
+	}
+	for _, it := range p.Sum.Succeeded {
+		if it.Kind == ops.KindRun {
+			m.cancelRequested[it.ID] = true
+		}
+	}
+}
+
+// clearObservedCancellations drops the mark for every Run a poll has now seen reach Status
+// completed, which is R4's "a subsequent poll observing the Run's actual transition" and the
+// only authority that requirement grants. From that moment the row shows the API's own
+// Conclusion, whether it is cancelled or the Run finished first and the cancel lost the race.
+//
+// It reads m.live, the truth across every repository, rather than the displayed rows: a
+// filter or the approvals badge can hide the Run whose transition just landed, and a mark
+// that could only be cleared while its row was on screen would outlive the request it
+// describes for the rest of the session.
+func (m *Model) clearObservedCancellations() {
+	if len(m.cancelRequested) == 0 {
+		return
+	}
+	for _, runs := range m.live {
+		for i := range runs {
+			if runs[i].Status == domain.StatusCompleted {
+				delete(m.cancelRequested, runs[i].ID)
+			}
+		}
 	}
 }
 
