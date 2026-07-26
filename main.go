@@ -234,11 +234,13 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 		return 1
 	}
 
-	// Reject a non-github.com remote explicitly rather than silently attributing its Runs to
-	// github.com (R35, AC17). Being outside a git repository, or an unresolvable remote, is
-	// not a rejection: the Feed falls back to progressive reveal across the discovered
-	// account (R34).
-	if err := currentHostSupported(ghclient.CurrentRepo); err != nil {
+	// The repository the tool was launched inside, which the engine polls first (R32). A
+	// non-github.com remote is rejected explicitly here rather than having its Runs silently
+	// attributed to github.com (R35, AC17). Being outside a git repository, or an
+	// unresolvable remote, is not a rejection: there is simply no fast path, and the Feed
+	// falls back to progressive reveal across the discovered account (R34).
+	first, err := fastPathRepo(ghclient.CurrentRepo, cfg.Exclude)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "gh-runs:", err)
 		return 1
 	}
@@ -261,23 +263,41 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 	// the answer arrives or the operator changes the setting, so auto follows the terminal as
 	// gh does and a change applies from the next frame (settings R6, R17).
 
-	// Seed discovery so the poll set is not empty on a warm cache; a cold cache spends
-	// one pass and the Feed reveals repositories as they arrive (R32, R33). A discovery
-	// failure is not fatal to the dashboard: the Feed still paints what it can.
-	if disc.Reload() == 0 {
-		_ = disc.Pass(context.Background(), nil)
-	}
+	// Reload the persisted classification before the engine exists. It is a local-store read
+	// that issues nothing, so it is not the repository discovery R32 forbids waiting on, and
+	// it must not sit behind the fast path's gate for two reasons. It is what makes the gate
+	// load-bearing: without it the poll set is empty at every launch, the gate has nothing to
+	// hold back, and R32 would rest on the discovery goroutine's wait alone. And the root
+	// reads the same records for the Feed's capability gate (Repos below), which behind the
+	// gate would stay empty until a network response landed, or for a whole exhaustion window
+	// if the Budget were exhausted at launch, despite a fully populated local-store.
+	seeded := disc.Reload()
 
 	sched := scheduler.New(scheduler.Options{
-		Client:    client,
-		PollSet:   disc,
-		Budget:    gov,
-		Clock:     clk,
-		Workflows: cl.workflowLister(),
+		Client:  client,
+		PollSet: disc,
+		// R32: the engine polls this repository alone until its opening poll lands, so the
+		// Feed paints it from a single Run listing (AC16). Zero outside a git repository,
+		// where nothing is held back and the whole set reveals progressively (R34).
+		First: first,
+		// The exemption above ends when discovery answers, so the launch repository does not
+		// outstay polling-scheduler R2: classified with Runs it is in the poll set already,
+		// classified without them it leaves the rotation like any other.
+		Classified: classifiedBy(disc),
+		Budget:     gov,
+		Clock:      clk,
+		Workflows:  cl.workflowLister(),
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sched.Start(ctx)
+
+	// The discovery pass runs behind the fast path rather than in front of it (R32, R33). It
+	// is the one thing here that must not be waited on: it costs an enumeration and a
+	// Run-listing probe per repository, so running it first is both the wait R32 forbids and
+	// ~163 Run listings ahead of the one AC16 counts. A warm local-store has already seeded
+	// the poll set above and spends no pass at all.
+	go discoverBehind(ctx, sched, disc, seeded)
 
 	root := tui.New(cl.tuiOptions(tuiDeps{
 		Config:    cfg,
@@ -294,7 +314,7 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 	// tea.WithContext ties the program to the same context the engine runs under, so a
 	// signal that cancels one cancels both. tea.WithColorProfile is R15a's requirement in
 	// one call: the program renders at the profile resolved above and never detects its own.
-	_, err := tea.NewProgram(root, tea.WithContext(ctx), tea.WithColorProfile(colorProfile)).Run()
+	_, err = tea.NewProgram(root, tea.WithContext(ctx), tea.WithColorProfile(colorProfile)).Run()
 
 	// Stop the engine, bounded: the UI is already gone, so quit must not wait on a hung
 	// poll. The response-header timeout bounds any in-flight read, and process exit reaps
@@ -316,21 +336,125 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 	return 0
 }
 
-// currentHostSupported reports an error only when the repository the tool was launched
-// inside resolves to a host gh-runs does not serve, so runTUI rejects it explicitly rather
-// than attributing its Runs to the wrong host (live-run-feed R35, AC17). Resolution routes
-// through the same host-qualifying resolver the rest of the tool uses, and only its typed
-// UnsupportedHostError is a rejection: being outside a git repository, or an unresolvable
-// remote, returns nil so the Feed falls back to progressive reveal across the account (R34).
+// fastPathRepo resolves the repository the tool was launched inside, which the engine polls
+// first and alone (live-run-feed R32, repo-discovery R14).
+//
+// **It must stay the only caller of the resolver on the TUI path.** The resolver shells out
+// to git, and one launch needs the answer twice: as the engine's Options.First and as R35's
+// host gate. It is resolved once here and used for both. discovery.Options.Current names the
+// same resolver, but nothing on this path calls it, because the FastPath and Discover
+// entrypoints that would are unreached (issue #100). If that changes, this becomes two git
+// subprocesses per launch unless the resolved value is passed rather than the resolver.
+//
+// An excluded repository is never the fast path. settings R7 removes an excluded repository
+// from "discovery, the Feed and all polling", and Options.First is a polling path that
+// bypasses discovery entirely, so leaving it unfiltered would poll a repository the operator
+// told the tool to leave alone. discovery.FastPath already refuses one on the same ground
+// (fastpath.go), so this keeps the two entrypoints agreeing rather than inventing a rule.
+// Returning the zero repository, not an error: an excluded launch repository is not a
+// failure, it is a session with no fast path, which is R34's fallback exactly.
+//
+// It reports an error only when that repository resolves to a host gh-runs does not serve,
+// so runTUI rejects it explicitly rather than attributing its Runs to the wrong host (R35,
+// AC17). Resolution routes through the same host-qualifying resolver the rest of the tool
+// uses, and only its typed UnsupportedHostError is a rejection: being outside a git
+// repository, or an unresolvable remote, yields the zero repository and no error, so there
+// is no fast path and the Feed falls back to progressive reveal across the account (R34).
 // errors.As unwraps, so a wrapped rejection is caught too, and the check reuses the one host
 // validation domain.NewRepoID and discovery already raise.
-func currentHostSupported(current func() (domain.RepoID, error)) error {
-	_, err := current()
+func fastPathRepo(current func() (domain.RepoID, error), exclude []domain.RepoID) (domain.RepoID, error) {
+	id, err := current()
 	var unsupported *domain.UnsupportedHostError
 	if errors.As(err, &unsupported) {
-		return unsupported
+		return domain.RepoID{}, unsupported
 	}
-	return nil
+	if err != nil {
+		return domain.RepoID{}, nil
+	}
+	for _, ex := range exclude {
+		if ex == id {
+			return domain.RepoID{}, nil
+		}
+	}
+	return id, nil
+}
+
+// classifiedBy is the engine's Classified seam over discovery's record set: whether
+// discovery holds a record for a repository, and therefore whether its classification is the
+// answer (scheduler.Options.Classified). It is a function over domain types so the engine
+// imports no discovery, exactly as the Workflow-list seam is (ADR-0011).
+//
+// Only the launch repository is ever asked about, at most twice per scheduling decision, so
+// the scan is over ~163 records a few times a second at the fast tier and is not worth an
+// index. A repository discovery excluded is in no record (settings R7), which reads here as
+// unclassified, but no excluded repository can reach this: fastPathRepo has already declined
+// to name one as the fast path, so the engine never asks.
+func classifiedBy(disc *discovery.Discovery) func(domain.RepoID) bool {
+	return func(id domain.RepoID) bool {
+		for _, r := range disc.Records() {
+			if r.ID() == id {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// discoverBehind runs repository discovery behind the fast path, never in front of it
+// (live-run-feed R32, R33). It is the ordering AC16 measures, and it is a named function
+// rather than an inline goroutine body because that ordering is the whole feature: the
+// composition root is where it is decided, and this is the line a test can hold.
+//
+// It waits for the engine's opening poll of the launch repository to land before it reads
+// anything. A discovery pass costs an account enumeration plus one Run-listing probe per
+// repository, ~163 of them at reference scale (repo-discovery R1, R16), so starting it first
+// puts every one of those on the wire ahead of the single Run listing AC16 counts, and makes
+// the Feed wait on repository discovery, which is exactly what R32 forbids. Running it after
+// costs the fast path nothing: the pass then reveals the rest of the account progressively,
+// and the scheduler adopts the growing poll set with no restart (polling-scheduler R3).
+//
+// Each repository it learns about is handed to the engine as it is learned, which is what
+// makes R33's reveal progressive rather than a batch: discovery publishes a repository as
+// its probe returns (repo-discovery R15), and the engine polls it at the next decision
+// instead of at the end of the wait it was already asleep in.
+//
+// seeded is what the caller's local-store reload returned, so the reload itself stays in
+// front of the engine (it issues nothing, and the poll set it seeds is what gives the gate
+// something to hold back) while only the pass, which is all network, runs behind the gate.
+//
+// A cancelled context releases the wait, so quit is never held by a fast path that never
+// landed. A discovery failure is not fatal to the dashboard: the Feed still paints what it
+// can, which on a warm local-store is the whole persisted set.
+//
+// It recovers rather than letting a panic through. This code used to run before the UI
+// opened, where a crash left a usable terminal behind. It now runs alongside a live Bubble
+// Tea program holding the terminal in raw mode, and an unrecovered panic in this goroutine
+// would take the process down without giving the program a chance to restore it, leaving the
+// user's shell without an echo or a working newline. Losing discovery is a degraded Feed;
+// losing the terminal is a broken session.
+func discoverBehind(ctx context.Context, sched *scheduler.Scheduler, disc *discovery.Discovery, seeded int) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintln(os.Stderr, "gh-runs: repository discovery failed:", r)
+		}
+	}()
+
+	select {
+	case <-sched.Primed():
+	case <-ctx.Done():
+		return
+	}
+	if seeded > 0 {
+		// A warm local-store already holds the whole classified set (local-store R5,
+		// repo-discovery R19), so no pass is spent and there is nothing to tell the engine:
+		// the poll set was seeded before it was constructed, and opening the gate already
+		// woke it to re-read that set.
+		return
+	}
+	// A cold local-store spends the pass, and the engine is told per repository as each is
+	// classified (repo-discovery R15, live-run-feed R33). The wakes coalesce, so ~163 of them
+	// cost a handful of re-evaluations and no extra request.
+	_ = disc.Pass(ctx, func(discovery.Record) { sched.PollSetChanged() })
 }
 
 // clients is the pair of request surfaces the tool dials one assembled chain with.
