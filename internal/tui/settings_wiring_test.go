@@ -20,6 +20,7 @@ func wiringConfig() config.Config {
 		DiscoveryRefreshMinutes: 5,
 		KeybindingProfile:       config.KeybindingStandard,
 		Theme:                   config.ThemeAuto,
+		Timestamp:               config.TimestampAbsolute,
 		WorkflowsScope:          config.ScopeAllRepos,
 		StorageScope:            config.ScopeAllRepos,
 	}
