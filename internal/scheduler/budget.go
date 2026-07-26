@@ -20,6 +20,11 @@ const dwell = 5 * time.Minute
 // two hours of five-minute dwells, comfortably past ADR-0021's 60-minute reset
 // ceiling, so a real episode never reaches it. Only a reset far longer than canon
 // allows would, and a parked interval is still the right posture there.
+//
+// The 30s figure is the smallest base the shift applies to. An auto-scaled base is
+// larger and so overflows at a lower stage, but every such base is itself bounded by
+// mediumSetInterval's clamp to the ambient one, and the ambient one only stretches at a
+// scale far past the reference account, so the margin the cap leaves is still ample.
 const maxDemoteSteps = 24
 
 // secondaryCeiling is the ~900 points/min secondary-limit budget the scheduler
@@ -55,18 +60,67 @@ func projectedPointsPerMin(n int, interval time.Duration) float64 {
 // 5s (AC8). It is never faster than the slow target, so the whole set never polls
 // faster than the ambient tier.
 func wholeSetInterval(n int) time.Duration {
+	return budgetedInterval(n, slowTarget)
+}
+
+// mediumSetInterval is the medium tier's base interval for a medium set of medium
+// repositories inside a poll set of total, whose ambient interval is slowBase: R5's
+// medium target, stretched only as far as the budget requires.
+//
+// The stretch is what makes a pin affordable at all (settings R7, #97). ADR-0021 chose
+// the viewport as the medium tier because it is self-capping at terminal height, and it
+// disfavoured any reading whose cost scales with poll-set size: the whole set at 5s
+// measured 312 points/min at 26 repositories and was unaffordable at 100. A pin list is
+// operator-authored and unbounded, so promoting it without a bound would reintroduce
+// exactly that cliff.
+//
+// It is priced against the headroom the ambient tier leaves rather than against the
+// whole ceiling, because R11 bounds projected consumption and not one tier's share of
+// it. Pricing the tier alone would let a large poll set with a large pin list project
+// past the ceiling while each tier looked affordable on its own.
+//
+// It never returns more than slowBase. A medium base slower than the ambient one would
+// invert the promotion, polling a pinned repository less often than an unpinned one,
+// against R7's fastest-tier-wins and settings R7's "pinning MUST prioritise". The two
+// converge instead: when the whole poll set is pinned there is no ambient traffic to
+// leave headroom, and both tiers land on the same budgeted interval.
+func mediumSetInterval(medium, total int, slowBase time.Duration) time.Duration {
+	if medium <= 0 {
+		return mediumTarget
+	}
+	// What the ambient tier is already spending on everything not in this tier.
+	ambient := projectedPointsPerMin(max(total-medium, 0), slowBase)
+	headroom := secondaryCeiling - ambient
+	if headroom <= 0 {
+		return slowBase
+	}
+	base := time.Duration(math.Ceil(pointsPerMinute * float64(medium) / headroom * float64(time.Second)))
+	if base < mediumTarget {
+		base = mediumTarget
+	}
+	if base > slowBase {
+		return slowBase
+	}
+	return base
+}
+
+// budgetedInterval is the arithmetic both tiers' auto-scales share: the target, unless
+// a set of n is large enough that the target would project past the secondary ceiling,
+// in which case the smallest interval that stays under it (R11, AC8). It never returns
+// less than the target, so an auto-scale can only ever slow a tier down.
+func budgetedInterval(n int, target time.Duration) time.Duration {
 	if n <= 0 {
-		return slowTarget
+		return target
 	}
 	// The smallest interval that keeps n * (60/interval) at or under the ceiling is
 	// 60n/ceiling seconds. Below the target this is a non-binding guard; above it,
 	// it is the auto-scale R11 requires. Round up: truncating to the nanosecond would
 	// leave the interval a hair short and the projection a hair over the ceiling.
 	minForBudget := time.Duration(math.Ceil(pointsPerMinute * float64(n) / secondaryCeiling * float64(time.Second)))
-	if minForBudget > slowTarget {
+	if minForBudget > target {
 		return minForBudget
 	}
-	return slowTarget
+	return target
 }
 
 // demotion is R15's staged, compounding, held-until-reset demotion state
@@ -160,7 +214,9 @@ func (s *Scheduler) intervalForLocked(t Tier, now time.Time, slowBase time.Durat
 	case tierFast:
 		base = fastTarget
 	case tierMedium:
-		base = mediumTarget
+		// Auto-scaled, because a pin list can grow this tier past what the terminal-height
+		// cap bounded it to (#97, mediumSetInterval).
+		base = mediumSetInterval(s.mediumCount, s.pollSetSizeLocked(), slowBase)
 	default:
 		base = slowBase
 	}
@@ -198,9 +254,14 @@ func demoteSteps(t Tier, stage int) int {
 // reaches. A nil poll set (the pure-arithmetic tests) reads as size zero and yields
 // the unstretched slow target.
 func (s *Scheduler) slowBaseLocked() time.Duration {
-	n := 0
-	if s.opts.PollSet != nil {
-		n = len(s.opts.PollSet.PollSet())
+	return wholeSetInterval(s.pollSetSizeLocked())
+}
+
+// pollSetSizeLocked is the current poll set's size, the total the medium tier is priced
+// within. A nil poll set (the pure-arithmetic tests) reads as zero.
+func (s *Scheduler) pollSetSizeLocked() int {
+	if s.opts.PollSet == nil {
+		return 0
 	}
-	return wholeSetInterval(n)
+	return len(s.opts.PollSet.PollSet())
 }

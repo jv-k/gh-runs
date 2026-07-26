@@ -306,15 +306,19 @@ type Config struct {
 	// Exclusion removes a repository from discovery, the Feed and all polling. It
 	// defaults to empty, so a config file without the key leaves discovery exactly as
 	// it was (R3, AC1).
-	//
-	// R7's pin half has no field here, and that is deliberate rather than an omission.
-	// Prioritising a repository is a cadence decision, cadence is the scheduler's tier
-	// policy (ADR-0021), and nothing this tool currently publishes is consumed for
-	// order, so a pin key would be a setting a person could write and never observe.
-	// Settings R11 already ruled on that shape for the notification options: a key with
-	// no subsystem behind it defers with the subsystem rather than shipping inert, and
-	// R3 plus R14 mean adding it later needs no migration. Issue #97 carries it.
 	Exclude []domain.RepoID
+	// Pin is settings R7's pin half, of host-qualified identity (ADR-0009). A pinned
+	// repository is promoted to the scheduler's medium tier, so it is polled at the
+	// cadence an on-screen repository gets and keeps it while off screen (#97).
+	//
+	// The key was deliberately absent while nothing consumed it: prioritising a
+	// repository is a cadence decision, and until the tier policy took the pin as an
+	// input this would have been a setting a person could write and never observe, which
+	// is the shape settings R11 refuses. It has a subsystem behind it now.
+	//
+	// Exclusion wins. Exclusion is applied at discovery, so an excluded repository never
+	// reaches the poll set and a pin naming it has no observable effect (R7, AC14).
+	Pin []domain.RepoID
 	// LaunchFilter is the filter the Feed opens with (settings R9), ADR-0016's structured
 	// Filter with Status and Conclusion as distinct typed fields, never the CLI's permissive
 	// -s/--status string. It defaults to the zero Filter, which matches every Run, so a
@@ -493,6 +497,8 @@ func resolveFile(cfg Config, data []byte, diags []Diagnostic) (Config, []Diagnos
 			cfg.StorageScope, diags = resolveScope(key, node, cfg.StorageScope, diags)
 		case "exclude":
 			cfg.Exclude, diags = resolveRepoList(key, node, diags)
+		case "pin":
+			cfg.Pin, diags = resolveRepoList(key, node, diags)
 		case "launch_filter":
 			cfg.LaunchFilter, diags = resolveLaunchFilter(key, node, diags)
 		default:
@@ -746,6 +752,10 @@ func changedKeys(prev, next Config) []change {
 	// form domain.ParseRepoRef reads back. slices.Equal compares it by value and by
 	// order, so reordering the list is a change and rewrites the key.
 	add(!slices.Equal(prev.Exclude, next.Exclude), "exclude", repoRefs(next.Exclude))
+	// R7's pin list is written the same way, through the same helpers, for the same
+	// reasons. Order is compared too: the list is the operator's, and rewriting it in a
+	// different order than they typed would be a change they did not make.
+	add(!slices.Equal(prev.Pin, next.Pin), "pin", repoRefs(next.Pin))
 	// R9's launch filter is written as a nested mapping of its axes, the same shape
 	// resolveLaunchFilter reads. An axis the filter no longer carries is written as a nil,
 	// which setMapping removes, so clearing a clause in the view clears it in the file.

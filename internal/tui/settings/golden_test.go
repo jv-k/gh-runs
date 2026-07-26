@@ -124,6 +124,23 @@ func TestGoldenExcludeList(t *testing.T) {
 	goldie.New(t).Assert(t, "exclude_list", []byte(m.View()))
 }
 
+// TestGoldenPinList fixes the frame R7's pin row paints when it is set and focused (#97).
+// The description is the part worth pinning byte for byte. The pin's whole effect is a
+// cadence, which nobody can see by looking at the frame, so the row's wording is the only
+// thing that tells a person what they bought: the medium tier's interval, held while the
+// repository is scrolled away, and exclusion winning where the two lists overlap.
+func TestGoldenPinList(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Pin = []domain.RepoID{
+		repo("jv-k", "gh-runs"),
+		repo("acme", "api"),
+	}
+	m := settings.New(keys.Standard, cfg, nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focus(t, m, "pin")
+	goldie.New(t).Assert(t, "pin_list", []byte(m.View()))
+}
+
 // TestGoldenLaunchFilter fixes the frame R9's launch-filter row paints when it is set: the
 // row focused with its description and its edit hint, and the filter rendered in the
 // grammar the Feed's own / input takes. It carries a Status and a Conclusion at once, which

@@ -61,6 +61,7 @@ const (
 	// filter pinned to one repository the Runs tab's this-repo scope by another name.
 	rowLaunchFilter
 	rowExclude
+	rowPin
 	rowConfirmThreshold
 	rowBreakerFailures
 	rowDiscoveryRefresh
@@ -97,7 +98,7 @@ func (r row) isNumber() bool {
 // The editor opens pre-filled with the list as it stands, which is what lets one gesture
 // both add and remove. A gesture that could only append would be a one-way ratchet, and
 // a person who excluded the wrong repository would have to reach for the file anyway.
-func (r row) isList() bool { return r == rowExclude }
+func (r row) isList() bool { return r == rowExclude || r == rowPin }
 
 // isFilter reports whether the row holds R9's launch filter, edited as one line of the
 // filter input's own grammar. It is the same gesture the list row takes, over a different
@@ -133,6 +134,8 @@ func (r row) configKey() string {
 		return "launch_filter"
 	case rowExclude:
 		return "exclude"
+	case rowPin:
+		return "pin"
 	case rowConfirmThreshold:
 		return "confirm_threshold"
 	case rowBreakerFailures:
@@ -276,7 +279,7 @@ func (m Model) handleNavKey(k tea.KeyPressMsg) Model {
 			m.editErr = ""
 			switch {
 			case m.cursor.isList():
-				m.editBuf = strings.Join(repoRefs(m.cfg.Exclude), ", ")
+				m.editBuf = strings.Join(repoRefs(m.listFor(m.cursor)), ", ")
 			case m.cursor.isFilter():
 				m.editBuf = m.cfg.LaunchFilter.QueryString()
 			}
@@ -347,7 +350,18 @@ func (m Model) endEdit() Model {
 // low enough that a stuck key cannot grow the buffer without limit.
 const listBufMax = 4096
 
-// commitList parses the edited buffer into R7's exclude list and adopts it. Entries are
+// listFor is the repository list a list row holds. R7 has two, and they are the same
+// shape edited by the same gesture over different fields, so the row picks the field
+// rather than each call site knowing which list it is looking at.
+func (m Model) listFor(r row) []domain.RepoID {
+	if r == rowPin {
+		return m.cfg.Pin
+	}
+	return m.cfg.Exclude
+}
+
+// commitList parses the edited buffer into the R7 list the cursor is on and adopts it,
+// which is the exclude list or the pin list. Entries are
 // comma-separated OWNER/REPO, and each goes through domain.ParseRepoRef, the same door the
 // loader uses, so the view can never store an identity config.Load would refuse. An entry
 // that does not parse is dropped and named in the view rather than silently swallowed,
@@ -373,7 +387,11 @@ func (m Model) commitList() Model {
 			ids = append(ids, id)
 		}
 	}
-	m.cfg.Exclude = ids
+	if m.cursor == rowPin {
+		m.cfg.Pin = ids
+	} else {
+		m.cfg.Exclude = ids
+	}
 	if len(rejected) > 0 {
 		m.editErr = "ignored: " + strings.Join(rejected, ", ")
 	}

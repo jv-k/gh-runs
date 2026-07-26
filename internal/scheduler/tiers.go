@@ -15,9 +15,11 @@ const (
 	// queued or in_progress: a Run that is moving (R5, ADR-0021). The ~3s figure
 	// matches gh run watch's default (R8).
 	tierFast Tier = iota
-	// tierMedium (~5s) tracks a repository on screen: one with at least one row in
-	// the Feed's current viewport (R5, ADR-0021). The tier is self-capping at
-	// terminal height, so it never meets the 100-repository cliff.
+	// tierMedium (~5s) tracks a repository on screen (at least one row in the Feed's
+	// current viewport) or pinned (settings R7, R5, ADR-0021). The viewport half is
+	// self-capping at terminal height; the pin half is operator-authored and unbounded,
+	// so the tier's base is auto-scaled against the secondary ceiling instead, and it
+	// never meets the 100-repository cliff either way (mediumSetInterval).
 	tierMedium
 	// tierSlow (~30s) is the ambient tier: a repository in the poll set that
 	// qualifies for neither of the above (R5). A Run invoked elsewhere surfaces
@@ -66,7 +68,10 @@ func (s *Scheduler) tierOfLocked(id domain.RepoID) Tier {
 	if s.hasLiveRunLocked(id) {
 		return tierFast
 	}
-	if s.viewport[id.String()] {
+	// On screen, or pinned. The two are one tier: the viewport says "I am looking at this
+	// now" and a pin says "I care about this one" persistently, and neither is a reason to
+	// poll at a different rate from the other (ADR-0021, settings R7, #97).
+	if s.viewport[id.String()] || s.pinned[id.String()] {
 		return tierMedium
 	}
 	return tierSlow

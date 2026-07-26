@@ -25,10 +25,12 @@ The scheduler decides which repositories are revalidated and how often, so that 
 | Tier | A repository qualifies when | Target interval |
 |---|---|---|
 | Fast | its most recent Runs include at least one whose Status is `queued` or `in_progress` | ~3s |
-| Medium | it is on screen: it has at least one row in the Feed's current viewport | ~5s |
+| Medium | it is on screen (at least one row in the Feed's current viewport), or it is pinned ([settings](../settings/requirements.md) R7) | ~5s |
 | Slow | it is in the poll set and qualifies for neither of the above | ~30s |
 
 **Both qualifying rules are [ADR-0021](../../adr/0021-the-scheduler-cadence-policy.md)'s, and each replaces an ambiguity.** Fast previously read "any Status short of `completed`", which handed days of ~3s polling to a Run parked at `waiting` on a deployment approval. The parked statuses (`waiting`, `requested`, `pending`) now qualify a repository for nothing: its next event is a human acting, the approval's effect surfaces within the ambient tier's interval, and the fast tier resumes on `queued`. Medium previously read "the repository or section the user is currently looking at", whose widest reading was the whole poll set at 5s. The viewport reading is self-capping at terminal height, recency-targeted by the `run_started_at` sort, and filter-aware for free. It makes a scroll a scheduling input, which the Feed publishes and R3's live set-change machinery already accommodates.
+
+**The medium tier gained a second input, and with it a price.** [settings](../settings/requirements.md) R7's pin promotes a repository to this tier persistently, where the viewport promotes it by scroll position (issue [#97](https://github.com/jv-k/gh-runs/issues/97)). A pin list is operator-authored and unbounded, so the tier is no longer self-capping and is bounded by the budget instead: its base interval auto-scales against the same ~900 points/min ceiling the ambient interval is scaled against, priced against the headroom that tier leaves so the bound is on the whole schedule, and clamped so it never exceeds the ambient interval. ADR-0021's amendment carries the arithmetic.
 
 **R6.** Tier selection must read Status and must never read Conclusion. Conclusion is null until Status reaches `completed`, so a Conclusion-driven tier would be null exactly when liveness matters and populated exactly when it does not. Status and Conclusion are two different fields.
 
@@ -101,7 +103,7 @@ The scheduler decides which repositories are revalidated and how often, so that 
 
 **AC7: Poll set changes live.** A repository added by a discovery re-probe begins polling at the slow tier with no restart, and one removed stops being polled within one interval.
 
-**AC8: Budget maths.** With a poll set of 26 at 5s, projected consumption is 312 points/min. With a poll set of 100, no schedule is produced that polls all of them at 5s, because 1,200 points/min exceeds the ~900 ceiling. The viewport cap prevents that: only repositories with a row on screen are medium-tier (5s), a set bounded by terminal height rather than by poll-set size ([ADR-0021](../../adr/0021-the-scheduler-cadence-policy.md)). The whole set's ambient interval auto-scales as the background guard, holding the 30s slow target at reference scale and stretching only at a scale the reference account never reaches.
+**AC8: Budget maths.** With a poll set of 26 at 5s, projected consumption is 312 points/min. With a poll set of 100, no schedule is produced that polls all of them at 5s, because 1,200 points/min exceeds the ~900 ceiling. The medium tier's auto-scale prevents that: its base stretches to whatever holds the whole schedule at or under the ceiling, so 100 medium-tier repositories in a 100-repository poll set go to 6.7s and project ~900 points/min rather than 1,200, and the same 100 inside a 300-repository set go to 12s so the ambient tier's 400 still fits under it ([ADR-0021](../../adr/0021-the-scheduler-cadence-policy.md)). The viewport half of the tier is additionally capped by terminal height. The pin half is not, which is why the tier is priced rather than assumed small. The whole set's ambient interval auto-scales as the background guard, holding the 30s slow target at reference scale and stretching only at a scale the reference account never reaches.
 
 **AC9: No interval knob.** No flag, config key or keybinding sets a poll interval. Setting the intent-level Budget share changes observed request rate. Nothing sets seconds.
 
