@@ -51,6 +51,9 @@ const (
 	rowBudget row = iota
 	rowProfile
 	rowTheme
+	// The timestamp format sits with the theme because it is the other purely presentational
+	// choice: neither changes what the tool does, both change how a frame reads.
+	rowTimestamp
 	rowWorkflowsScope
 	rowStorageScope
 	// The launch filter sits with the two tab scopes because it is the third of the same
@@ -68,7 +71,7 @@ const (
 // as opposed to a row that opens an editor (enter).
 func (r row) isSelector() bool {
 	switch r {
-	case rowBudget, rowProfile, rowTheme, rowWorkflowsScope, rowStorageScope:
+	case rowBudget, rowProfile, rowTheme, rowTimestamp, rowWorkflowsScope, rowStorageScope:
 		return true
 	default:
 		return false
@@ -120,6 +123,8 @@ func (r row) configKey() string {
 		return "keybinding_profile"
 	case rowTheme:
 		return "theme"
+	case rowTimestamp:
+		return "timestamp"
 	case rowWorkflowsScope:
 		return "workflows_scope"
 	case rowStorageScope:
@@ -416,6 +421,8 @@ func (m Model) applyCycle() Model {
 		}
 	case rowTheme:
 		m.cfg.Theme = nextTheme(m.cfg.Theme)
+	case rowTimestamp:
+		m.cfg.Timestamp = nextTimestampFormat(m.cfg.Timestamp)
 	case rowWorkflowsScope:
 		m.cfg.WorkflowsScope = nextScope(m.cfg.WorkflowsScope)
 	case rowStorageScope:
@@ -474,9 +481,9 @@ func clampRow(r row) row {
 	return r
 }
 
-// nextTier, nextProfile, nextTheme and nextScope advance a value to the next in its valid
-// set, wrapping, over the exported set config validates against so the view offers exactly
-// what the loader accepts (R5, R6, R8, R19).
+// nextTier, nextProfile, nextTheme, nextTimestampFormat and nextScope advance a value to
+// the next in its valid set, wrapping, over the exported set config validates against so the
+// view offers exactly what the loader accepts (R5, R6, R8, R10, R19).
 func nextTier(t config.Tier) config.Tier {
 	set := config.Tiers()
 	for i, v := range set {
@@ -501,6 +508,16 @@ func nextTheme(t config.Theme) config.Theme {
 	set := config.Themes()
 	for i, v := range set {
 		if v == t {
+			return set[(i+1)%len(set)]
+		}
+	}
+	return set[0]
+}
+
+func nextTimestampFormat(f config.TimestampFormat) config.TimestampFormat {
+	set := config.TimestampFormats()
+	for i, v := range set {
+		if v == f {
 			return set[(i+1)%len(set)]
 		}
 	}

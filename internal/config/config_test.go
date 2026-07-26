@@ -424,6 +424,69 @@ func TestThemesAreTheValidatedSet(t *testing.T) {
 	}
 }
 
+// TestTimestampDefaultsToAbsolute pins settings R10 and AC1: with no config file the
+// timestamp format is absolute, the rendering live-run-feed R4a sizes the run_started_at
+// column to, and every other default is undisturbed (R3).
+func TestTimestampDefaultsToAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, diags := config.Load(env, config.Flags{})
+
+	if len(diags) != 0 {
+		t.Fatalf("Load with no config file returned diagnostics: %v", diags)
+	}
+	if cfg.Timestamp != config.TimestampAbsolute {
+		t.Fatalf("Timestamp = %q, want the default %q", cfg.Timestamp, config.TimestampAbsolute)
+	}
+	if cfg.Theme != config.ThemeAuto || cfg.Budget != config.TierNormal {
+		t.Fatalf("adding the timestamp format disturbed another default: %+v", cfg)
+	}
+}
+
+// TestTimestampReadFromFile pins that both of R10's members are read back, so a person
+// who asked for relative ages gets them rather than the absolute default.
+func TestTimestampReadFromFile(t *testing.T) {
+	for _, want := range []config.TimestampFormat{config.TimestampRelative, config.TimestampAbsolute} {
+		dir := t.TempDir()
+		writeConfig(t, dir, "timestamp: "+string(want)+"\n")
+		env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+		cfg, diags := config.Load(env, config.Flags{})
+
+		if len(diags) != 0 {
+			t.Fatalf("a valid timestamp format should emit no diagnostic, got: %v", diags)
+		}
+		if cfg.Timestamp != want {
+			t.Fatalf("Timestamp = %q, want %q", cfg.Timestamp, want)
+		}
+	}
+}
+
+// TestInvalidTimestampRejected pins settings R10 and R14: R10 is a two-way switch, so a
+// value outside it keeps the absolute default and produces one actionable diagnostic
+// naming both members, the shape AC4 fixes for the keybinding profile. A format string is
+// the value most likely to be tried here, and it is refused like any other stranger.
+func TestInvalidTimestampRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "timestamp: 2006-01-02\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, diags := config.Load(env, config.Flags{})
+
+	if cfg.Timestamp != config.TimestampAbsolute {
+		t.Fatalf("Timestamp = %q, want the default %q to stand after a rejection", cfg.Timestamp, config.TimestampAbsolute)
+	}
+	if len(diags) != 1 {
+		t.Fatalf("want exactly one diagnostic, got %d: %v", len(diags), diags)
+	}
+	for _, want := range []string{"2006-01-02", "absolute", "relative"} {
+		if !strings.Contains(diags[0].Message, want) {
+			t.Fatalf("diagnostic %q does not mention %q", diags[0].Message, want)
+		}
+	}
+}
+
 // TestUnknownKeyWarnsAndContinues pins settings R14/AC7: an unrecognised key
 // produces a generic diagnostic naming it and does not fail the run, so the
 // defaults stand and a future 2.1 key can arrive without a migration.

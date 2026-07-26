@@ -9,12 +9,12 @@ import (
 	"strings"
 	"text/tabwriter"
 	"text/template"
-	"time"
 
 	"github.com/cli/go-gh/v2/pkg/jq"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
+	"github.com/jv-k/gh-runs/v2/internal/timefmt"
 )
 
 // render dispatches on --json (cli-surface R7). With --json the output is the
@@ -63,7 +63,11 @@ func renderTable(deps Deps, sc scope, runs []domain.Run) error {
 			textsan.Sanitize(r.HeadBranch),
 			textsan.Sanitize(r.Event),
 			strconv.FormatInt(r.ID, 10),
-			age(now, r.CreatedAt),
+			// The age column reads from the injected clock, so the table reads like gh's and a
+			// golden stays deterministic under a fake one. The buckets and the wording live in
+			// timefmt, which the Feed's relative timestamp format reads too ([settings] R10):
+			// the two surfaces render one age the same way, and a boundary is corrected once.
+			timefmt.Age(now, r.CreatedAt),
 		)
 		_, _ = fmt.Fprintln(w, strings.Join(row, "\t"))
 	}
@@ -126,30 +130,6 @@ func workflowLabel(r domain.Run) string {
 		return r.WorkflowName
 	}
 	return r.Name
-}
-
-// age renders a compact relative age from the injected clock, so the table reads
-// like gh's and a golden stays deterministic under a fake clock. A zero or future
-// timestamp renders as the smallest unit rather than a negative age.
-func age(now, t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	d := now.Sub(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	case d < 30*24*time.Hour:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	case d < 365*24*time.Hour:
-		return fmt.Sprintf("%dmo", int(d.Hours()/(24*30)))
-	default:
-		return fmt.Sprintf("%dy", int(d.Hours()/(24*365)))
-	}
 }
 
 // jsonProjectors maps each gh --json field name to the value it emits from a Run

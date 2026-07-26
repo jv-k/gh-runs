@@ -21,6 +21,7 @@ func baseConfig() config.Config {
 		DiscoveryRefreshMinutes: 5,
 		KeybindingProfile:       config.KeybindingStandard,
 		Theme:                   config.ThemeAuto,
+		Timestamp:               config.TimestampAbsolute,
 		WorkflowsScope:          config.ScopeAllRepos,
 		StorageScope:            config.ScopeAllRepos,
 	}
@@ -220,6 +221,52 @@ func TestSaveThemeChangesOnlyThatKey(t *testing.T) {
 	}
 	if cfg, _ := config.Load(env, config.Flags{}); cfg.Theme != config.ThemeDark {
 		t.Errorf("Theme after round-trip = %q, want %q", cfg.Theme, config.ThemeDark)
+	}
+}
+
+// TestSaveTimestampChangesOnlyThatKey pins settings R17 and AC11 for R10's timestamp
+// format: switching it in the running view writes timestamp and nothing else, leaving the
+// file's comments, key order and the keys this version does not recognise as they were.
+func TestSaveTimestampChangesOnlyThatKey(t *testing.T) {
+	dir := t.TempDir()
+	original := "# My gh-runs config\n" +
+		"budget: greedy\n" +
+		"timestamp: absolute # the instant itself\n" +
+		"\n" +
+		"# something a newer version might know\n" +
+		"future_thing: 42\n"
+	writeConfig(t, dir, original)
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	prev := baseConfig()
+	prev.Budget = config.TierGreedy
+	next := prev
+	next.Timestamp = config.TimestampRelative
+
+	if err := config.Save(env, prev, next); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got := readSaved(t, dir)
+	if !strings.Contains(got, "timestamp: relative") {
+		t.Errorf("saved config did not change the timestamp format to relative:\n%s", got)
+	}
+	for _, want := range []string{
+		"# My gh-runs config",
+		"the instant itself",
+		"budget: greedy",
+		"# something a newer version might know",
+		"future_thing: 42",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Save discarded %q (R17: comments, order and unknown keys must survive):\n%s", want, got)
+		}
+	}
+	if before, after := topLevelKeys(original), topLevelKeys(got); !slices.Equal(before, after) {
+		t.Errorf("Save changed the key set from %v to %v; only the value of timestamp may change", before, after)
+	}
+	if cfg, _ := config.Load(env, config.Flags{}); cfg.Timestamp != config.TimestampRelative {
+		t.Errorf("Timestamp after round-trip = %q, want %q", cfg.Timestamp, config.TimestampRelative)
 	}
 }
 

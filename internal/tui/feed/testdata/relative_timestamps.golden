@@ -1,0 +1,4 @@
+[1m  REPOSITORY           WORKFLOW         STATUS      CONCLUSION      RUN ID      STARTED             [m
+  [7mhome-assistant/core [m [7mCI              [m [7;38;2;0;175;255min_progress[m [7m               [m [7m29516338954[m [7m3h                  [m
+  home-assistant/core  Release          [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m 29516338001 3d                  
+[38;2;138;138;138m↓/↑ move  space select  / filter  r refresh  ? help  q quit[m  [38;2;138;138;138mStandard[m

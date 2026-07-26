@@ -44,6 +44,16 @@ func TestGoldenThemeFocused(t *testing.T) {
 	goldie.New(t).Assert(t, "theme_focused", []byte(m.View()))
 }
 
+// TestGoldenTimestampFocused fixes the timestamp row under the cursor: the format in force,
+// the pair the switch offers, and the intent-level description, which is what makes AC12's
+// "renders a timestamp row" byte-exact rather than a claim (settings R10, R18).
+func TestGoldenTimestampFocused(t *testing.T) {
+	m := settings.New(keys.Standard, defaultConfig(), nil).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = focusWith(t, m, "down", "timestamp")
+	goldie.New(t).Assert(t, "timestamp_focused", []byte(m.View()))
+}
+
 // TestGoldenLightPalette fixes the same frame under the light palette, which is the theme
 // setting's whole observable effect (settings R6). Every other golden in the suite is taken
 // under the dark palette, the default, so this one is where the light set is pinned: the

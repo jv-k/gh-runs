@@ -4,6 +4,7 @@
   Budget                    [1;38;2;0;95;175mnormal[m
   Keybinding profile        [1;38;2;0;95;175mstandard[m
 [1m> [m[1mTheme                     [m[1;38;2;0;95;175mauto[m  [38;2;108;108;108m(auto / dark / light)[m
+  Timestamps                [1;38;2;0;95;175mabsolute[m
   Workflows scope           [1;38;2;0;95;175mall-repos[m
   Storage scope             [1;38;2;0;95;175mall-repos[m
   Launch filter             [1;38;2;0;95;175mnone[m
