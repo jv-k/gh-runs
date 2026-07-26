@@ -79,6 +79,16 @@ type schedulerClosedMsg struct{}
 // sources by polling rather than by event.
 type tickMsg struct{}
 
+// progressFrame is one frame of a launched operation's stream, tagged with the channel it
+// came from. The tag is the root's alone and never leaves it: the tabs receive the bare
+// ops.Progress, which is what ADR-0015's catalog names. It exists so a frame from a stream
+// the root has already replaced can be discarded rather than applied to its successor,
+// which is the same discard-by-tag rule the detail pane uses for a stale response.
+type progressFrame struct {
+	stream <-chan ops.Progress
+	p      ops.Progress
+}
+
 // tab is the root's uniform handle to a tab. A concrete tab exposes Update returning its
 // own type and View() string (ADR-0011); the adapters below lift each into this
 // interface so the root routes to all three the same way, and calls SetActive on a focus
@@ -338,7 +348,7 @@ func (m Model) listenProgress() tea.Cmd {
 		if !ok {
 			return nil
 		}
-		return p
+		return progressFrame{stream: ch, p: p}
 	}
 }
 
@@ -395,15 +405,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.reserveStrip()
 		return next, tea.Batch(cmd, next.listenProgress())
 
-	case ops.Progress:
+	case progressFrame:
+		// A frame from a stream the root has already replaced is discarded, exactly as the
+		// detail pane discards a response for a Run no longer selected (ADR-0015). The
+		// window is narrow and real: the engine frees its launch gate just before the
+		// terminal frame goes out, so a new operation can be launched while the finished
+		// one's last frame is still in flight, and applying that frame would mark the new
+		// operation finished before it had deleted anything.
+		if msg.stream != m.progress {
+			return m, nil
+		}
 		// Progress is broadcast, because a Purge outlives the operator's attention and must
-		// keep painting whichever tab is focused (ADR-0015). The root's own surface consumes
-		// it too, and the adapter re-arms until the terminal frame.
-		m.running, _ = m.running.Update(msg)
+		// keep painting whichever tab is focused (ADR-0015). The tabs see the ops type; the
+		// stream tag is the root's own bookkeeping. The root's surface consumes it too, and
+		// the adapter re-arms until the terminal frame.
+		m.running, _ = m.running.Update(msg.p)
 		next, cmd := m.reserveStrip()
-		bnext, bcmd := next.broadcast(msg)
+		bnext, bcmd := next.broadcast(msg.p)
 		cmds := []tea.Cmd{cmd, bcmd}
-		if !msg.Done {
+		if !msg.p.Done {
 			cmds = append(cmds, bnext.listenProgress())
 		} else {
 			bnext.progress = nil
@@ -467,6 +487,20 @@ func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if isInterrupt(k) {
 		return m, tea.Quit
 	}
+	// R16 says a Purge is cancellable at any point while it runs, and "any point" includes
+	// while the Settings pane is open and while a tab holds text-input focus. The strip is
+	// on screen saying which key stops it throughout, so the key has to work throughout.
+	//
+	// This is ahead of the capture rule rather than an exception to it. That rule exists
+	// because q, n and a digit are filter text and a typed count, and a ctrl chord never
+	// is, which is the same reasoning that already lets ctrl+c through above. The surface
+	// claims nothing while it is idle, so a tab that wants these chords still gets them.
+	if m.running.Handles(k) {
+		var cmd tea.Cmd
+		m.running, cmd = m.running.Update(k)
+		next, rcmd := m.reserveStrip()
+		return next, tea.Batch(cmd, rcmd)
+	}
 	// The Settings pane is the root's, and while it is open it is the sole key target: the
 	// root routes every key but the interrupt to it and takes no global key, so esc closes it,
 	// its own edit keys reach it, and a tab switch or a quit key does not fire on the tab
@@ -480,16 +514,6 @@ func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.tabs[m.active].CapturesInput() {
 		return m.routeKeyToActive(k)
-	}
-	// The running surface's two chords reach it and no tab, so one keystroke does one
-	// thing (ADR-0011). They are the surface's only while it is up: with nothing running
-	// they fall through and route to the focused tab like any other key, which is what
-	// keeps them from being permanently reserved from a tab that later wants them.
-	if m.running.Handles(k) {
-		var cmd tea.Cmd
-		m.running, cmd = m.running.Update(k)
-		next, rcmd := m.reserveStrip()
-		return next, tea.Batch(cmd, rcmd)
 	}
 	switch {
 	case key.Matches(k, m.profile.Quit):
@@ -647,8 +671,8 @@ func (m Model) View() tea.View {
 	// The running surface sits between the tab bar and the body, above whichever tab is
 	// focused and above the Settings pane too: a Purge keeps running while either is on
 	// screen, and R14 forbids it from being modal over any of them.
-	if strip := m.running.View(); strip != "" {
-		parts = append(parts, strip)
+	if m.running.Active() {
+		parts = append(parts, m.running.View())
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, append(parts, body)...)
 	return tea.View{

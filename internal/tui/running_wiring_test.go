@@ -29,7 +29,13 @@ func rootWithRunning(tabs ...*recordingTab) Model {
 
 // launched is a Started over a live channel, the shape a tab's launch Cmd returns.
 func launched(ch chan ops.Progress, cancel func()) ops.Started {
-	return ops.Started{Op: ops.OpDelete, Total: 18258, Progress: ch, Cancel: cancel}
+	return ops.Started{Op: ops.OpDelete, Kind: ops.KindRun, Total: 18258, Progress: ch, Cancel: cancel}
+}
+
+// on tags a frame with the stream it arrived from, which is what the root's adapter does
+// and what lets it discard a superseded operation's tail.
+func on(ch chan ops.Progress, p ops.Progress) progressFrame {
+	return progressFrame{stream: ch, p: p}
 }
 
 // TestStartedArmsTheAdapterAndPaints pins ADR-0015's write half at the root: the first
@@ -55,8 +61,12 @@ func TestStartedArmsTheAdapterAndPaints(t *testing.T) {
 	want := ops.Progress{Op: ops.OpDelete, Sum: ops.Summary{Total: 18258, Deleted: 7}}
 	ch <- want
 	got := cmd()
-	if p, ok := got.(ops.Progress); !ok || p.Sum.Deleted != 7 {
+	f, ok := got.(progressFrame)
+	if !ok || f.p.Sum.Deleted != 7 {
 		t.Fatalf("the adapter returned %T (%+v), want the Progress it received", got, got)
+	}
+	if f.stream != (<-chan ops.Progress)(ch) {
+		t.Errorf("the frame is not tagged with the stream it came from; a superseded operation's tail could not be discarded")
 	}
 }
 
@@ -71,7 +81,7 @@ func TestProgressIsBroadcastAndRearms(t *testing.T) {
 	m = next.(Model)
 
 	before := []int{t0.data, t1.data, t2.data}
-	_, cmd := m.Update(ops.Progress{Op: ops.OpDelete, Sum: ops.Summary{Total: 18258, Deleted: 7}})
+	_, cmd := m.Update(on(ch, ops.Progress{Op: ops.OpDelete, Sum: ops.Summary{Total: 18258, Deleted: 7}}))
 	for i, tb := range []*recordingTab{t0, t1, t2} {
 		if tb.data != before[i]+1 {
 			t.Errorf("tab %d received %d data messages, want the progress frame broadcast to it (ADR-0015)", i, tb.data-before[i])
@@ -90,7 +100,7 @@ func TestTerminalFrameStopsTheAdapter(t *testing.T) {
 	next, _ := m.Update(launched(ch, func() {}))
 	m = next.(Model)
 
-	next, cmd := m.Update(ops.Progress{Op: ops.OpDelete, Done: true, Sum: ops.Summary{Total: 3, Deleted: 3}})
+	next, cmd := m.Update(on(ch, ops.Progress{Op: ops.OpDelete, Done: true, Sum: ops.Summary{Total: 3, Deleted: 3}}))
 	m = next.(Model)
 	if cmd != nil {
 		if msg := cmd(); msg != nil {
@@ -173,18 +183,68 @@ func TestRunningKeysReachTheTabWhenIdle(t *testing.T) {
 	}
 }
 
-// TestCapturingTabKeepsItsKeys pins the existing rule unchanged: while the focused tab
-// holds text-input focus the root takes no global key but the interrupt, so a typed count
-// or a filter's text is never stolen, chord or not (R7, R23).
-func TestCapturingTabKeepsItsKeys(t *testing.T) {
+// TestCancelReachesTheSurfaceWhileATabCaptures pins R16's "at any point while it runs".
+// The strip says which key stops the Purge for the whole time a confirm modal or a filter
+// input is up, so the key has to work then: an operator typing a count into a second
+// modal, watching a Purge they want stopped, must not have the chord swallowed by the
+// modal. The capture rule is about q, n and digits being filter text, and a ctrl chord
+// never is, which is why ctrl+c is already let through the same way.
+func TestCancelReachesTheSurfaceWhileATabCaptures(t *testing.T) {
+	stopped := false
+	t0 := &recordingTab{title: "Runs", captures: true}
+	m := rootWithRunning(t0, &recordingTab{}, &recordingTab{})
+	ch := make(chan ops.Progress, 1)
+	next, _ := m.Update(launched(ch, func() { stopped = true }))
+	m = next.(Model)
+
+	_, cmd := m.Update(press("ctrl+x"))
+	if len(t0.keys) != 0 {
+		t.Errorf("the capturing tab also received the chord; two components acted on one keystroke (ADR-0011)")
+	}
+	if cmd == nil {
+		t.Fatalf("the cancel chord was swallowed while a tab captured input; R16 says at any point while it runs")
+	}
+	cmd()
+	if !stopped {
+		t.Errorf("the cancel chord did not reach the operation's cancel while a tab captured input (R16)")
+	}
+}
+
+// TestCancelReachesTheSurfaceWhileSettingsIsOpen pins the same for the root's own pane.
+// Settings binds neither chord, so nothing is taken from it, and a Purge started before
+// the pane was opened stays stoppable.
+func TestCancelReachesTheSurfaceWhileSettingsIsOpen(t *testing.T) {
+	stopped := false
+	m := rootWithRunning(&recordingTab{title: "Runs"}, &recordingTab{}, &recordingTab{})
+	ch := make(chan ops.Progress, 1)
+	next, _ := m.Update(launched(ch, func() { stopped = true }))
+	m = next.(Model)
+	m.settings = m.settings.Open()
+
+	_, cmd := m.Update(press("ctrl+x"))
+	if cmd == nil {
+		t.Fatalf("the cancel chord was swallowed by the Settings pane; R16 says at any point while it runs")
+	}
+	cmd()
+	if !stopped {
+		t.Errorf("the cancel chord did not reach the operation's cancel with Settings open (R16)")
+	}
+}
+
+// TestCapturingTabKeepsItsOwnKeys pins that the rule is unchanged for everything else:
+// while the focused tab holds text-input focus the root still takes no global key, so a
+// typed count and a filter's text are never stolen (R7, R23).
+func TestCapturingTabKeepsItsOwnKeys(t *testing.T) {
 	t0 := &recordingTab{title: "Runs", captures: true}
 	m := rootWithRunning(t0, &recordingTab{}, &recordingTab{})
 	ch := make(chan ops.Progress, 1)
 	next, _ := m.Update(launched(ch, func() {}))
 	m = next.(Model)
-	step(t, m, press("ctrl+x"))
-	if len(t0.keys) != 1 {
-		t.Errorf("a capturing tab did not receive the chord; the root must take no global key while it captures (R7, R23)")
+	for _, k := range []string{"q", "1", "5"} {
+		m = step(t, m, press(k))
+	}
+	if len(t0.keys) != 3 {
+		t.Errorf("a capturing tab received %d of its 3 keys; the root must take no global key while it captures (R7, R23)", len(t0.keys))
 	}
 }
 
@@ -203,11 +263,11 @@ func TestSurfaceReservesItsRowsFromTheTabs(t *testing.T) {
 	ch := make(chan ops.Progress, 1)
 	next, _ = m.Update(launched(ch, func() {}))
 	m = next.(Model)
-	next, _ = m.Update(ops.Progress{
+	next, _ = m.Update(on(ch, ops.Progress{
 		Op:          ops.OpDelete,
 		Sum:         ops.Summary{Total: 18258, Deleted: 100},
 		Outstanding: 18158, Elapsed: time.Minute, Rate: 1.0, Ceiling: 2.0, Floor: 0.5,
-	})
+	}))
 	m = next.(Model)
 	strip := m.running.Height()
 	if strip == 0 {
@@ -219,5 +279,35 @@ func TestSurfaceReservesItsRowsFromTheTabs(t *testing.T) {
 	}
 	if last != 40-tabBarHeight-strip {
 		t.Errorf("with the surface up, the tab was laid out in %d rows, want %d (the strip's %d reserved)", last, 40-tabBarHeight-strip, strip)
+	}
+}
+
+// TestASupersededStreamsTailIsDiscarded pins the discard-by-tag rule. The engine frees its
+// launch gate just before a finished operation's terminal frame goes out, so a second
+// operation can be launched while that frame is still in flight. Applying it would mark
+// the new operation finished before it had deleted anything, and its cancel would be gone
+// with the summary the operator then dismissed.
+func TestASupersededStreamsTailIsDiscarded(t *testing.T) {
+	m := rootWithRunning(&recordingTab{}, &recordingTab{}, &recordingTab{})
+	first := make(chan ops.Progress, 1)
+	next, _ := m.Update(launched(first, func() {}))
+	m = next.(Model)
+
+	second := make(chan ops.Progress, 1)
+	next, _ = m.Update(launched(second, func() {}))
+	m = next.(Model)
+
+	// The first stream's terminal frame arrives late.
+	next, _ = m.Update(on(first, ops.Progress{Op: ops.OpDelete, Done: true, Sum: ops.Summary{Total: 3, Deleted: 3}}))
+	m = next.(Model)
+	if !m.running.Running() {
+		t.Errorf("a superseded stream's terminal frame finished the operation that replaced it")
+	}
+
+	// The current stream's frames still apply.
+	next, _ = m.Update(on(second, ops.Progress{Op: ops.OpDelete, Done: true, Sum: ops.Summary{Total: 9, Deleted: 9}}))
+	m = next.(Model)
+	if m.running.Running() {
+		t.Errorf("the current stream's terminal frame was discarded")
 	}
 }
