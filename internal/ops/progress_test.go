@@ -361,8 +361,14 @@ func TestStartRefusesASecondOperationWhileOneRuns(t *testing.T) {
 // from its own Stat, so one handle's rotation renames the file the other is still
 // appending to and a generation can vanish. That is the one file recoverable from nowhere
 // else, so the second deletion refuses to start and names the log, exactly as an
-// unwritable log does (R29, AC20). A log deletion arriving mid-Purge is the live case:
-// the log view's delete key reaches Execute while the TUI's Purge is streaming.
+// unwritable log does (R29, AC20).
+//
+// No surface reaches this today: the Feed's Purge is the only in-process launcher, and
+// logview's and storage's planners stop at Plan. The test drives the two entries directly,
+// which is the shape the queued callers will take (log-viewer R17, storage-reclamation
+// R17). It is written now because the harm is silent and permanent: a split log is
+// discovered by a person asking what a Purge destroyed, after the answer stopped being
+// recoverable.
 func TestConcurrentDeletionsCannotBothHoldTheLog(t *testing.T) {
 	h := newHarness(t, "delete_ok", 50, 50)
 	purge := h.confirmed(t, ops.OpDelete, items("o", "r", 1, 2, 3, 4, 5, 6, 7, 8), snapshot(writableRepo("o", "r")))
@@ -411,6 +417,107 @@ func TestConcurrentDeletionsCannotBothHoldTheLog(t *testing.T) {
 		t.Errorf("the refused deletion issued %d DELETEs, want zero: no record, no deletion (R29)", h.counting.deletes()-before)
 	}
 	release()
+}
+
+// stepPacer is a Pacer the test drives one frame at a time. Every frame the walk builds
+// reads the write bounds through it, so it is a synchronisation point inside stream that
+// needs no wire request and no clock: the test can park a goroutine at an exact line and
+// act while it is held there.
+type stepPacer struct {
+	hit    chan struct{}
+	resume chan struct{}
+}
+
+func newStepPacer() *stepPacer {
+	return &stepPacer{hit: make(chan struct{}), resume: make(chan struct{})}
+}
+
+func (p *stepPacer) WriteCeiling() (float64, float64) {
+	p.hit <- struct{}{}
+	<-p.resume
+	return 2.5, 0.5
+}
+
+// step lets exactly one frame through.
+func (p *stepPacer) step() {
+	<-p.hit
+	p.resume <- struct{}{}
+}
+
+// hold blocks until a frame reaches the pacer and leaves it parked there.
+func (p *stepPacer) hold() { <-p.hit }
+
+// letGo releases the frame hold is holding.
+func (p *stepPacer) letGo() { p.resume <- struct{}{} }
+
+// TestOneGoroutineCannotReleaseAnothersGate pins the gate against a double release. The
+// walk frees the gate explicitly before its terminal frame, so a second operation can win
+// it during that frame. A second, unconditional release on the way out would then clear
+// the gate the second operation is holding, and a third launch would be admitted while it
+// was still deleting. That is H1's harm exactly: the second operation's handle, its only
+// cancel, is dropped by the root.
+//
+// The probe needs no wire request and no clock. Every frame reads the write bounds through
+// the injected Pacer, and the terminal frame reads them after the explicit release, so
+// parking a goroutine there is parking it inside the window under test.
+func TestOneGoroutineCannotReleaseAnothersGate(t *testing.T) {
+	h := newOfflineHarness(t, 50, 50)
+	pacer := newStepPacer()
+	o := ops.New(ops.Options{
+		Client: h.client, Clock: h.clk, LogPath: h.logPath,
+		ConfirmThreshold: 50, BreakerFailures: 50, Pacing: pacer,
+	})
+	// A read-only repository stamps every Item ineligible, so each walk concludes without
+	// reaching the wire (AC15) and the offline transport stays untouched.
+	readOnly := domain.Repo{ID: repoID("o", "r"), Permissions: domain.Permissions{Push: false}}
+	confirmed := func(id int64) ops.Confirmed {
+		t.Helper()
+		p, err := o.Plan(ops.OpDelete, items("o", "r", id), snapshot(readOnly))
+		if err != nil {
+			t.Fatalf("Plan: %v", err)
+		}
+		c, err := o.Confirm(p, ops.NonInteractiveYes())
+		if err != nil {
+			t.Fatalf("Confirm: %v", err)
+		}
+		return c
+	}
+
+	first, err := o.Start(context.Background(), confirmed(1))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pacer.step() // the opening frame
+	pacer.step() // the skipped Item's frame
+	pacer.hold() // parked building the terminal frame, with the gate already released
+
+	second, err := o.Start(context.Background(), confirmed(2))
+	if err != nil {
+		t.Fatalf("the gate was not free once the first walk released it: %v", err)
+	}
+
+	pacer.letGo()
+	for range first.Progress { // drains to close, which happens after the first walk's release
+	}
+
+	if _, err := o.Start(context.Background(), confirmed(3)); !errors.Is(err, ops.ErrBusy) {
+		t.Fatalf("a third operation started while the second still held the gate (%v); one goroutine's release cleared another's, which orphans the second operation's cancel (R16)", err)
+	}
+
+	// Let the parked second walk finish, so no goroutine outlives the test.
+	second.Cancel()
+	go func() {
+		for range second.Progress {
+		}
+	}()
+	for i := 0; i < 4; i++ {
+		select {
+		case <-pacer.hit:
+			pacer.resume <- struct{}{}
+		case <-time.After(time.Second):
+			return
+		}
+	}
 }
 
 // TestRetryIsSingleUse pins R22's set against unbounded re-attempts of one recorded pass.

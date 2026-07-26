@@ -95,6 +95,11 @@ type Ops struct {
 	// destroyed and is recoverable from nowhere else, so a second concurrent deletion
 	// refuses to start rather than risk splitting it. Non-deletion walks write no log and
 	// are not gated: a Workflow toggle beside a running Purge touches nothing shared.
+	//
+	// As built no surface can reach this: the Feed's Purge is the only in-process launcher,
+	// and logview's and storage's planners stop at Plan. It is here because the callers that
+	// make it reachable are named and queued (log-viewer R17, storage-reclamation R17) and
+	// because the harm is silent and permanent, not because a second caller exists today.
 	deleting atomic.Bool
 }
 

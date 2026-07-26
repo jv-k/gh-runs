@@ -188,11 +188,29 @@ func (o *Ops) start(ctx context.Context, plan Plan) Started {
 // whatever ended it so a cancelled or completed operation leaks neither, and frees the
 // launch gate so the next operation may start.
 func (o *Ops) stream(ctx context.Context, cancel context.CancelFunc, plan Plan, ch chan Progress) {
-	// The safety net, for a panic. The normal release is explicit and happens before the
-	// terminal frame goes out, so a surface acting on that frame is not refused by a gate
-	// the walk has already finished with.
-	defer o.launching.Store(false)
+	// The gate is released once per walk, and the release is idempotent because it happens
+	// on two paths. The explicit one below runs before the terminal frame, so a surface
+	// acting on that frame is not refused by a gate this walk has already finished with;
+	// this one covers any exit that does not reach it.
+	//
+	// It must not be a second unconditional store. Between the explicit release and the
+	// walk's return, another operation can win the gate: that window is exactly the one the
+	// explicit release opens, and it is reached on every walk. Clearing a gate this walk no
+	// longer holds would admit a third launch while the second was still deleting, which is
+	// the orphaning this gate exists to prevent.
+	//
+	// The release is registered after close, so it runs before it. A consumer learns the
+	// stream ended only once the gate is free, which makes "the channel closed" a usable
+	// signal rather than one that races the release.
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			o.launching.Store(false)
+		}
+	}
 	defer close(ch)
+	defer release()
 	defer cancel()
 
 	begin := o.clk.Now()
@@ -237,7 +255,7 @@ func (o *Ops) stream(ctx context.Context, cancel context.CancelFunc, plan Plan, 
 	}
 	// Release before the terminal frame: R22's retry is offered from that frame, and a
 	// keystroke on it must not be refused by a gate this walk has already finished with.
-	o.launching.Store(false)
+	release()
 	offer(ch, frame(sum, 0, true))
 }
 
