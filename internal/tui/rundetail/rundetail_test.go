@@ -379,19 +379,36 @@ func TestViewSanitisesJobAndStepText(t *testing.T) {
 	}
 }
 
-// TestIsOrphanedGatesReRun pins run-detail R18's Workflow-State limb (AC15, resolved open
-// question 8): a Run whose Workflow is deleted is Orphaned, so the pane reports it and the
-// Feed keeps the re-run key inert over it. An unresolved Workflow State reads as a live
-// successor, so a Run is not treated as Orphaned until the Feed resolves a deleted State.
-func TestIsOrphanedGatesReRun(t *testing.T) {
+// TestDeletedWorkflowMarksTheRun pins run-detail R8 and AC11 at the pane. The marker is a
+// property of the Run the pane is pointed at, which carries its Workflow's State stamped by
+// the fan-out (ADR-0014), so pointing the pane at an Orphaned Run marks it and pointing it
+// at a Run with a live Workflow does not. An unstamped Run reads as a live successor, which
+// is what an unresolved join must never be mistaken for.
+func TestDeletedWorkflowMarksTheRun(t *testing.T) {
+	const marker = "Workflow deleted"
+	orphan := run(7, domain.StatusCompleted)
+	orphan.WorkflowState = domain.StateDeleted
+	live := run(8, domain.StatusCompleted)
+	live.WorkflowState = domain.StateActive
+
 	m := New(Options{})
-	if m.IsOrphaned() {
-		t.Errorf("a pane with no resolved Workflow State reported Orphaned; the default is a live successor (R8)")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100})
+	if strings.Contains(m.View(), marker) {
+		t.Fatalf("a closed pane painted the marker")
 	}
-	if !m.SetWorkflowState(domain.StateDeleted).IsOrphaned() {
-		t.Errorf("a deleted Workflow did not read as Orphaned (R18, AC15)")
+
+	m, _ = m.Open(orphan)
+	if !strings.Contains(m.View(), marker) {
+		t.Errorf("an Orphaned Run is not marked (R8, AC11):\n%s", m.View())
 	}
-	if m.SetWorkflowState(domain.StateActive).IsOrphaned() {
-		t.Errorf("a live Workflow read as Orphaned; only a deleted Workflow gates re-run (R18)")
+
+	m, _ = m.SelectRun(live)
+	if strings.Contains(m.View(), marker) {
+		t.Errorf("the marker survived the selection moving to a live Workflow:\n%s", m.View())
+	}
+
+	m, _ = m.SelectRun(run(9, domain.StatusCompleted)) // unstamped: an unresolved join
+	if strings.Contains(m.View(), marker) {
+		t.Errorf("a Run with no resolved Workflow State was marked deleted:\n%s", m.View())
 	}
 }

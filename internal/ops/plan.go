@@ -141,6 +141,15 @@ func skipFor(op Operation, it Item, repo domain.Repo) SkipReason {
 	if (op == OpEnable || op == OpDisable) && it.Kind == KindWorkflow && it.Workflow != nil && it.Workflow.State == domain.StateDeleted {
 		return SkipDeleted
 	}
+	// The same rule one Kind over: a re-run of an Orphaned Run has no Workflow left to run
+	// (run-detail R18, AC15). It is a skip rather than a refusal of the operation, so the
+	// eligible Runs selected beside it still run and the modal states the exclusion in its
+	// skip lines, exactly as it does for a read-only repository. Deletion is deliberately
+	// not here: an Orphaned Run's Runs are ordinary Runs and stay deletable whatever their
+	// Workflow's state (workflow-management R14).
+	if (op == OpRerun || op == OpRerunFailed) && it.Kind == KindRun && it.Run != nil && it.Run.WorkflowState == domain.StateDeleted {
+		return SkipDeleted
+	}
 	return SkipNone
 }
 

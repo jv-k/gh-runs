@@ -178,3 +178,56 @@ func skipReasons(p ops.Plan) map[int64]ops.SkipReason {
 	}
 	return m
 }
+
+// orphanRun is a Run whose Workflow was deleted: an Orphaned Run, stamped by the fan-out
+// (ADR-0014). Nothing remains that could ever produce another Run from that Workflow.
+func orphanRun(id int64, owner, name string) domain.Run {
+	r := completedRun(id, owner, name)
+	r.WorkflowState = domain.StateDeleted
+	return r
+}
+
+// TestRerunSkipsAnOrphanedRun pins run-detail R18 and AC15 where every other ineligibility
+// already lives. A re-run of a Run whose Workflow is deleted cannot succeed, because there
+// is no Workflow left to run, so Plan stamps it skipped and the modal states it in the skip
+// lines. Refusing the whole operation instead would drop the eligible Runs selected beside
+// it, which is what a batch of five healthy Runs and one orphan must not do.
+//
+// This is R9's argument one Kind over: the surface refuses to offer the action, and Plan
+// refuses to build one for it too, so the rule is a property of the write path and not only
+// of a well-behaved tab (ADR-0019).
+func TestRerunSkipsAnOrphanedRun(t *testing.T) {
+	for _, op := range []ops.Operation{ops.OpRerun, ops.OpRerunFailed} {
+		t.Run(string(op), func(t *testing.T) {
+			sel := []ops.Item{
+				ops.RunItem(completedRun(1, "o", "r")),
+				ops.RunItem(orphanRun(2, "o", "r")),
+				ops.RunItem(completedRun(3, "o", "r")),
+			}
+			plan, err := newPlanOps(50).Plan(op, sel, snapshot(writableRepo("o", "r")))
+			if err != nil {
+				t.Fatalf("Plan: %v", err)
+			}
+			if got := plan.Total(); got != 3 {
+				t.Errorf("Total() = %d, want 3 (the skipped are counted inside the total)", got)
+			}
+			if got := plan.Skipped(); got != 1 {
+				t.Errorf("Skipped() = %d, want 1 (the Orphaned Run alone)", got)
+			}
+		})
+	}
+}
+
+// TestDeleteDoesNotSkipAnOrphanedRun is the boundary. An Orphaned Run's Runs are ordinary
+// Runs and stay deletable whatever their Workflow's state (workflow-management R14). The
+// exclusion belongs to re-run, which needs a Workflow to run, and to nothing else.
+func TestDeleteDoesNotSkipAnOrphanedRun(t *testing.T) {
+	sel := []ops.Item{ops.RunItem(orphanRun(1, "o", "r"))}
+	plan, err := newPlanOps(50).Plan(ops.OpDelete, sel, snapshot(writableRepo("o", "r")))
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := plan.Skipped(); got != 0 {
+		t.Errorf("Skipped() = %d, want 0; a deleted Workflow's Runs stay deletable (workflow-management R14)", got)
+	}
+}

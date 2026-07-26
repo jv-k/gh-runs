@@ -85,27 +85,87 @@ func TestTheMarkerFollowsTheCursor(t *testing.T) {
 	}
 }
 
-// TestOrphanedRunOffersNoRerun pins run-detail R18 and AC15, the requirement the unwired
-// State left unreachable. A deleted Workflow can produce no further Run, so re-run is not
-// offered for one even where the repository is writable. The gate reads the pane's
-// resolved State, so it could never fire while nothing resolved one.
-func TestOrphanedRunOffersNoRerun(t *testing.T) {
+// newOrphanFeed builds a Feed over one writable repository holding the given Runs, wired to
+// a real planner so the re-run keys can freeze a selection.
+func newOrphanFeed(t *testing.T, runs ...domain.Run) Model {
+	t.Helper()
 	planner := ops.New(ops.Options{ConfirmThreshold: 50, BreakerFailures: 50})
 	m := New(Options{Profile: keys.Standard, Ops: planner})
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m, _ = m.Update(ReposDiscovered{{ID: repoID("acme", "legacy"), Permissions: domain.Permissions{Push: true}}})
-	m = feedRuns(m, repoID("acme", "legacy"),
+	return feedRuns(m, repoID("acme", "legacy"), runs...)
+}
+
+// TestOrphanedRunOffersNoRerun pins run-detail R18 and AC15, the requirement the unwired
+// State left unreachable. A deleted Workflow can produce no further Run, so re-run is not
+// offered over a set that is nothing but Orphaned Runs.
+func TestOrphanedRunOffersNoRerun(t *testing.T) {
+	m := newOrphanFeed(t,
 		orphanRun(1, "acme", "legacy", "Old Pipeline", t0),
 		orphanRun(2, "acme", "legacy", "Old Pipeline", t0.Add(-time.Minute)),
 	)
 
 	m = m.Update2(press("space")) // select the Run under the cursor
 	m = m.Update2(press("down"))
-	m = m.Update2(press("space")) // and the next, so the re-run would price at a modal
+	m = m.Update2(press("space")) // and the next, so the re-run would otherwise price at a modal
 	m = m.Update2(press("enter")) // open the pane over the Orphaned Run under the cursor
 	m = m.Update2(press("R"))     // re-run
 
 	if m.confirmOpen {
-		t.Errorf("a re-run was offered over an Orphaned Run; R18 and AC15 forbid it")
+		t.Errorf("a re-run was offered over a set of Orphaned Runs; R18 and AC15 forbid it")
+	}
+}
+
+// TestOrphanedRunOffersNoRerunWithThePaneClosed pins that the exclusion is a property of
+// the Run and not of whether the operator happens to have the detail pane open. The Run
+// carries its Workflow's State, so the gate reads the Run.
+func TestOrphanedRunOffersNoRerunWithThePaneClosed(t *testing.T) {
+	m := newOrphanFeed(t,
+		orphanRun(1, "acme", "legacy", "Old Pipeline", t0),
+		orphanRun(2, "acme", "legacy", "Old Pipeline", t0.Add(-time.Minute)),
+	)
+
+	m = m.Update2(press("space"))
+	m = m.Update2(press("down"))
+	m = m.Update2(press("space")) // two Orphaned Runs selected, and no pane open
+	m = m.Update2(press("R"))
+
+	if m.detailOpen {
+		t.Fatal("precondition: the detail pane is open, so this asserts nothing new")
+	}
+	if m.confirmOpen {
+		t.Errorf("a re-run was offered over Orphaned Runs while the pane was closed (R18, AC15)")
+	}
+}
+
+// TestMixedSelectionRerunsTheHealthyRuns pins the limb that matters most. R18 excludes a
+// Run whose Workflow is deleted, never a batch that contains one. Dropping the whole
+// operation would silently discard the healthy Runs the operator selected beside it, with
+// no modal and no message, which is worse than the thing the rule exists to prevent.
+func TestMixedSelectionRerunsTheHealthyRuns(t *testing.T) {
+	m := newOrphanFeed(t,
+		mkRun(1, "acme", "legacy", "CI", domain.StatusCompleted, domain.ConclusionFailure, t0),
+		mkRun(2, "acme", "legacy", "CI", domain.StatusCompleted, domain.ConclusionFailure, t0.Add(-time.Minute)),
+		orphanRun(3, "acme", "legacy", "Old Pipeline", t0.Add(-2*time.Minute)),
+	)
+
+	for i := 0; i < 3; i++ {
+		m = m.Update2(press("space")) // select all three
+		if i < 2 {
+			m = m.Update2(press("down"))
+		}
+	}
+	m = m.Update2(press("enter")) // the cursor rests on the Orphaned Run, pane open over it
+	m = m.Update2(press("R"))
+
+	if !m.confirmOpen {
+		t.Fatalf("the re-run was dropped because one Run in the set was Orphaned; R18 excludes the Run, not the batch")
+	}
+	plan := m.confirm.Plan()
+	if got := plan.Total(); got != 3 {
+		t.Errorf("the Plan totals %d, want 3 (the skipped are counted inside the total)", got)
+	}
+	if got := plan.Skipped(); got != 1 {
+		t.Errorf("the Plan skips %d, want 1 (the Orphaned Run alone, stated in the modal's skip lines)", got)
 	}
 }
