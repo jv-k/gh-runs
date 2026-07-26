@@ -721,8 +721,15 @@ func TestSpaceDoesNotChangeTheLaunchFilterRow(t *testing.T) {
 }
 
 // TestLaunchFilterEditWritesOnlyThatKey is AC11 end to end for R9: the filter is edited in
-// the view, the pane is left as quitting leaves it, and config.yml carries the new key with
-// every unrelated comment, key and ordering intact.
+// the view, the pane is left as quitting leaves it, and config.yml carries the change with
+// every unrelated comment, key and ordering intact, at the top level and inside the key
+// being edited.
+//
+// The file already carries a launch filter, and the pane opens on the config Load resolved
+// from it, which is the flow a person meets: nothing about a nested key's preservation is
+// proved by writing one that was not there. The sub-key comments, the item comment and the
+// unrecognised sub-key are all in the fixture for that reason, so AC11's "editing a setting
+// in the TUI" reaches them through the pane rather than beside it.
 func TestLaunchFilterEditWritesOnlyThatKey(t *testing.T) {
 	dir := t.TempDir()
 	appDir := filepath.Join(dir, "gh-runs")
@@ -732,6 +739,12 @@ func TestLaunchFilterEditWritesOnlyThatKey(t *testing.T) {
 	original := "# My gh-runs config\n" +
 		"budget: normal # a share of the allowance\n" +
 		"theme: auto\n" +
+		"launch_filter:\n" +
+		"  # what I actually watch\n" +
+		"  conclusion:\n" +
+		"    - failure # and nothing else\n" +
+		"  branch: main # the one that matters\n" +
+		"  someday: soon\n" +
 		"future_thing: 42\n"
 	path := filepath.Join(appDir, "config.yml")
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
@@ -745,12 +758,15 @@ func TestLaunchFilterEditWritesOnlyThatKey(t *testing.T) {
 	}
 	save := func(prev, next config.Config) error { return config.Save(env, prev, next) }
 
-	m := settings.New(keys.Standard, defaultConfig(), save).Open()
+	// The pane opens over what Load resolved, exactly as main.go opens it.
+	cfg, _ := config.Load(env, config.Flags{})
+	m := settings.New(keys.Standard, cfg, save).Open()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = send(focus(t, m, "launch_filter"), "enter")
-	m = typeLine(m, "branch:main")
-	m = send(m, "space")
-	m = typeLine(m, "failure")
+	// The editor opens on the filter as written. Retyping the line changes the branch and
+	// leaves the Conclusion clause exactly where it was, which is the one-setting edit AC11
+	// is about: everything the operator did not touch has to come through untouched.
+	m = retype(m, "branch:main status:failure", "branch:release/2.0 status:failure")
 	m = send(m, "enter")
 	m = send(m, "esc") // leave the pane, as quitting does
 	if m.IsOpen() {
@@ -762,10 +778,9 @@ func TestLaunchFilterEditWritesOnlyThatKey(t *testing.T) {
 		t.Fatalf("read config: %v", err)
 	}
 	got := string(written)
-	for _, want := range []string{"launch_filter:", "branch: main", "conclusion:", "- failure"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("the view did not write %q:\n%s", want, got)
-		}
+	if !strings.Contains(got, "branch: release/2.0") {
+		t.Errorf("the view did not write the filter it holds (%q):\n%s",
+			m.Config().LaunchFilter.QueryString(), got)
 	}
 	for _, want := range []string{
 		"# My gh-runs config",
@@ -773,19 +788,101 @@ func TestLaunchFilterEditWritesOnlyThatKey(t *testing.T) {
 		"a share of the allowance",
 		"theme: auto",
 		"future_thing: 42",
+		"# what I actually watch",                    // a comment on a sub-key
+		"- failure # and nothing else",               // a comment on a list item, deeper still
+		"branch: release/2.0 # the one that matters", // the inline comment on the edited sub-key
+		"someday: soon",                              // a sub-key this version does not recognise
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the write discarded %q (R17, AC11):\n%s", want, got)
 		}
 	}
 	if strings.Index(got, "budget") > strings.Index(got, "theme") {
-		t.Errorf("the write reordered the keys; budget must stay first:\n%s", got)
+		t.Errorf("the write reordered the top-level keys; budget must stay first:\n%s", got)
 	}
-	// The Conclusion is stored under its own key, never under status, which is the whole of
-	// what R9 asks the stored form to keep apart.
+	if strings.Index(got, "conclusion:") > strings.Index(got, "branch:") {
+		t.Errorf("the write reordered the sub-keys; conclusion must stay first:\n%s", got)
+	}
+	// The Conclusion the operator left alone stays under its own key and never migrates to
+	// status, which is R9's distinction surviving an edit to a neighbouring axis.
 	if strings.Contains(got, "status:") {
 		t.Errorf("a Conclusion was stored under status, conflating the pair (R9):\n%s", got)
 	}
+}
+
+// TestClearingALaunchFilterAxisTakesOnlyItsOwnComment pins the one comment a write may lose,
+// and bounds it. An axis the operator removed takes the comments that annotated it, because
+// there is nowhere honest to put a note about a clause that no longer exists, and every
+// other comment in the file survives. R17 forbids discarding comments, not keeping notes
+// about settings the operator deleted.
+func TestClearingALaunchFilterAxisTakesOnlyItsOwnComment(t *testing.T) {
+	dir := t.TempDir()
+	appDir := filepath.Join(dir, "gh-runs")
+	if err := os.MkdirAll(appDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := "# My gh-runs config\n" +
+		"launch_filter:\n" +
+		"  branch: main # the one that matters\n" +
+		"  # only what I broke\n" +
+		"  conclusion:\n" +
+		"    - failure\n" +
+		"  someday: soon\n" +
+		"budget: normal\n"
+	path := filepath.Join(appDir, "config.yml")
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := func(key string) (string, bool) {
+		if key == "XDG_CONFIG_HOME" {
+			return dir, true
+		}
+		return "", false
+	}
+	save := func(prev, next config.Config) error { return config.Save(env, prev, next) }
+
+	cfg, _ := config.Load(env, config.Flags{})
+	m := settings.New(keys.Standard, cfg, save).Open()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = send(focus(t, m, "launch_filter"), "enter")
+	m = retype(m, "branch:main status:failure", "branch:main")
+	m = send(m, "enter")
+	if m = send(m, "esc"); m.IsOpen() {
+		t.Fatal("esc after the commit did not leave the pane")
+	}
+
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(written)
+	if strings.Contains(got, "conclusion:") || strings.Contains(got, "failure") {
+		t.Errorf("the cleared Conclusion clause survived:\n%s", got)
+	}
+	if strings.Contains(got, "# only what I broke") {
+		t.Errorf("a comment on a removed key was kept, with nothing left for it to annotate:\n%s", got)
+	}
+	for _, want := range []string{
+		"# My gh-runs config",
+		"branch: main # the one that matters",
+		"someday: soon",
+		"budget: normal",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("clearing one axis discarded %q (R17):\n%s", want, got)
+		}
+	}
+}
+
+// retype clears a pre-filled editor and types a new line into it, the gesture a person makes
+// when an open editor already holds text. from is what the editor opened on, so the
+// backspace count is stated rather than guessed, and a changed pre-fill fails loudly rather
+// than leaving a stray fragment in the buffer.
+func retype(m settings.Model, from, to string) settings.Model {
+	for range from {
+		m = send(m, "backspace")
+	}
+	return typeLine(m, to)
 }
 
 // typeLine sends each character of a line as its own key press, which is how a person types

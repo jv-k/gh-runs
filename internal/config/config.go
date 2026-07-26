@@ -824,8 +824,11 @@ func setMapping(node *yaml.Node, pairs mappingValue) {
 	}
 }
 
-// removeMappingKey drops a key and its value from the mapping, taking the comments that
-// sat on them with it. That is the correct loss: the clause they annotated is gone.
+// removeMappingKey drops a key and its value from the mapping, taking the comments that sat
+// on them with it. That is the one comment a write may lose and the bound on it: there is
+// nowhere honest to put a note about a clause that no longer exists, and every other comment
+// in the file is untouched. R17 forbids discarding comments, not keeping notes about
+// settings the operator deleted.
 func removeMappingKey(mapping *yaml.Node, key string) {
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
 		if mapping.Content[i].Value == key {

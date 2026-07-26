@@ -122,6 +122,36 @@ func TestLaunchFilterFlagReplacesRatherThanMerges(t *testing.T) {
 	}
 }
 
+// TestAllocatedEmptyFlagDoesNotWipeTheFile pins that "no filter flag was passed" is a
+// question about what the flags constrain, not about how they were allocated. A caller that
+// builds its sets with make() and appends nothing holds a Filter that matches every Run, so
+// it states no filter and must not override the file's (R4, AC3).
+//
+// Nothing fills Flags.LaunchFilter today, and filter.ParseQuery returns nil sets, so this
+// is luck rather than a contract until it is pinned here. The day a CLI builds its Filter
+// with make() the file's launch filter would be destroyed by a flag naming no axis, with no
+// diagnostic, which is an AC3 violation with no test between it and a release.
+func TestAllocatedEmptyFlagDoesNotWipeTheFile(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "launch_filter:\n  branch: main\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	allocatedEmpty := filter.Filter{
+		Statuses:    []domain.Status{},
+		Conclusions: []domain.Conclusion{},
+		Repos:       []domain.RepoID{},
+	}
+	cfg, diags := config.Load(env, config.Flags{LaunchFilter: allocatedEmpty})
+
+	if len(diags) != 0 {
+		t.Fatalf("Load returned diagnostics: %v", diags)
+	}
+	if cfg.LaunchFilter.Branch != "main" {
+		t.Errorf("LaunchFilter = %+v, want the file's filter to stand: a flag that constrains "+
+			"nothing states no filter", cfg.LaunchFilter)
+	}
+}
+
 // TestLaunchFilterReadsEveryAxis pins the shape the file carries: each axis of ADR-0016's
 // Filter that the key spells decodes into its own typed field, and the permissive pair
 // arrives as two distinct keys rather than as the CLI's conflated -s string (R9).

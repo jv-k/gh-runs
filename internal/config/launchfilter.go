@@ -24,12 +24,18 @@ import (
 // Every sub-key is optional, exactly as every top-level key is (R3). An absent launch
 // filter is the zero Filter, which matches every Run.
 //
-// The repository axis ADR-0016 gives Filter has no sub-key here, deliberately. R17 makes
-// the view and the file the same settings, the view edits this filter in the input grammar
-// filter owns, and that grammar has no repository token because ADR-0016 fixed the axis as
-// the Feed's own scoping, "set from the view rather than from a line of text". A stored
-// repos key would therefore be a setting the view could neither show nor edit, which is
-// the half of R17 a key like that breaks.
+// The repository axis ADR-0016 gives Filter has no sub-key here, deliberately. R17 makes the
+// view and the file the same settings, the view edits this filter in the input grammar
+// filter owns, and that grammar carries no repository token: filter's QueryString says so in
+// its own doc, and its file records that token spellings are that package's choice rather
+// than the canon's. A stored repos key would therefore be a setting the view could neither
+// show nor edit, which is the half of R17 a key like that breaks.
+//
+// This is not ADR-0016's decision, and that ADR leans the other way: its repository-axis
+// section names "the Feed's filter input" as the consumer that needs Repos. So the canon
+// expects that surface to carry the axis and the grammar does not, which is a disagreement
+// worth naming rather than resolving here. Issue #102 holds it, and settings R9's note
+// records what it costs.
 const (
 	axisBranch     = "branch"
 	axisCommit     = "commit"
@@ -88,10 +94,8 @@ func resolveLaunchFilter(key string, node yaml.Node, diags []Diagnostic) (filter
 			f.Workflow, diags = filterScalar(path, item, "a Workflow name, filename or ID", diags)
 		case axisCreated:
 			f.Created, diags = filterCreated(path, item, diags)
-		case axisStatus:
-			diags = resolveStatusAxis(path, item, &f, true, diags)
-		case axisConclusion:
-			diags = resolveStatusAxis(path, item, &f, false, diags)
+		case axisStatus, axisConclusion:
+			diags = resolveStatusAxis(path, sub, item, &f, diags)
 		default:
 			diags = append(diags, Diagnostic{Message: fmt.Sprintf(
 				"%s: unrecognised filter axis, ignored", path)})
@@ -128,7 +132,8 @@ func filterCreated(path string, node yaml.Node, diags []Diagnostic) (filter.Date
 }
 
 // resolveStatusAxis decodes one half of ADR-0016's permissive pair into its own typed set.
-// wantStatus selects the half: the status key fills Statuses and the conclusion key fills
+// axis is the key being read, axisStatus or axisConclusion, and it is also the axis a value
+// must classify into: the status key fills Statuses and the conclusion key fills
 // Conclusions, which is exactly the distinction R9 asks the stored form to keep.
 //
 // Every value is classified through filter.ParseStatus, the single validation point each
@@ -138,22 +143,21 @@ func filterCreated(path string, node yaml.Node, diags []Diagnostic) (filter.Date
 // because quietly moving it is the conflation R9 exists to refuse. Values that classify
 // correctly are kept, mirroring the exclude list's rule: dropping a whole clause over one
 // typo would widen the filter where the operator asked to narrow it.
-func resolveStatusAxis(path string, node yaml.Node, f *filter.Filter, wantStatus bool, diags []Diagnostic) []Diagnostic {
+func resolveStatusAxis(path, axis string, node yaml.Node, f *filter.Filter, diags []Diagnostic) []Diagnostic {
 	items, ok := scalarItems(node)
 	if !ok {
 		return append(diags, typeErr(path, "a value or a list of values", node))
 	}
 	for _, item := range items {
-		isStatus, err := classifyStatus(item.Value)
+		owner, err := classifyStatus(item.Value)
 		switch {
 		case err != nil:
 			diags = append(diags, Diagnostic{Message: fmt.Sprintf(
 				"%s: %v (line %d); ignoring it", path, err, item.Line)})
-		case isStatus != wantStatus:
+		case owner != axis:
 			diags = append(diags, Diagnostic{Message: fmt.Sprintf(
 				"%s: %q is a %s, not a %s (line %d); put it under %s",
-				path, item.Value, kindName(isStatus), kindName(wantStatus), item.Line,
-				otherAxis(wantStatus))})
+				path, item.Value, kindName(owner), kindName(axis), item.Line, owner)})
 		default:
 			// Classified above, so this cannot fail. ParseStatus appends into the set that
 			// owns the value and ignores a repeat, which is what makes a duplicated entry a
@@ -164,32 +168,29 @@ func resolveStatusAxis(path string, node yaml.Node, f *filter.Filter, wantStatus
 	return diags
 }
 
-// classifyStatus reports whether value names a Status (true) or a Conclusion (false),
+// classifyStatus reports which of the two keys owns a value, axisStatus or axisConclusion,
 // through filter's own parser so the accepted 15 values and the rejection message stay one
-// implementation rather than a copy this package would have to keep in step.
-func classifyStatus(value string) (bool, error) {
+// implementation rather than a copy this package would have to keep in step. The parser is
+// permissive by design, which is what the CLI's -s flag needs and what R9 refuses to store,
+// so reading which set it landed in is how a permissive classifier serves a strict one.
+func classifyStatus(value string) (string, error) {
 	var probe filter.Filter
 	if err := probe.ParseStatus(value); err != nil {
-		return false, err
+		return "", err
 	}
-	return len(probe.Statuses) == 1, nil
+	if len(probe.Statuses) == 1 {
+		return axisStatus, nil
+	}
+	return axisConclusion, nil
 }
 
-// kindName and otherAxis phrase the misfiled-value diagnostic: what the value actually is,
-// and the key it belongs under. The vocabulary is CONTEXT.md's, capitalised as the glossary
-// capitalises it.
-func kindName(status bool) string {
-	if status {
+// kindName spells an axis the way CONTEXT.md's glossary spells the thing it holds, for the
+// misfiled-value diagnostic: what the value actually is, and what the key wanted.
+func kindName(axis string) string {
+	if axis == axisStatus {
 		return "Status"
 	}
 	return "Conclusion"
-}
-
-func otherAxis(wantStatus bool) string {
-	if wantStatus {
-		return axisConclusion
-	}
-	return axisStatus
 }
 
 // scalarItems reads an axis's value as a list of scalars, accepting a lone scalar as a
@@ -284,6 +285,19 @@ func namesOf[T ~string](vs []T) []string {
 // keystroke that changes a setting, never in a poll.
 func sameLaunchFilter(a, b filter.Filter) bool { return reflect.DeepEqual(a, b) }
 
-// emptyFilter reports the zero Filter, which matches every Run and is the launch filter's
-// default (R3). Load reads it to tell "no filter flag was passed" from a flag that set one.
-func emptyFilter(f filter.Filter) bool { return sameLaunchFilter(f, filter.Filter{}) }
+// emptyFilter reports a Filter that constrains nothing, which matches every Run and is the
+// launch filter's default (R3). Load reads it to tell "no filter flag was passed" from a
+// flag that set one.
+//
+// It asks what the value constrains, never how it was allocated. A caller that builds its
+// sets with make() and appends nothing holds a Filter that states no filter, and comparing
+// against the zero value would read that as one and let it destroy the file's launch filter
+// with no diagnostic, which is R4 and AC3 inverted. Nothing fills Flags.LaunchFilter today
+// and ParseQuery returns nil sets, so the zero comparison happened to hold: that is luck,
+// and this is the contract.
+//
+// It reads QueryString for the eight axes the grammar spells and names the ninth, which has
+// no token, rather than enumerating all nine here. A tenth axis would slip past this the way
+// Repos would have, and TestLaunchFilterAxisCountIsDeliberate is what fails the day one
+// arrives.
+func emptyFilter(f filter.Filter) bool { return f.QueryString() == "" && len(f.Repos) == 0 }
