@@ -50,6 +50,29 @@ func (stubRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
+// emptyRunsRT answers every GET with a 200 carrying no Runs at all, the repository the
+// join has nothing to stamp for.
+type emptyRunsRT struct{}
+
+func (emptyRunsRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	const body = `{"total_count":0,"workflow_runs":[]}`
+	h := http.Header{
+		"Content-Type":          {"application/json"},
+		"Etag":                  {`"` + req.URL.Path + `-empty"`},
+		"X-Ratelimit-Remaining": {"5000"},
+	}
+	return &http.Response{
+		StatusCode:    http.StatusOK,
+		Status:        "200 OK",
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        h,
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}, nil
+}
+
 // gatedBaseRT blocks each request until it is released and records the peak number
 // concurrently in flight, so a test can prove the transport limiter, not the
 // scheduler, bounds the wire (AC15) and that Stop unwinds an in-flight poll. It sits
@@ -271,6 +294,7 @@ type harness struct {
 	gov      *governor.Governor
 	clk      *clockwork.FakeClock
 	ps       *fakePollSet
+	client   *ghclient.Client
 
 	mu      sync.Mutex
 	events  []Event
@@ -280,9 +304,15 @@ type harness struct {
 
 // harnessConfig customises a harness before its Scheduler is built.
 type harnessConfig struct {
-	base    http.RoundTripper // the injected wire base; a cassette or a fake
-	pollSet []domain.RepoID
-	budget  Budget // nil means wire the governor
+	base      http.RoundTripper // the injected wire base; a cassette or a fake
+	pollSet   []domain.RepoID
+	budget    Budget         // nil means wire the governor
+	workflows WorkflowLister // nil means no Workflow list is resolved, the cadence tests' default
+	// wireWorkflows replaces workflows with a lister that reads the listing over the
+	// harness's own client, so the read travels the counted wire and the cassette exactly as
+	// it does in main.go. It is how a test counts the join's requests rather than a fake's
+	// calls.
+	wireWorkflows bool
 }
 
 // newHarness assembles the chain and the Scheduler, enables the settle probe, and
@@ -307,11 +337,16 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		budget = gov
 	}
 
-	s := New(Options{Client: client, PollSet: ps, Budget: budget, Clock: clk})
+	lister := cfg.workflows
+	if cfg.wireWorkflows {
+		lister = wireWorkflowLister(client)
+	}
+
+	s := New(Options{Client: client, PollSet: ps, Budget: budget, Clock: clk, Workflows: lister})
 	s.settled = make(chan time.Duration, 1)
 	s.polled = make(chan struct{}, 4096)
 
-	h := &harness{s: s, counting: counting, gov: gov, clk: clk, ps: ps, updated: make(chan struct{}, 4096)}
+	h := &harness{s: s, counting: counting, gov: gov, clk: clk, ps: ps, client: client, updated: make(chan struct{}, 4096)}
 	h.drainWG.Add(1)
 	go func() {
 		defer h.drainWG.Done()

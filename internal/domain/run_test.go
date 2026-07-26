@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -39,5 +40,37 @@ func TestEffectiveStartFallsBackToCreatedAt(t *testing.T) {
 
 	if got := r.EffectiveStart(); !got.Equal(created) {
 		t.Fatalf("EffectiveStart() = %v, want the created_at fallback %v", got, created)
+	}
+}
+
+// TestWorkflowStateIsStampedNotDecoded pins ADR-0014's stamping rule for the field
+// run-detail R8's deleted marker reads. The run object carries no Workflow state
+// key: all 35 were enumerated and none is one, exactly as none carries the Workflow
+// name. The State is therefore resolved client-side by joining WorkflowID against
+// the repository's Workflow list, where the fan-out already holds both sides, and a
+// payload that happened to carry a state key must never fill it.
+func TestWorkflowStateIsStampedNotDecoded(t *testing.T) {
+	body := `{"id":42,"workflow_id":7,"state":"active","workflow_state":"active"}`
+
+	var r domain.Run
+	if err := json.Unmarshal([]byte(body), &r); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if r.WorkflowState != "" {
+		t.Errorf("WorkflowState decoded to %q from the run object; it is stamped, never decoded", r.WorkflowState)
+	}
+	if r.WorkflowID != 7 {
+		t.Errorf("WorkflowID = %d, want the 7 the join reads", r.WorkflowID)
+	}
+}
+
+// TestUnresolvedWorkflowStateIsNotDeleted pins the honest zero value. A Run whose
+// join found nothing keeps the empty State, and the empty State is not the deleted
+// one: an unresolved Workflow must never mark a Run as Orphaned (run-detail R8).
+func TestUnresolvedWorkflowStateIsNotDeleted(t *testing.T) {
+	var r domain.Run
+	if r.WorkflowState == domain.StateDeleted {
+		t.Fatal("the zero WorkflowState reads as deleted; an unresolved join would mark every Run Orphaned")
 	}
 }

@@ -175,8 +175,18 @@ func (s *Scheduler) poll(id domain.RepoID) {
 		return
 	}
 	runs := page.WorkflowRuns
+	// The fan-out stamps what the run object does not carry, before the event leaves the
+	// worker (ADR-0014, ADR-0018). Repo is the identity the payload has no key for; the
+	// Workflow's State is the join against the repository's Workflow list, read here
+	// because this is where both sides are held. A Run is whole when it is emitted, and no
+	// consumer joins anything (ADR-0015).
+	var wf map[int64]domain.State
+	if len(runs) > 0 {
+		wf = s.workflowStates(id)
+	}
 	for i := range runs {
-		runs[i].Repo = id // ADR-0018: stamp Repo before the event leaves the worker
+		runs[i].Repo = id
+		runs[i].WorkflowState = wf[runs[i].WorkflowID] // absent or unread reads as the empty State
 	}
 
 	if s.recordPoll(id, runs, etag) {
@@ -193,6 +203,64 @@ func (s *Scheduler) poll(id domain.RepoID) {
 		claimed = page.TotalCount
 	}
 	s.emit(Update{Repo: id, Runs: runs, Filtered: filtered, ClaimedTotal: claimed})
+}
+
+// workflowStates is a repository's Workflow ID to State join, read through the injected
+// WorkflowLister the first time it is needed and held for the process (run-detail R8).
+//
+// **The list is read at most once per repository per process, whatever the read returns.**
+// That single rule is the whole cost of the marker, and it is a rule rather than three
+// policies because each of the alternatives is unbounded in a different direction.
+//
+// Re-reading on every poll would buy a rarer event than the poll itself: a Workflow's State
+// changes only when a person edits, disables or deletes it. Retrying only the failures is
+// worse, because the failure with no natural end is the one that would loop: a fine-grained
+// PAT that answers 403 on the Workflow listing answers 403 every time, and a repository at
+// the fast tier would ask again every three seconds for the session, silently, with no
+// backoff and nothing on screen to say so (workflow-management R7). Re-reading a list that
+// came back incomplete would fetch the same first page forever, because pagination is not
+// built here.
+//
+// So a failure and an incomplete list are both remembered, and the price is stated rather
+// than hidden: a repository whose read failed keeps its marker dark until a restart, and a
+// Workflow past the listing's first page resolves to no State for the session. Both leave
+// the State empty, which reads as not-deleted, so the cost is a marker that does not light
+// and never one that lights wrongly.
+//
+// Reading it lazily, from the poll that has Runs to stamp, means a repository the operator
+// never sees Runs from costs nothing at all. A paused loop spawns no poll, so exhaustion
+// stops this read with everything else (R16).
+//
+// It is called from the poll goroutine, which already holds the repository's single-flight
+// flag, so two reads of one repository never overlap and the wire bound stays the transport
+// limiter's (ADR-0018). A failure emits nothing: the poll itself succeeded, and a
+// RepoPollFailed here would report a repository whose Runs have just arrived as failing to
+// update.
+func (s *Scheduler) workflowStates(id domain.RepoID) map[int64]domain.State {
+	key := id.String()
+	s.mu.Lock()
+	held, read := s.wfStates[key]
+	s.mu.Unlock()
+	if read {
+		return held
+	}
+	if s.opts.Workflows == nil {
+		return nil // nothing wired: nothing to remember, and nothing is ever asked
+	}
+	ws, err := s.opts.Workflows(id)
+	var states map[int64]domain.State
+	if err == nil {
+		states = make(map[int64]domain.State, len(ws))
+		for _, w := range ws {
+			states[w.ID] = w.State
+		}
+	}
+	// The attempt is recorded either way, so a failed read is asked once and not once per
+	// poll. A nil map is a perfectly good memo: every lookup in it answers the empty State.
+	s.mu.Lock()
+	s.wfStates[key] = states
+	s.mu.Unlock()
+	return states
 }
 
 // nextWait is the duration until the earliest not-in-flight repository is next due

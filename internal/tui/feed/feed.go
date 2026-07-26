@@ -500,9 +500,8 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 // openDetail opens the detail pane over the Run under the cursor, the OpenDetail key's
 // handler (BUILD-ORDER stage 8). With no row under the cursor it is a no-op. The pane owns
 // the debounce, the fetch and the discard rule; the Feed reports the cursor and forwards
-// broadcasts (ADR-0011, ADR-0015). The Workflow's deleted State is not stamped on a Run and
-// the Feed does not yet resolve it, so R8's marker stays off until that seam is wired; this
-// is the one call site that will set it.
+// broadcasts (ADR-0011, ADR-0015). The Run arrives stamped with its Workflow's State, which
+// the pane reads off it, so R8's marker needs nothing of the Feed beyond the Run itself.
 func (m Model) openDetail() (Model, tea.Cmd) {
 	if m.detailOpen {
 		// Already open and Feed-focused: a second open-detail press descends into the pane, so
@@ -564,20 +563,37 @@ func (m Model) openConfirm(op ops.Operation) Model {
 	return m
 }
 
-// openRerun raises a re-run or re-run-failed confirmation, first applying run-detail
-// R18's Orphaned-Run exclusion: a Run whose Workflow is deleted can produce no further
-// Run, so re-run is not offered for it (run-detail R18, AC15). The detail pane holds the
-// Workflow State it resolved, so when it is open over an Orphaned Run the re-run key is
-// inert. The permission half of the gate (push && !archived) is enforced by ops.Plan's
-// eligibility stamp, consistently with the Feed and every other operation, so this adds
-// only the deleted-Workflow limb the shared Plan cannot see (a Run does not carry its
-// Workflow's State). The eligibility of a full multi-selection is shown in the modal's
-// skip lines as for any operation.
+// openRerun raises a re-run or re-run-failed confirmation, applying run-detail R18's
+// Orphaned-Run exclusion: a Run whose Workflow is deleted can produce no further Run, so
+// re-run is not offered for it (R18, AC15).
+//
+// The exclusion is a property of the Run, which carries its Workflow's State (ADR-0014),
+// so it holds whether or not the detail pane is open. The key goes inert only when the
+// whole frozen set is Orphaned, because there is then nothing to offer. A set that mixes
+// Orphaned Runs with healthy ones opens the confirmation as usual, and ops.Plan stamps the
+// Orphaned ones skipped, so they appear in the modal's skip lines exactly as a read-only
+// repository's Runs do. Dropping the whole operation instead would discard the healthy
+// Runs the operator selected beside them, silently, which R18 never asked for.
 func (m Model) openRerun(op ops.Operation) Model {
-	if m.detailOpen && m.detail.IsOrphaned() {
-		return m // run-detail R18, AC15: no re-run for an Orphaned Run
+	if orphanedOnly(m.frozenSelection()) {
+		return m // run-detail R18, AC15: nothing in the set can be re-run
 	}
 	return m.openConfirm(op)
+}
+
+// orphanedOnly reports whether a frozen set is non-empty and every Run in it is an
+// Orphaned Run. An empty set is not, so an empty selection falls through to openConfirm's
+// own empty check rather than being reported as an Orphaned one.
+func orphanedOnly(items []ops.Item) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for i := range items {
+		if items[i].Run == nil || items[i].Run.WorkflowState != domain.StateDeleted {
+			return false
+		}
+	}
+	return true
 }
 
 // frozenSelection builds R4's frozen set: a RunItem per selected Run ID in displayed

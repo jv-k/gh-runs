@@ -103,14 +103,14 @@ func TestGoldenNoJobs(t *testing.T) {
 // the Workflow deleted, so an Orphaned Run is distinguishable from one with a live successor.
 func TestGoldenWorkflowDeleted(t *testing.T) {
 	r := gRun(4821, "cli", "cli", "Old Pipeline", 4821, 1, completed, failure)
+	r.WorkflowState = domain.StateDeleted // stamped by the fan-out, read off the Run (ADR-0014)
 	jobs := []domain.Job{
 		gJob("build", completed, failure, sec(-40), sec(-1),
 			gStep(1, "Set up job", completed, success, sec(-40), sec(-38)),
 			gStep(2, "Run tests", completed, failure, sec(-38), sec(-1)),
 		),
 	}
-	m := goldenPane(r, jobs).SetWorkflowState(domain.StateDeleted)
-	goldie.New(t).Assert(t, "workflow_deleted", []byte(m.View()))
+	goldie.New(t).Assert(t, "workflow_deleted", []byte(goldenPane(r, jobs).View()))
 }
 
 // TestGoldenPaused fixes AC12: at Budget exhaustion the pane states it paused and when it

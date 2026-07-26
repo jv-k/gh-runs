@@ -138,8 +138,9 @@ type Run struct {
 	TriggeringActor    User       `json:"triggering_actor"`
 
 	// Stamped by the decoding caller, never decoded. See below.
-	Repo         RepoID `json:"-"`
-	WorkflowName string `json:"-"`
+	Repo          RepoID `json:"-"`
+	WorkflowName  string `json:"-"`
+	WorkflowState State  `json:"-"`
 }
 
 // User is an actor reduced to the one field a requirement reads.
@@ -159,7 +160,9 @@ func (r Run) EffectiveStart() time.Time {
 
 **Every id in this file is `int64`, on measurement.** The reference Run's id is 29,516,338,954: eleven digits, and roughly fourteen times past `int32`'s ceiling. [live-run-feed](../features/live-run-feed/requirements.md) R4a already sizes its column to 11 digits from the same observation.
 
-**`Repo` and `WorkflowName` are stamped, and the tags say so.** The host argument above covers `Repo`. `WorkflowName` is stamped because **the run object has no workflow-name key**, measured: all 35 keys were enumerated and none carries one, which is consistent with [cli-surface](../features/cli-surface/requirements.md)'s constraint that ruleset Runs surface no Workflow name. The name is resolved client-side by joining `WorkflowID` against the discovered Workflow list, the join happens where the fan-out already holds both sides, and a Run whose join finds nothing keeps the empty string honestly. The job object does carry a `workflow_name` key (measured), and it is no use here: the Feed needs the name before any Job is ever fetched.
+**`Repo`, `WorkflowName` and `WorkflowState` are stamped, and the tags say so.** The host argument above covers `Repo`. `WorkflowName` is stamped because **the run object has no workflow-name key**, measured: all 35 keys were enumerated and none carries one, which is consistent with [cli-surface](../features/cli-surface/requirements.md)'s constraint that ruleset Runs surface no Workflow name. The name is resolved client-side by joining `WorkflowID` against the discovered Workflow list, the join happens where the fan-out already holds both sides, and a Run whose join finds nothing keeps the empty string honestly. The job object does carry a `workflow_name` key (measured), and it is no use here: the Feed needs the name before any Job is ever fetched.
+
+**`WorkflowState` was added when [run-detail](../features/run-detail/requirements.md) R8's marker was wired (#57), on the same argument as `WorkflowName` and off the same lookup.** The run object carries no Workflow state key either, so a Run whose Workflow was deleted is indistinguishable from one whose Workflow still exists until `WorkflowID` is joined against the repository's Workflow list. That is the join this section describes, and #57 is the commit that first makes it: `WorkflowName` is described above and assigned nowhere, so the Workflow list had never been read in the fan-out at all. The cost is therefore one listing per repository, read once per process, and the second field off it is what is free. The empty `State` is an unresolved join and reads as not-deleted, so a Run is never marked Orphaned on the strength of a lookup that was never made. Stamping it is what would let [workflow-management](../features/workflow-management/requirements.md) R11 label an Orphaned Run wherever that Run appears, rather than each surface repeating the join and eventually disagreeing. The detail pane's marker is the first such surface, and the Feed's rows are not yet one.
 
 **`EffectiveStart` lives on the type so the fallback exists exactly once.** The Feed sorts by it, while cli's `startedAt` column emits the raw field rather than the fallback, exactly as gh does. The filter engine's Created predicate reads `CreatedAt` instead, because the server's `created` parameter filters on `created_at` and the client half must agree with the field it pushes ([ADR-0016](./0016-the-filter-representation.md)). An earlier form of this sentence had the filter reading `EffectiveStart`, and ADR-0016 records why that was wrong. Without one home, the sort key's consumers reimplement R8's fallback and eventually disagree.
 

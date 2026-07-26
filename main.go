@@ -259,10 +259,11 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 	}
 
 	sched := scheduler.New(scheduler.Options{
-		Client:  client,
-		PollSet: disc,
-		Budget:  gov,
-		Clock:   clk,
+		Client:    client,
+		PollSet:   disc,
+		Budget:    gov,
+		Clock:     clk,
+		Workflows: cl.workflowLister(),
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -492,6 +493,39 @@ func knownRepos(disc *discovery.Discovery) []domain.Repo {
 		}
 	}
 	return out
+}
+
+// workflowLister is the engine's Workflow-list seam (run-detail R8, ADR-0014). It reads the
+// listing over shared, the surface that enters at the store, so the read is revalidated and
+// accounted like every other. The reader is the same one the Workflows tab uses, because a
+// second decoder here would be a second place that knows the endpoint and its envelope. The
+// two consumers share the reader and not the list: the tab still fans out and holds its own
+// copy, which is what issue #95 proposes to fix by moving the reader to a neutral package,
+// where the CLI's blocked -w NAME and workflowName consumers can reach it too.
+//
+// The engine takes a function over domain types and imports no tab, which keeps ADR-0011's
+// direction: main.go is the only place that knows both sides, exactly as it is for the store
+// and the client.
+//
+// The tab records a failed read on the value it returns rather than as a Go error, because a
+// 403 on a fine-grained PAT is an outcome its own view states. The engine has no view to
+// state it in, so the failure is raised as an error here and the engine stamps nothing.
+//
+// An incomplete list (the tab's Complete flag, one page at the API's ceiling) is passed
+// through as what it is, and the engine memoises it. A Workflow past the first page resolves
+// to no State for the session, and its Runs read as not-deleted, which is the answer a join
+// that finds nothing gives anywhere else. Refusing the whole list over a missing tail would
+// lose the Workflows that are on it, and re-reading it would fetch the same first page
+// forever. Paginating it is issue #95's, with the move.
+func (c clients) workflowLister() scheduler.WorkflowLister {
+	fetch := workflows.ClientFetch(c.shared)
+	return func(id domain.RepoID) ([]domain.Workflow, error) {
+		rw := fetch(id)
+		if rw.Err != nil {
+			return nil, rw.Err
+		}
+		return rw.Workflows, nil
+	}
 }
 
 // newestRevalidated is the freshest instant anything in the poll set was seen live, which

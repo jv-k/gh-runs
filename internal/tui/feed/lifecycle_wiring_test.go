@@ -3,6 +3,7 @@ package feed
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
@@ -79,24 +80,34 @@ func TestBulkRerunStillConfirms(t *testing.T) {
 }
 
 // TestRerunInertForOrphanedRun pins run-detail R18 and AC15: a Run whose Workflow is
-// deleted is Orphaned and can produce no further Run, so the detail pane offers no re-run.
-// While the pane is open over such a Run the re-run key is inert; clearing the Orphaned
-// state offers the re-run again, proving the gate is the Workflow State and nothing else.
+// deleted is Orphaned and can produce no further Run, so no re-run is offered over a set of
+// them. The gate reads the Workflow State the fan-out stamped on the Run (ADR-0014), so the
+// next poll restoring a live State offers the re-run again, which proves the gate is that
+// State and nothing else.
 func TestRerunInertForOrphanedRun(t *testing.T) {
+	id := repoID("o", "r")
+	orphan := func(runID int64, started time.Time) domain.Run {
+		r := mkRun(runID, "o", "r", "CI", domain.StatusCompleted, domain.ConclusionFailure, started)
+		r.WorkflowState = domain.StateDeleted
+		return r
+	}
 	m := newFeedWithOps(t)
+	m = feedRuns(m, id, orphan(1, t0), orphan(2, t0.Add(-time.Minute)))
 	m = m.Update2(press("space")) // select the top Run
 	m = m.Update2(press("down"))
-	m = m.Update2(press("space")) // select the next Run, so a re-run would otherwise be a bulk modal
-	m.detailOpen = true
-	m.detail = m.detail.SetWorkflowState(domain.StateDeleted) // an Orphaned Run is on screen
+	m = m.Update2(press("space")) // select the next, so a re-run would otherwise be a bulk modal
 
 	m = m.Update2(press("R"))
 	if m.confirmOpen {
-		t.Errorf("re-run was offered for an Orphaned Run; run-detail R18 and AC15 forbid it")
+		t.Errorf("re-run was offered for Orphaned Runs; run-detail R18 and AC15 forbid it")
 	}
 
-	// Clear the Orphaned state: the same key now raises the bulk confirmation.
-	m.detail = m.detail.SetWorkflowState(domain.StateActive)
+	// The Workflow is live again in the next poll's Runs: the same key raises the bulk
+	// confirmation.
+	m = feedRuns(m, id,
+		mkRun(1, "o", "r", "CI", domain.StatusCompleted, domain.ConclusionFailure, t0),
+		mkRun(2, "o", "r", "CI", domain.StatusCompleted, domain.ConclusionFailure, t0.Add(-time.Minute)),
+	)
 	m = m.Update2(press("R"))
 	if !m.confirmOpen {
 		t.Errorf("re-run stayed inert for a live Workflow; only an Orphaned Run gates it (R18)")

@@ -93,7 +93,7 @@ type Model struct {
 
 	run       domain.Run
 	haveRun   bool
-	wfState   domain.State // the selected Run's Workflow State; deleted marks an Orphaned Run (R8)
+	wfState   domain.State // the selected Run's stamped Workflow State; deleted marks an Orphaned Run (R8)
 	repo      domain.Repo  // the Run's repository capability, stamped by the Feed for the log-delete gate
 	repoKnown bool         // discovery has recorded the capability; the delete gate fails closed otherwise
 
@@ -295,23 +295,6 @@ func (m Model) SelectRun(run domain.Run) (Model, tea.Cmd) {
 	return m.target(run)
 }
 
-// SetWorkflowState records the selected Run's Workflow State, whose deleted value marks an
-// Orphaned Run (R8, AC11). It is separate from SelectRun because a Run does not carry its
-// Workflow's State, and the Feed sets it only when it has resolved one; until then the
-// state is unknown, which reads as not-deleted (a Run with a live successor).
-func (m Model) SetWorkflowState(s domain.State) Model {
-	m.wfState = s
-	return m
-}
-
-// IsOrphaned reports whether the selected Run's Workflow is deleted, which makes it an
-// Orphaned Run: no further Run can follow it. run-detail R18 excludes an Orphaned Run from
-// the re-run gate, because a deleted Workflow can produce no further Run, so the Feed reads
-// this to keep the re-run key inert while the pane is open over one (run-detail R18, AC15,
-// and its resolved open question 8). It reads the Workflow State the Feed resolved via
-// SetWorkflowState; an unresolved state reads as not-deleted, a Run with a live successor.
-func (m Model) IsOrphaned() bool { return m.wfState == domain.StateDeleted }
-
 // Update handles one message the Feed forwarded. It consumes its own tagged messages, the
 // size it lays out against, and the broadcast Budget Readout it pauses on (R16, ADR-0015).
 // A key press does not arrive here: the Feed routes keys to HandleKey when this pane holds
@@ -346,14 +329,20 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // the new identity (R11, R12), and arms the debounce (R10). The same Run ID refreshes the
 // held fields in place, so the badge tracks a re-run (R17) and the liveness gate reads the
 // current Status (R13) without re-arming the debounce or clearing the Jobs.
+//
+// The deleted marker rides on the Run, stamped by the fan-out (R8, ADR-0014), so it is read
+// off every Run this pane is pointed at and needs no setter of its own. Both paths take it:
+// a fresh selection so the marker is right on the frame the pane opens with, and an in-place
+// refresh so a Workflow deleted under a selected Run is marked at the next poll.
 func (m Model) target(run domain.Run) (Model, tea.Cmd) {
 	if m.haveRun && m.run.ID == run.ID {
 		m.run = run // refresh in place; no re-fetch (R10, R17)
+		m.wfState = run.WorkflowState
 		return m, nil
 	}
 	m.run = run
 	m.haveRun = true
-	m.wfState = "" // the deleted marker is per-Run; a new selection starts unknown (R8)
+	m.wfState = run.WorkflowState
 	m.jobs = nil
 	m.state = statePending // R12: pending, never the previous Run's Jobs
 	// A new Run resets the Job cursor and leaves any log view: the previous Run's Job and its

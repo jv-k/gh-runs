@@ -116,14 +116,35 @@ type Budget interface {
 	Readout() governor.Readout
 }
 
+// WorkflowLister reads one repository's Workflows, the other half of the join the
+// fan-out completes. A Run carries a WorkflowID and no Workflow state key at all
+// (measured: all 35 keys were enumerated), so the Workflow's State exists for a Run
+// only once this list has been read and joined (ADR-0014). Its consumer is
+// run-detail R8's deleted marker, which distinguishes an Orphaned Run from a Run
+// whose Workflow still exists.
+//
+// It is a function over domain types rather than an import, so the engine takes the
+// list without knowing which package produces it: main.go is the only place that
+// knows both, exactly as it is for the store and the client (ADR-0011). It is nil
+// wherever no Workflow list is wired, and then nothing is stamped and the marker
+// stays dark, which is the honest reading of a join that was never made.
+//
+// It is called at most once per repository per process, whatever it returns, so an
+// implementation owes no memo of its own and pays for no backoff (workflowStates).
+// An incomplete listing is returned as what it is rather than as an error, so the
+// Workflows on the first page still resolve.
+type WorkflowLister func(domain.RepoID) ([]domain.Workflow, error)
+
 // Options carries the scheduler's seams. main.go fills them at stage 7: the client
 // is the transport chain, the poll set is discovery, the Budget is the governor,
-// and the clock is the injected one.
+// and the clock is the injected one. Workflows is the Workflow-list source the
+// fan-out joins against.
 type Options struct {
-	Client  Requester
-	PollSet PollSet
-	Budget  Budget
-	Clock   clock.Clock
+	Client    Requester
+	PollSet   PollSet
+	Budget    Budget
+	Clock     clock.Clock
+	Workflows WorkflowLister
 }
 
 // Scheduler is the stateful engine. It holds each repository's last-known Runs
@@ -142,6 +163,13 @@ type Scheduler struct {
 	lastPoll map[string]time.Time    // per repo: the injected-clock instant of its last poll
 	inFlight map[string]bool         // per repo: a poll is out, so the next due tick is skipped (R18)
 	lastETag map[string]string       // per repo: the ETag its last 200 carried, to spot a 304 (R19)
+
+	// wfStates is each repository's Workflow ID to State join, read once through the
+	// WorkflowLister and held for the process. An entry exists once the read has been
+	// attempted, successfully or not, so the listing is read at most once per repository
+	// whatever it answered (workflowStates has the reasoning). A nil value is a read that
+	// failed, and answers the empty State for every Workflow ID.
+	wfStates map[string]map[int64]domain.State
 
 	// filt is the Feed's active filter, guarded by mu (ADR-0016). A poll derives its
 	// server-side query from filt.Query() (R22), and a filtered poll carries the
@@ -195,6 +223,7 @@ func New(opts Options) *Scheduler {
 		lastPoll: make(map[string]time.Time),
 		inFlight: make(map[string]bool),
 		lastETag: make(map[string]string),
+		wfStates: make(map[string]map[int64]domain.State),
 		updates:  make(chan Event),
 		wake:     make(chan struct{}, 1),
 	}
