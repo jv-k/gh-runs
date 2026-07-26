@@ -103,6 +103,12 @@ The server's `created` parameter filters on `created_at`, and [cli-surface](../f
 
 [live-run-feed](../features/live-run-feed/requirements.md) R3 makes the owning repository a Feed filter. Server-side, repository is not a parameter but the choice of endpoints, and the CLI's `-R` and a Purge's target make that choice before any filter runs, so those consumers leave `Repos` empty. The Feed's filter input is the consumer that needs it: `Repos` matches the stamped `Repo`, OR within the set, and the Feed's one filter surface drives one engine for every axis rather than growing a private repository predicate beside it. The axis has no `Query()` form, exactly like Conclusions.
 
+**The axis is spelled `repo:OWNER/REPO` in the filter input's grammar.** This section previously stated the lean above without deciding, and the gap it left ran for a release: the grammar carried no repository token, so the axis could be matched but never stated, and no config key could be added for a setting the Settings view could neither show nor edit ([settings](../features/settings/requirements.md) R17). Issue #102 took the decision.
+
+`Match` plus the grammar are the axis's whole surface. `ParseQuery` accepts `repo:OWNER/REPO` and `repo:HOST/OWNER/REPO` through `domain.ParseRepoRef`, the one validation door ([ADR-0009](./0009-repository-identity-is-host-qualified.md)). Repeated tokens accumulate, OR within the axis. `QueryString` renders the bare `OWNER/REPO` form, which round-trips exactly because `NewRepoID` admits no host but github.com. `Query()` still emits nothing for the axis and cannot, because no such parameter exists.
+
+A named repository is not "the repository of the working directory". `Repos` holds parsed identities, and a sentinel resolved per launch is a change to this type that would have to earn its way back through this ADR. Issue #117 carries that.
+
 ## One measurement flagged, not taken
 
 Which field the server's `actor` parameter matches is unmeasured: `Actor` and `TriggeringActor` diverge only on a re-run by a different user. `Match` reads `Actor.Login` provisionally. One conditional GET against a re-run Run settles it when stage 5 builds, and the discrepancy is recorded here so it is a known unknown rather than a surprise.

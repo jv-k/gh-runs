@@ -1,6 +1,11 @@
 package filter
 
-import "strings"
+import (
+	"slices"
+	"strings"
+
+	"github.com/jv-k/gh-runs/v2/internal/domain"
+)
 
 // The filter input's grammar: one line of space-separated tokens, each either an
 // axis:value pair or a bare permissive Status or Conclusion value, which is what
@@ -28,6 +33,8 @@ var axisAliases = map[string]string{
 	"workflow": "workflow", "w": "workflow",
 	"status": "status", "s": "status", "conclusion": "status",
 	"created": "created",
+	// R mirrors gh's -R, which is the flag this value is spelled for everywhere else.
+	"repo": "repo", "r": "repo",
 }
 
 // ParseQuery parses one line of the filter input's grammar into a Filter
@@ -68,6 +75,20 @@ func ParseQuery(s string) (Filter, error) {
 				return Filter{}, err
 			}
 			f.Created = dr
+		case "repo":
+			// Through the one validation door, the same one the CLI's -R, GH_REPO and
+			// settings R7's exclude list use (ADR-0009). A malformed ref or an
+			// unsupported host is rejected by name and fails the whole line, because
+			// ParseQuery does not adopt a partial filter.
+			id, err := domain.ParseRepoRef(value)
+			if err != nil {
+				return Filter{}, err
+			}
+			// OR within the axis, and a repeated value does not grow the set, which is
+			// the rule ParseStatus already follows for the permissive pair.
+			if !slices.Contains(f.Repos, id) {
+				f.Repos = append(f.Repos, id)
+			}
 		}
 	}
 	return f, nil
@@ -78,10 +99,15 @@ func ParseQuery(s string) (Filter, error) {
 // Feed a filter puts in the operator's input, so the applied filter is a line they
 // can read and edit rather than an invisible narrowing.
 //
-// The repository axis has no token, exactly as it has no query parameter (ADR-0016),
-// so a Filter carrying one renders without it and does not round-trip. Nothing
-// renders one: the axis is the Feed's own scoping, set from the view rather than
-// from a line of text.
+// The repository axis renders as one repo: token per entry, in the bare OWNER/REPO
+// spelling. That form round-trips exactly, because NewRepoID rejects every host but
+// github.com, so no RepoID in the tree carries a host the two-segment parse could
+// lose. It is also the spelling the config writer uses for settings R7's exclude
+// list, so the file and the input line agree.
+//
+// Having a token here is not the same as having a query parameter. The axis still
+// has no Query() form and cannot get one, because no such parameter exists
+// (ADR-0005, ADR-0016): Match plus this grammar are its whole surface.
 //
 // The grammar splits on whitespace and has no quoting, in either direction, so a
 // value carrying a space is not expressible in it. That is a property of the input
@@ -109,6 +135,9 @@ func (f Filter) QueryString() string {
 	}
 	for _, cc := range f.Conclusions {
 		parts = append(parts, "status:"+string(cc))
+	}
+	for _, id := range f.Repos {
+		parts = append(parts, "repo:"+id.Owner+"/"+id.Name)
 	}
 	return strings.Join(parts, " ")
 }

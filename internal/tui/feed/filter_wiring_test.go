@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -54,6 +55,34 @@ func TestAcceptingAFilterPublishesItToTheScheduler(t *testing.T) {
 	}
 	if last := got[len(got)-1]; last.Branch != "main" {
 		t.Fatalf("published filter = %+v, want Branch=main (R22)", last)
+	}
+}
+
+// TestARepositoryOnlyFilterIsReportedActive pins the trap the repository axis used to be
+// (#102). The Feed decides a filter is active by asking whether QueryString is non-empty,
+// so while the axis had no token a filter carrying only repositories narrowed the rows
+// while the chrome reported no filter at all: the operator saw an emptied list and nothing
+// saying why. Typing the axis is the case that reaches this, now that the grammar has it.
+func TestARepositoryOnlyFilterIsReportedActive(t *testing.T) {
+	m := newFeed(100, 24)
+	m = feedRuns(m, repoID("acme", "api"),
+		mkRun(1, "acme", "api", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0))
+
+	m = m.Update2(press("/"))
+	for _, r := range "repo:acme/other" {
+		m = m.Update2(press(string(r)))
+	}
+	m = m.Update2(press("enter"))
+
+	if !m.narrowed() {
+		t.Error("a filter carrying only the repository axis is not reported as narrowing the list")
+	}
+	line, ok := m.filterLine()
+	if !ok {
+		t.Fatal("a repository-only filter states no filter line, so the narrowing is silent")
+	}
+	if !strings.Contains(line, "acme/other") {
+		t.Errorf("the filter line does not name the repository it narrowed to: %q", line)
 	}
 }
 

@@ -279,7 +279,7 @@ type Config struct {
 	// Filter with Status and Conclusion as distinct typed fields, never the CLI's permissive
 	// -s/--status string. It defaults to the zero Filter, which matches every Run, so a
 	// config file without the key leaves the Feed exactly as it was (R3, AC1). The file's
-	// shape, and why the repository axis has no key in it, are in launchfilter.go.
+	// shape, and the sub-key each of ADR-0016's nine axes carries, are in launchfilter.go.
 	LaunchFilter filter.Filter
 }
 
@@ -508,8 +508,8 @@ func resolveScope(key string, node yaml.Node, current Scope, diags []Diagnostic)
 		key, string(s), current, scopeList())})
 }
 
-// resolveRepoList decodes a repository list key (exclude, pin) into host-qualified
-// identity (settings R7, ADR-0009). It mirrors resolveScope's shape: a node of the
+// resolveRepoList decodes a repository list key (exclude, pin, launch_filter.repos) into
+// host-qualified identity (settings R7, R9, ADR-0009). It mirrors resolveScope's shape: a node of the
 // wrong type falls that one setting back to its default, an empty list, and says so
 // (R14), leaving every other key alone. A list whose individual entry is malformed
 // keeps the entries that parsed and names the one that did not, because dropping a
