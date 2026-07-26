@@ -23,14 +23,15 @@ The canon says what to build and never says where the code goes. Sixteen feature
     ├── ops/                 Every write in the product, see below.
     ├── notify/              notifications, a 2.1 package. Three platform backends, if the feature ships. See below.
     ├── cli/                 cli-surface. Flags, and the non-interactive paths.
-    └── tui/                 Bubble Tea. The root model, three tabs, four panes.
+    └── tui/                 Bubble Tea. The root model, three tabs, five panes.
         ├── feed/            Tab: Runs.
         ├── workflows/       Tab: Workflows.
         ├── storage/         Tab: Storage.
         ├── rundetail/       Pane, opened by feed over its selection.
         ├── logview/         Pane, opened by rundetail over a Job.
         ├── settings/        Pane, owned by the root. Reachable from every tab.
-        └── confirm/         Pane. The graduated-friction confirmation. Shared, see below.
+        ├── confirm/         Pane. The graduated-friction confirmation. Shared, see below.
+        └── running/         Pane, owned by the root. A launched write's progress, cancel and summary.
 ```
 
 **[ADR-0012](./0012-transport-chain-and-the-client-surface.md) owns the transport chain.** What `ghclient` exposes, where `store`'s RoundTripper sits, and where `governor` nests inside it are that ADR's decisions, not this one's. This ADR fixes the tree. That one fixes the wiring through it.
@@ -140,11 +141,11 @@ So `tui.Model` is the only `tea.Model` in this tree, and those eleven fields are
 
 **Focus resolution is recursive, and each level knows only its own children.** The root picks the focused tab and sends the `tea.KeyPressMsg` there. A tab holding an open pane passes it onward. The root does not know `confirm` exists, and `confirm` knows nothing of the root. The one exception is `settings`, below.
 
-### Three tabs, four panes, and the tree listed six of them on one line
+### Three tabs, five panes, and the tree listed six of them on one line
 
 **[live-run-feed](../features/live-run-feed/requirements.md) R2 mandates exactly three tabs.** The tree listed six directories on a line labelled tabs, so three of them were miscategorised, and one of those three is contradicted by R2 in the same sentence: "Settings must be reachable from any tab and must not appear as a fourth peer tab."
 
-> **The tabs are `feed`, `workflows` and `storage`. The panes are `rundetail`, `logview`, `settings` and `confirm`.**
+> **The tabs are `feed`, `workflows` and `storage`. The panes are `rundetail`, `logview`, `settings`, `confirm` and `running`.**
 
 **The import rule named tabs and said nothing about panes**, which left the one import an implementer actually reaches for ("may `feed` import `rundetail`?") unaddressed. Stated:
 
@@ -155,6 +156,12 @@ That last clause is what the Consequences section's cycle warning names. `rundet
 **The Runs tab is three directories, and the flat listing hid the hierarchy.** [BUILD-ORDER](../BUILD-ORDER.md) stage 8 calls `rundetail` "a pane over the Feed's selection", and [log-viewer](../features/log-viewer/requirements.md) R1 opens a log "selected from Run detail". So Runs is `feed` opening `rundetail` opening `logview`, three deep, and the tab count is still three. `confirm` is the other shape: [purge](../features/purge/requirements.md) R4 to R9 are reused by four call sites, so it is a pane several tabs import rather than one tab's child.
 
 **`settings` is the root's, and R2 is the reason.** A pane reachable from *any* tab cannot belong to *a* tab, because three tabs importing it is three copies of its state and three places for R17's file write to disagree. The root owns it and opens it over whichever tab is focused. That is what "reachable from any tab, and not a fourth peer tab" means as a tree.
+
+**Amended: `running` is the fifth pane, and it is the root's for a second reason.** It is the surface a launched write runs behind, carrying [purge](../features/purge/requirements.md) R15's live progress, R16's cancel and R22's grouped summary with its retry keystroke. [ADR-0015](./0015-the-async-model.md) already made the progress stream a broadcast, on the grounds that "a Purge outlives the operator's attention and must keep painting its indicator whichever tab is focused". A tab-owned indicator cannot do that: switching tabs would take it off screen mid-Purge. So the root owns it, exactly as it owns `settings`, and for the sharper version of the same argument.
+
+**It is a strip above the focused tab, not a modal over it.** R14 forbids a Purge from being modal and AC10 requires the Feed to keep updating and stay navigable throughout, so the pane takes rows off what the tabs are laid out in rather than replacing a tab's body, and it captures no input. It owns two keys, R16's cancel and R22's retry, which the root takes before routing a press onward and only while the surface is up. Both are chords, because unlike every other binding in the registry these two stay live for hours over a tab whose bare letters delete, re-run and dispatch.
+
+**It is parameterised over `ops.Operation`, so it is built once.** A Purge, a bulk lifecycle mutation ([run-lifecycle](../features/run-lifecycle/requirements.md) R16) and a Reclamation ([storage-reclamation](../features/storage-reclamation/requirements.md) R24) are the same walk over a frozen set under the same failure contract, and `ops` already returns one progress type for all of them. The pane reads the verb off the frame, so a feature joining this surface wires a launch rather than building a second indicator. That is the same reasoning `confirm` was built on, one requirement later: R4 to R9 are reused by four call sites, and R15, R16 and R22 are reused by three.
 
 ### The Feed holds the selection, and `rundetail` owns the debounce
 

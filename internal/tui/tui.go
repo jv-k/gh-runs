@@ -16,8 +16,15 @@
 // reaching into the Feed (workflow-management R13, AC4). Focus and cross-tab delivery are
 // the root's, because a tab may import a pane and never another tab.
 //
-// tui imports the tabs, the engine's event and Readout types, keys and domain, and
-// lipgloss for the tab bar. main.go constructs it and wires the channel and the pulls;
+// A launched write's progress travels a second channel of its own, adapted with the same
+// receive-one loop and broadcast the same way, because a Purge outlives the operator's
+// attention and must keep painting whichever tab is focused (ADR-0015). The root owns the
+// surface it paints into for that reason, as it owns settings for the parallel one, and
+// paints it as a strip above the focused tab rather than a modal over it, because purge
+// R14 forbids a Purge from being modal.
+//
+// tui imports the tabs, the engine's event and Readout types, ops, keys and domain, and
+// lipgloss for the tab bar. main.go constructs it and wires the channels and the pulls;
 // nothing imports tui (ADR-0011).
 package tui
 
@@ -35,6 +42,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/tui/approval"
@@ -42,6 +50,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/tui/feed"
 	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
+	"github.com/jv-k/gh-runs/v2/internal/tui/running"
 	"github.com/jv-k/gh-runs/v2/internal/tui/settings"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
@@ -69,6 +78,16 @@ type schedulerClosedMsg struct{}
 // tickMsg drives the coarse pull of the Readout and the other broadcast status the root
 // sources by polling rather than by event.
 type tickMsg struct{}
+
+// progressFrame is one frame of a launched operation's stream, tagged with the channel it
+// came from. The tag is the root's alone and never leaves it: the tabs receive the bare
+// ops.Progress, which is what ADR-0015's catalog names. It exists so a frame from a stream
+// the root has already replaced can be discarded rather than applied to its successor,
+// which is the same discard-by-tag rule the detail pane uses for a stale response.
+type progressFrame struct {
+	stream <-chan ops.Progress
+	p      ops.Progress
+}
 
 // tab is the root's uniform handle to a tab. A concrete tab exposes Update returning its
 // own type and View() string (ADR-0011); the adapters below lift each into this
@@ -161,6 +180,11 @@ type Options struct {
 	// and travel ops's write path exactly as every other write does.
 	Approver      approval.Approver
 	ApprovalFetch approval.Fetcher
+	// Retrier re-attempts a finished operation's recorded failures, purge R22's keystroke.
+	// main.go wires it to the shared ops engine, which is the authority that the retry set
+	// is a subset of an already-confirmed one; a headless test leaves it nil and the
+	// summary then offers no retry.
+	Retrier running.Retrier
 }
 
 // Model is the root. It holds the three tabs, the focused index, and the seams it pulls
@@ -184,6 +208,22 @@ type Model struct {
 	// key (ADR-0011: a setting reachable from any tab cannot belong to one). It is not a tab
 	// and not a fourth peer; the root holds it directly and routes keys to it while it is open.
 	settings settings.Model
+
+	// running is the running-operation surface (purge R15, R16, R22). It is the root's for
+	// the same reason settings is: a launched Purge outlives the operator's attention and
+	// must keep painting whichever tab is focused (ADR-0015), and no tab can own a strip
+	// that has to survive a tab switch. It is a strip above the focused tab rather than a
+	// modal, because R14 forbids a Purge from being one.
+	running running.Model
+	// progress is the launched operation's stream, adapted with the same receive-one-then-
+	// reschedule command as the engine's channel (ADR-0015). It is a separate channel and
+	// deliberately not the engine's: riding progress on that one would make the scheduler a
+	// courier for ops.
+	progress <-chan ops.Progress
+	// stripHeight is how many rows the running surface currently occupies, which comes off
+	// what the tabs are laid out in. It is tracked so the root re-broadcasts a size only
+	// when the strip's height actually changes, rather than on every frame.
+	stripHeight int
 
 	// terminalDark is what the terminal last reported about its own background, which the
 	// auto theme derives its palette from (settings R6). It starts dark, which is gh's
@@ -252,6 +292,7 @@ func New(opts Options) Model {
 		repos:        opts.Repos,
 		revalidated:  opts.Revalidated,
 		settings:     set,
+		running:      running.New(opts.Profile).WithRetrier(opts.Retrier),
 		terminalDark: true,
 	}
 	// The palette is applied at construction so the first frame is already painted in the
@@ -293,6 +334,65 @@ func (m Model) listen() tea.Cmd {
 	}
 }
 
+// listenProgress is the same receive-one-then-reschedule adapter as listen, over the
+// launched operation's stream (ADR-0015). A closed channel yields nothing: the terminal
+// frame has already told the surface the pass is over, so the close is the stream's end
+// rather than the program's, which is the one way this loop differs from the engine's.
+func (m Model) listenProgress() tea.Cmd {
+	ch := m.progress
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		p, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return progressFrame{stream: ch, p: p}
+	}
+}
+
+// stripSize is the space the running surface lays out in: the terminal less the tab bar's
+// line, which is all it can occupy. Handing it the whole terminal instead lets its share
+// exceed what is left once the tab bar is drawn, on a terminal short enough that the
+// difference is most of the screen.
+func (m Model) stripSize() tea.WindowSizeMsg {
+	h := m.height - tabBarHeight
+	if h < 0 {
+		h = 0
+	}
+	return tea.WindowSizeMsg{Width: m.width, Height: h}
+}
+
+// innerSize is the space the tabs are laid out in: the terminal less the tab bar's line
+// and the running surface's rows, so a Purge's indicator never overlaps the list it sits
+// above (R4a, R14).
+func (m Model) innerSize() tea.WindowSizeMsg {
+	h := m.height - tabBarHeight - m.stripHeight
+	if h < 0 {
+		// The strip bounds itself to a share of the terminal, so this is a floor under an
+		// arithmetic that must never go negative rather than a second policy: a tab laid out
+		// in negative rows is a height no terminal has, and the root would paint past the
+		// bottom of the screen.
+		h = 0
+	}
+	return tea.WindowSizeMsg{Width: m.width, Height: h}
+}
+
+// reserveStrip re-lays the tabs when the running surface's height changes, and does
+// nothing when it has not. A frame lands roughly twice a second at the governor's rates,
+// and re-broadcasting a size on each one would repaint three tabs for no reason.
+func (m Model) reserveStrip() (Model, tea.Cmd) {
+	h := m.running.Height()
+	if h == m.stripHeight {
+		return m, nil
+	}
+	m.stripHeight = h
+	inner := m.innerSize()
+	m.settings, _ = m.settings.Update(inner)
+	return m.broadcast(inner)
+}
+
 // tickCmd schedules the next coarse pull.
 func tickCmd() tea.Cmd {
 	return tea.Tick(readoutTick, func(time.Time) tea.Msg { return tickMsg{} })
@@ -306,11 +406,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		inner := tea.WindowSizeMsg{Width: msg.Width, Height: msg.Height - tabBarHeight}
+		// The running surface lays out first, because its height is what the tabs' is
+		// computed from. It is given the space below the tab bar rather than the whole
+		// terminal, so the share it takes is a share of what it can actually occupy.
+		m.running, _ = m.running.Update(m.stripSize())
+		m.stripHeight = m.running.Height()
+		inner := m.innerSize()
 		// The Settings pane lays out within the same inner size the tabs get, so it is sized
 		// whether or not it is open when the terminal resizes.
 		m.settings, _ = m.settings.Update(inner)
 		return m.broadcast(inner)
+
+	case ops.Started:
+		// ADR-0015: the initiating Cmd's first message hands the channel to the root, which
+		// adapts it with the same receive-one loop as the engine's. A retry's handle arrives
+		// here too, so a re-attempt is a launch like any other.
+		m.running = m.running.Start(msg)
+		m.progress = msg.Progress
+		next, cmd := m.reserveStrip()
+		return next, tea.Batch(cmd, next.listenProgress())
+
+	case progressFrame:
+		// A frame from a stream the root has already replaced is discarded, exactly as the
+		// detail pane discards a response for a Run no longer selected (ADR-0015). The
+		// window is narrow and real: the engine frees its launch gate just before the
+		// terminal frame goes out, so a new operation can be launched while the finished
+		// one's last frame is still in flight, and applying that frame would mark the new
+		// operation finished before it had deleted anything.
+		if msg.stream != m.progress {
+			return m, nil
+		}
+		// Progress is broadcast, because a Purge outlives the operator's attention and must
+		// keep painting whichever tab is focused (ADR-0015). The tabs see the ops type; the
+		// stream tag is the root's own bookkeeping. The root's surface consumes it too, and
+		// the adapter re-arms until the terminal frame.
+		m.running, _ = m.running.Update(msg.p)
+		next, cmd := m.reserveStrip()
+		bnext, bcmd := next.broadcast(msg.p)
+		cmds := []tea.Cmd{cmd, bcmd}
+		if !msg.p.Done {
+			cmds = append(cmds, bnext.listenProgress())
+		} else {
+			bnext.progress = nil
+		}
+		return bnext, tea.Batch(cmds...)
+
+	case ops.LaunchFailed:
+		// A refused launch is reported rather than dropped: a keystroke that silently does
+		// nothing is the defect this surface exists to fix.
+		m.running = m.running.Fail(msg)
+		return m.reserveStrip()
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -362,6 +507,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if isInterrupt(k) {
 		return m, tea.Quit
+	}
+	// R16 says a Purge is cancellable at any point while it runs, and "any point" includes
+	// while the Settings pane is open and while a tab holds text-input focus. The strip is
+	// on screen saying which key stops it throughout, so the key has to work throughout.
+	//
+	// This is ahead of the capture rule rather than an exception to it. That rule exists
+	// because q, n and a digit are filter text and a typed count, and a ctrl chord never
+	// is, which is the same reasoning that already lets ctrl+c through above. The surface
+	// claims nothing while it is idle, so a tab that wants these chords still gets them.
+	if m.running.Handles(k) {
+		var cmd tea.Cmd
+		m.running, cmd = m.running.Update(k)
+		next, rcmd := m.reserveStrip()
+		return next, tea.Batch(cmd, rcmd)
 	}
 	// The Settings pane is the root's, and while it is open it is the sole key target: the
 	// root routes every key but the interrupt to it and takes no global key, so esc closes it,
@@ -529,7 +688,21 @@ func (m Model) View() tea.View {
 	if m.settings.IsOpen() {
 		body = m.settings.View()
 	}
-	content := lipgloss.JoinVertical(lipgloss.Left, m.tabBar(), body)
+	parts := []string{m.tabBar()}
+	// The running surface sits between the tab bar and the body, above whichever tab is
+	// focused and above the Settings pane too: a Purge keeps running while either is on
+	// screen, and R14 forbids it from being modal over any of them.
+	if m.running.Active() {
+		parts = append(parts, m.running.View())
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, append(parts, body)...)
+	// The root paints at most the terminal it was given, whatever its children returned.
+	// Every component lays out within the size it is handed, so on any usable terminal this
+	// changes nothing; it is the floor that keeps a short one from being painted past its
+	// bottom edge, where the tab bar and the strip's own floor are already most of it.
+	if m.height > 0 {
+		content = lipgloss.NewStyle().MaxHeight(m.height).Render(content)
+	}
 	return tea.View{
 		Content:     content,
 		AltScreen:   true,

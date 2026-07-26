@@ -171,6 +171,10 @@ func TestNoDuplicateListKey(t *testing.T) {
 			{"ArtifactsOnly", p.ArtifactsOnly}, {"ArtifactDownload", p.ArtifactDownload},
 			{"ToggleWorkflow", p.ToggleWorkflow},
 			{"Approve", p.Approve}, {"ApprovalsFilter", p.ApprovalsFilter},
+			// The running-operation chords belong in this list rather than beside the modal's
+			// bindings: a Purge is not modal, so they are live at the same moment every other
+			// key here is, and a collision would make one keystroke do two things (R14, AC10).
+			{"CancelRunning", p.CancelRunning}, {"RetryFailures", p.RetryFailures},
 			{"Refresh", p.Refresh}, {"OpenDetail", p.OpenDetail}, {"Filter", p.Filter}, {"Help", p.Help}, {"Quit", p.Quit},
 		}
 		seen := map[string]string{}
@@ -300,6 +304,41 @@ func TestApprovalsBindings(t *testing.T) {
 	assertApprovals(t, "Standard", keys.Standard)
 	if containsKey(keys.Vim.Approve, "a") {
 		t.Errorf("Approve binds a, which is the Storage tab's Artifacts-only filter; the approvals action is A")
+	}
+}
+
+// assertRunningOp pins the running-operation keys (purge R16, R22), identical in both
+// profiles like Delete. The canon names no literal for either, so these are the chosen
+// unclaimed chords the package documents: ctrl+x stops a running operation and dismisses
+// its summary, ctrl+r re-attempts the recorded failures. Transcribed from the package
+// doc, not read back off the binding, so a drift from the documented choice fails here.
+func assertRunningOp(t *testing.T, name string, p keys.Profile) {
+	t.Helper()
+	assertKeys(t, name+".CancelRunning", p.CancelRunning, "ctrl+x") // purge R16
+	assertKeys(t, name+".RetryFailures", p.RetryFailures, "ctrl+r") // purge R22, AC18
+}
+
+// TestRunningOpBindings pins the two running-operation keys over both profiles, and
+// their sameness: a forked binding fails one of the two runs. They are chords rather
+// than bare letters on purpose. A Purge is not modal (R14, AC10), so these two keys are
+// live while the operator is navigating a live Feed with its own bare-letter actions,
+// and a bare letter here would be one keystroke from deleting, re-running or dispatching
+// something. This test pins that neither is a bare letter, which is the property the
+// choice rests on rather than the letters themselves.
+func TestRunningOpBindings(t *testing.T) {
+	assertRunningOp(t, "Vim", keys.Vim)
+	assertRunningOp(t, "Standard", keys.Standard)
+	for _, p := range keys.Profiles() {
+		for _, b := range []struct {
+			name string
+			b    key.Binding
+		}{{"CancelRunning", p.CancelRunning}, {"RetryFailures", p.RetryFailures}} {
+			for _, k := range b.b.Keys() {
+				if !strings.HasPrefix(k, "ctrl+") {
+					t.Errorf("profile %s: %s binds %q, a bare key; it stays live over a navigable tab while an operation runs, so it must be a chord (R14, AC10)", p.Name, b.name, k)
+				}
+			}
+		}
 	}
 }
 

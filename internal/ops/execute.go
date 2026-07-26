@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/jv-k/gh-runs/v2/internal/governor"
 )
@@ -51,11 +52,38 @@ type Summary struct {
 	Reason       string // why the Purge stopped early, else empty
 
 	failed []Item // the failed Items, for R22's retry-only-the-failures keystroke
+
+	// op and debug are the pass's provenance, stamped by executeSet from the Plan. They
+	// are what let Retry rebuild the retry set without a fresh confirmation (R22) while
+	// keeping that exemption structural: a Summary a caller assembled carries neither, so
+	// Retry refuses it, and no path from a selection to a DELETE gains a way around R9.
+	op    Operation
+	debug bool
+
+	// retry is the single-use cell for R22's re-attempt, minted by the walk and shared by
+	// every copy of this Summary, exactly as Confirmed.spent is shared by every copy of a
+	// Confirmed (ADR-0019). One recorded pass authorises one re-attempt, so two keystrokes
+	// landing before the first handle arrives cannot dispatch two walks over the same
+	// Items, and a Summary a caller assembled carries no cell at all.
+	retry *atomic.Bool
 }
 
 // FailedCount is the number of Runs recorded as failures (R20). A partially failed
 // Purge exits 1 on this being non-zero (cli-surface R17, AC20).
-func (s Summary) FailedCount() int { return len(s.failed) }
+//
+// It is read from R22's groups rather than from the retry set, and the two are equal by
+// construction because addFailure records into both together (TestFailedCountAgreesWithTheRetrySet
+// pins it after a real pass). The reason for reading the exported side is the golden
+// seam: a running-operation surface's frame is asserted by fabricating a Summary, and a
+// count that could only come from an unexported field would read zero beside failure
+// lines saying otherwise (ADR-0015).
+func (s Summary) FailedCount() int {
+	n := 0
+	for i := range s.Failures {
+		n += s.Failures[i].Count
+	}
+	return n
+}
 
 // Failed is the failed Items in attempt order, the subset R22's retry re-attempts
 // without fresh confirmation, because it can only shrink from an already-confirmed
@@ -69,6 +97,18 @@ func (s Summary) Failed() []Item {
 // StoppedEarly reports whether the Purge halted before the whole set: a circuit
 // break, a log failure or a cancellation. The CLI states how to resume (R24).
 func (s Summary) StoppedEarly() bool { return s.CircuitBroke || s.LogFailed || s.Cancelled }
+
+// snapshot deep-copies the tally's three slices, so a frame crossing the progress
+// channel carries a Summary the running walk cannot mutate afterwards. groupByReason
+// increments a group's Count in place, so an aliased slice would be a live data race
+// between the operation's goroutine and the surface's (ADR-0015). The Items themselves
+// are never written after Plan froze them, so sharing what they point at is safe.
+func (s Summary) snapshot() Summary {
+	s.Failures = append([]FailureGroup(nil), s.Failures...)
+	s.Skips = append([]FailureGroup(nil), s.Skips...)
+	s.failed = append([]Item(nil), s.failed...)
+	return s
+}
 
 // addFailure records a failure under its reason, keeping first-seen group order.
 func (s *Summary) addFailure(item Item, reason string) {
@@ -139,37 +179,108 @@ type itemResult struct {
 // because each is a reported outcome the surface renders, not a programming fault;
 // the error return is for a caller misuse (a spent Confirmed, an unsupported op).
 func (o *Ops) Execute(ctx context.Context, c Confirmed) (Summary, error) {
-	if c.spent == nil || !c.spent.CompareAndSwap(false, true) {
-		return Summary{}, ErrSpent // single use; a nil cell is the zero Confirmed (ADR-0019)
+	plan, err := c.claim()
+	if err != nil {
+		return Summary{}, err
 	}
-	plan := c.plan
+	return o.execute(ctx, plan, nil)
+}
+
+// claim spends the Confirmed and yields the Plan it authorises. A Confirmed proves one
+// act of confirmation, so it authorises one execution, and both entries claim through
+// here so the rule cannot hold on one and not the other (ADR-0019).
+func (c Confirmed) claim() (Plan, error) {
+	if c.spent == nil || !c.spent.CompareAndSwap(false, true) {
+		return Plan{}, ErrSpent // a nil cell is the zero Confirmed
+	}
+	return c.plan, nil
+}
+
+// execute is the walk both entries share. emit publishes a running snapshot after each
+// Item concludes, and is nil for the blocking entry, which reports only the terminal
+// Summary (ADR-0015: only the long shape needs a stream).
+func (o *Ops) execute(ctx context.Context, plan Plan, emit progressFunc) (Summary, error) {
 	switch plan.op {
 	case OpDelete:
-		return o.executeDelete(ctx, plan)
+		return o.executeDelete(ctx, plan, emit)
 	case OpCancel, OpForceCancel, OpRerun, OpRerunFailed, OpEnable, OpDisable:
-		return o.executeLifecycle(ctx, plan)
+		return o.executeLifecycle(ctx, plan, emit)
 	default:
-		return Summary{}, fmt.Errorf("ops: Execute does not support operation %q", plan.op)
+		return Summary{}, unsupportedOperation(plan.op)
 	}
+}
+
+// progressFunc is executeSet's per-Item callback: the running tally, and how many
+// eligible Items are still to be requested. It is ops-typed and knows no UI, which is
+// what keeps the cassette tests headless (ADR-0015).
+type progressFunc func(sum Summary, outstanding int)
+
+// supportedOperation reports whether the walk can run this verb, so Start refuses an
+// unsupported one before spawning rather than on a stream nobody is listening to yet.
+func supportedOperation(op Operation) bool {
+	switch op {
+	case OpDelete, OpCancel, OpForceCancel, OpRerun, OpRerunFailed, OpEnable, OpDisable:
+		return true
+	default:
+		return false
+	}
+}
+
+func unsupportedOperation(op Operation) error {
+	return fmt.Errorf("ops: Execute does not support operation %q", op)
 }
 
 // executeDelete runs a Purge: it proves the deletion log writable before the first
 // DELETE and walks the frozen set writing one line per attempt (purge R29). Only a
 // deletion is recorded, so the log is Execute's alone and this is the one path that
 // opens it (ADR-0011, ADR-0019).
-func (o *Ops) executeDelete(ctx context.Context, plan Plan) (Summary, error) {
+func (o *Ops) executeDelete(ctx context.Context, plan Plan, emit progressFunc) (Summary, error) {
 	// R29: the log is opened and proved writable before the first DELETE. An
 	// operation that cannot open it refuses to start, issues zero DELETEs, and names
 	// the log as the reason (AC20). This is the precondition that makes "no record,
 	// no deletion" a property of Execute rather than a promise four call sites make.
+	// The streamed entry changes nothing here: it runs this same call, so a Purge
+	// launched from the TUI refuses on an unwritable log exactly as the CLI's does.
+	//
+	// A deletion already running holds the log, and a second one would open a second
+	// append handle to the same file. Each tracks size from its own Stat, so one handle's
+	// rotation renames the file the other is appending to and a generation can vanish.
+	// That is the one file recoverable from nowhere else, so the second deletion refuses
+	// exactly as an unwritable log makes it refuse: no record, no deletion (R29, AC20).
+	if !o.deleting.CompareAndSwap(false, true) {
+		return o.logUnavailable(plan, "the deletion log is held by another deletion already running"), nil
+	}
+	defer o.deleting.Store(false)
 	log, err := o.openLog(o.logPath, o.clk)
 	if err != nil {
-		return Summary{Total: plan.Total(), LogFailed: true, Reason: err.Error()}, nil
+		return o.logUnavailable(plan, err.Error()), nil
 	}
 	defer func() { _ = log.close() }()
-	return o.executeSet(ctx, plan, log, func(ctx context.Context, log logSink, item Item) (itemResult, error) {
+	return o.executeSet(ctx, plan, log, emit, func(ctx context.Context, log logSink, item Item) (itemResult, error) {
 		return o.deleteItem(ctx, log, item)
 	})
+}
+
+// logUnavailable is the Summary a deletion returns when it cannot take exclusive hold of
+// R29's record: zero DELETEs issued, the log named as the reason, and the same LogFailed
+// shape the CLI's exit code and the running surface already read (AC20).
+//
+// LogFailed is reused for both causes it has, an unwritable log and one another deletion
+// is holding, and for the second the surface's headline ("the deletion log failed") is
+// approximate: the correcting words are on the reason line directly below it, and the
+// counts, StoppedEarly and the exit code are all right either way. Splitting them needs a
+// second Summary field for a state nothing can currently reach, because the second
+// deletion caller does not exist yet (see the deleting gate in ops.go). Worth revisiting
+// when storage-reclamation wires its launcher and makes it real.
+func (o *Ops) logUnavailable(plan Plan, reason string) Summary {
+	return Summary{
+		Total:     plan.Total(),
+		LogFailed: true,
+		Reason:    reason,
+		op:        plan.op,
+		debug:     plan.debug,
+		retry:     &atomic.Bool{},
+	}
 }
 
 // executeLifecycle runs a non-deletion mutation set: a cancel, force-cancel, re-run,
@@ -180,8 +291,8 @@ func (o *Ops) executeDelete(ctx context.Context, plan Plan) (Summary, error) {
 // unchanged (R21): a rate limit backs off and is not a failure, a permission or
 // unexpected error advances the breaker, and the same consecutive count circuit-breaks.
 // Only the per-response classification differs, and mutateItem owns it.
-func (o *Ops) executeLifecycle(ctx context.Context, plan Plan) (Summary, error) {
-	return o.executeSet(ctx, plan, nil, func(ctx context.Context, _ logSink, item Item) (itemResult, error) {
+func (o *Ops) executeLifecycle(ctx context.Context, plan Plan, emit progressFunc) (Summary, error) {
+	return o.executeSet(ctx, plan, nil, emit, func(ctx context.Context, _ logSink, item Item) (itemResult, error) {
 		return o.mutateItem(ctx, plan.op, plan.debug, item)
 	})
 }
@@ -194,10 +305,20 @@ func (o *Ops) executeLifecycle(ctx context.Context, plan Plan) (Summary, error) 
 // (R24); attempt issues the one request and classifies it under the operation's own
 // contract. A stop condition returns a Summary rather than a Go error, because each is
 // a reported outcome the surface renders, not a programming fault (ADR-0019).
-func (o *Ops) executeSet(ctx context.Context, plan Plan, log logSink,
+func (o *Ops) executeSet(ctx context.Context, plan Plan, log logSink, emit progressFunc,
 	attempt func(context.Context, logSink, Item) (itemResult, error)) (Summary, error) {
-	sum := Summary{Total: plan.Total()}
+	sum := Summary{Total: plan.Total(), op: plan.op, debug: plan.debug, retry: &atomic.Bool{}}
 	failureStreak := 0
+	// Outstanding counts only the Items that will issue a request, because an Item stamped
+	// ineligible at Plan time concludes instantly and costs no wall clock: counting it
+	// would make every one of R15's time estimates too long by the size of the skip set.
+	outstanding := plan.Total() - plan.Skipped()
+	publish := func(sum Summary) {
+		if emit != nil {
+			emit(sum, outstanding)
+		}
+	}
+	publish(sum) // the opening frame, so the surface paints the total before the first write
 	for i := range plan.items {
 		item := plan.items[i]
 		if ctx.Err() != nil {
@@ -216,9 +337,11 @@ func (o *Ops) executeSet(ctx context.Context, plan Plan, log logSink,
 			}
 			sum.Skipped++
 			sum.addSkip(string(item.Skip))
+			publish(sum)
 			continue
 		}
 		res, lerr := attempt(ctx, log, item)
+		outstanding--
 		if lerr != nil {
 			return stopOnLogFailure(sum, lerr) // R29: a mid-op log failure stops the Purge
 		}
@@ -247,6 +370,7 @@ func (o *Ops) executeSet(ctx context.Context, plan Plan, log logSink,
 			sum.Cancelled = true
 			return sum, nil // R16
 		}
+		publish(sum)
 	}
 	return sum, nil
 }

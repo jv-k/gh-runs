@@ -154,6 +154,12 @@ func run() int {
 		LogPath:          deletionLogPath(),
 		ConfirmThreshold: cfg.ConfirmThreshold,
 		BreakerFailures:  cfg.BreakerFailures,
+		// The governor is also the pacer: a running operation's progress carries the write
+		// ceiling and floor it is being paced between, so the surface computes purge R15's
+		// remaining-time range from the governor's own bounds rather than from a guess
+		// (AC23). It is the same governor the transport chain is built on, so the ceiling
+		// the surface reports is the one the DELETEs are actually issued under.
+		Pacing: gov,
 	})
 
 	// main.go picks the surface (ADR-0011, cli-surface R1, R25): bare `gh runs`, and the
@@ -603,6 +609,11 @@ func (c clients) tuiOptions(d tuiDeps) tui.Options {
 		// beside Execute, so the sole-DELETE and sole-deletion-log invariant is untouched.
 		Approver:      d.Ops,
 		ApprovalFetch: approval.NewClientFetch(client),
+		// The running-operation surface re-attempts a finished pass's recorded failures
+		// through the same engine (purge R22). ops is the authority that the retry set is a
+		// subset of an already-confirmed frozen set, so the exemption from a fresh
+		// confirmation is enforced there rather than trusted here.
+		Retrier: d.Ops,
 	}
 }
 

@@ -123,6 +123,24 @@
 // decision between approve and reject, OpenDetail (enter) edits the comment with FilterAccept
 // and FilterCancel committing or cancelling it, and CloseDetail (esc) closes the pane, so the
 // pane mints only the one Approve binding it shares with the Feed.
+//
+// CancelRunning and RetryFailures are the running-operation surface's, the one it opens
+// over a launched Purge, bulk lifecycle mutation or Reclamation (purge R16, R22). The
+// canon names no literal for either, so unclaimed chords are chosen and documented here:
+// ctrl+x stops a running operation and dismisses its summary once it has finished, and
+// ctrl+r re-attempts only the recorded failures. Each is a motion-independent action,
+// identical in both profiles, and neither carries a Cmd modifier (AC18). ctrl+x is shared
+// across the stop-it and dismiss-it contexts the way x is shared across opening and
+// submitting the dispatch form: the two never fire at once, because an operation is either
+// running or finished.
+//
+// They are chords rather than the bare letters every other action here takes, and that is
+// the one place this registry departs from its own convention. A Purge is not modal (R14,
+// AC10), so unlike every other binding in the list these two stay live for hours while the
+// operator navigates a tab whose bare letters delete, re-run and dispatch. A bare letter
+// for "stop the thing that is running" would sit one keystroke from all of them. r and R
+// are already Refresh and Rerun, which is the other half of the reason: the obvious
+// mnemonics are taken by actions this key must never be confused with.
 package keys
 
 import (
@@ -172,6 +190,11 @@ type Profile struct {
 
 	Approve         key.Binding // A: open the approval decision over the cursor awaiting Run, and submit it (approvals R11, R12)
 	ApprovalsFilter key.Binding // b: apply the approvals saved filter over the Feed, the badge's activation (approvals R9)
+
+	// The running-operation surface. Live over whichever tab is focused while an
+	// operation runs, so both are chords (purge R14, R16, R22, AC10).
+	CancelRunning key.Binding // ctrl+x: stop the running operation, and dismiss its summary (purge R16)
+	RetryFailures key.Binding // ctrl+r: re-attempt only the recorded failures (purge R22, AC18)
 
 	Refresh     key.Binding // r: apply deferred changes, refresh (R10, R11)
 	OpenDetail  key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
@@ -223,6 +246,9 @@ func shared(name string) Profile {
 
 		Approve:         key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve/review")),
 		ApprovalsFilter: key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "awaiting")),
+
+		CancelRunning: key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "stop")),
+		RetryFailures: key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "retry failures")),
 
 		Refresh:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		OpenDetail:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
@@ -331,6 +357,7 @@ func (p Profile) Bindings() []key.Binding {
 		p.Dispatch,
 		p.LogTimestamps, p.LogDelete, p.LogExport, p.LogNextMatch, p.LogPrevMatch,
 		p.Approve, p.ApprovalsFilter,
+		p.CancelRunning, p.RetryFailures,
 		p.Refresh, p.OpenDetail, p.CloseDetail, p.Filter, p.Help, p.Quit,
 		p.FilterAccept, p.FilterCancel,
 		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,

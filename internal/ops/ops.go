@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 )
@@ -22,17 +23,33 @@ type Requester interface {
 	RequestWithContext(ctx context.Context, method, path string, body io.Reader) (*http.Response, error)
 }
 
+// Pacer reports the governor's current dynamic write ceiling and its floor, both in
+// writes per second (rate-governor R11). ops reads it to stamp the two bounds purge R15
+// computes its remaining-time range between, so the range is arithmetic on a frame the
+// surface already holds rather than a second seam every surface has to be handed
+// (AC23). *governor.Governor satisfies it.
+//
+// It is deliberately not the Budget Readout. The Readout is an observation about the
+// primary limit, which a Purge's writes do not spend (ADR-0007), and it is broadcast on
+// change: a float that moves with every read would turn that broadcast into a storm.
+type Pacer interface {
+	WriteCeiling() (ceiling, floor float64)
+}
+
 // Options carries ops's seams and its two configured numbers. main.go fills them:
 // the client is the store-then-governor-then-limiter chain, the clock is the
 // injected one (purge R27), LogPath is $XDG_STATE_HOME/gh-runs/deletions.log which
 // main.go resolves so ops owns no directory policy (ADR-0011, R29), and the two
 // thresholds are the values config already resolved and clamped (settings R12, R21).
+// Pacing is the governor itself, read for R15's remaining-time range; a nil one leaves
+// both bounds zero, which a surface reads as having no estimate to offer yet.
 type Options struct {
 	Client           Requester
 	Clock            clock.Clock
 	LogPath          string
 	ConfirmThreshold int
 	BreakerFailures  int
+	Pacing           Pacer
 }
 
 // logSink is the append-only deletion record Execute writes, narrowed to the two
@@ -56,11 +73,34 @@ type Ops struct {
 	logPath          string
 	confirmThreshold int
 	breakerFailures  int
+	pacer            Pacer
 
 	// openLog opens the deletion log. It is a field so a test can inject a failing
 	// sink; production wires the real append-only file. It is never a seam a caller
 	// outside ops can set, so the log stays ops's alone (ADR-0011, R29).
 	openLog func(path string, clk clock.Clock) (logSink, error)
+
+	// launching is the one-streamed-operation-at-a-time gate (purge R16). Start and Retry
+	// take it and the stream releases it. It exists because the Started handle carries the
+	// only cancel a running operation has: a second launch replacing it would leave the
+	// first invisible and uncancellable for the rest of the session, still deleting. The
+	// gate lives here rather than in a surface so it holds for every launcher, which
+	// matters now that run-lifecycle and storage-reclamation each add one.
+	launching atomic.Bool
+
+	// deleting is the one-deletion-walk-at-a-time gate (purge R29). Every deletion, from
+	// either entry, opens the append-only log, and two handles to one file each track size
+	// from their own Stat: one handle's rotation renames the file the other is appending
+	// to, and a generation can vanish. That file is the only record of what a Purge
+	// destroyed and is recoverable from nowhere else, so a second concurrent deletion
+	// refuses to start rather than risk splitting it. Non-deletion walks write no log and
+	// are not gated: a Workflow toggle beside a running Purge touches nothing shared.
+	//
+	// As built no surface can reach this: the Feed's Purge is the only in-process launcher,
+	// and logview's and storage's planners stop at Plan. It is here because the callers that
+	// make it reachable are named and queued (log-viewer R17, storage-reclamation R17) and
+	// because the harm is silent and permanent, not because a second caller exists today.
+	deleting atomic.Bool
 }
 
 // New returns an Ops over opts. A nil Clock defaults to the wall clock, which a
@@ -77,6 +117,7 @@ func New(opts Options) *Ops {
 		logPath:          opts.LogPath,
 		confirmThreshold: opts.ConfirmThreshold,
 		breakerFailures:  opts.BreakerFailures,
+		pacer:            opts.Pacing,
 		openLog: func(path string, c clock.Clock) (logSink, error) {
 			return openDeletionLog(path, c)
 		},
