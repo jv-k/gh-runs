@@ -356,7 +356,15 @@ func (m Model) listenProgress() tea.Cmd {
 // and the running surface's rows, so a Purge's indicator never overlaps the list it sits
 // above (R4a, R14).
 func (m Model) innerSize() tea.WindowSizeMsg {
-	return tea.WindowSizeMsg{Width: m.width, Height: m.height - tabBarHeight - m.stripHeight}
+	h := m.height - tabBarHeight - m.stripHeight
+	if h < 0 {
+		// The strip bounds itself to a share of the terminal, so this is a floor under an
+		// arithmetic that must never go negative rather than a second policy: a tab laid out
+		// in negative rows is a height no terminal has, and the root would paint past the
+		// bottom of the screen.
+		h = 0
+	}
+	return tea.WindowSizeMsg{Width: m.width, Height: h}
 }
 
 // reserveStrip re-lays the tabs when the running surface's height changes, and does

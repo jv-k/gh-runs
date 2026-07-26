@@ -20,10 +20,24 @@ const (
 	fieldSep    = "   "
 	groupIndent = "  "
 	truncMarker = "…"
-	// minFrame is the narrowest frame the strip lays out to. Below it there is nothing
-	// useful to render either way, and it keeps a zero or absurd width from truncating
-	// every line to nothing before the first WindowSizeMsg arrives.
-	minFrame = 20
+
+	// The strip's row budget. R14 forbids a Purge from being modal and AC10 requires the
+	// rest of the tool to stay navigable throughout, so the strip takes a share of the
+	// terminal and never more. It has to be bounded rather than trusted: R22 groups
+	// failures by reason, the API authors those reasons, and a transport failure's reason
+	// embeds the request URL, so it carries the Run id and every one is its own group. The
+	// breaker counts consecutive failures and one success resets it, so a flaky link
+	// produces hundreds of groups and stops nothing.
+	//
+	// stripShare is the denominator, maxStripRows a ceiling on a tall terminal, and
+	// minStripRows the floor that keeps the account and the keystrokes on screen even when
+	// a share of the terminal is less than they need.
+	stripShare   = 3
+	maxStripRows = 12
+	minStripRows = 2
+	// defaultStripRows is the budget before a size has arrived, which is the running line
+	// and its timing line.
+	defaultStripRows = 3
 )
 
 // Styles. Colours come from named palette roles, never hex literals, so the theme
@@ -66,15 +80,22 @@ func (m Model) View() string {
 	}
 }
 
-// frame clamps every line to the width the pane was laid out in and joins them. The
-// clamp is ANSI-aware, so a line built from several styled segments is cut at the visible
-// column and not inside an escape sequence, and it is what makes Height agree with what
-// the terminal draws. The repo's other views truncate, pad or wrap for the same reason;
-// this one truncates, because a strip that wraps grows rows the root has already reserved
-// against, and R14's "not modal" is a claim about how few rows it takes.
+// frame lays the strip out in the space it was given, in both directions. Every line is
+// clamped to the width, ANSI-aware, so a line built from several styled segments is cut at
+// the visible column and not inside an escape sequence; and the whole is clamped to the
+// row budget, so the strip cannot grow past its share of the terminal.
+//
+// The repo's other views truncate, pad or wrap for the width. This one truncates, because
+// a strip that wraps grows rows the root has already reserved against, and R14's "not
+// modal" is a claim about how few rows it takes. The row clamp here is a backstop: the
+// summary already fits itself to the budget, and this guarantees the invariant whichever
+// builder produced the lines.
 func (m Model) frame(lines []string) string {
+	if max := m.rowBudget(); len(lines) > max {
+		lines = lines[:max]
+	}
 	w := m.width
-	if w < minFrame {
+	if w <= 0 {
 		return strings.Join(lines, "\n")
 	}
 	clamp := lipgloss.NewStyle().MaxWidth(w)
@@ -89,6 +110,25 @@ func (m Model) frame(lines []string) string {
 		out[i] = clamp.Render(line)
 	}
 	return strings.Join(out, "\n")
+}
+
+// rowBudget is the most rows the strip may take. A Purge is not modal (R14), and a strip
+// covering the screen is a modal wearing a different name, so it takes at most a share of
+// the terminal. The floor keeps the account and the keystrokes on screen on a terminal too
+// short for even that, which is the one case where taking more than the share is right:
+// the alternative is a strip that says nothing.
+func (m Model) rowBudget() int {
+	if m.height <= 0 {
+		return defaultStripRows
+	}
+	rows := m.height / stripShare
+	if rows > maxStripRows {
+		rows = maxStripRows
+	}
+	if rows < minStripRows {
+		rows = minStripRows
+	}
+	return rows
 }
 
 // trimTo cuts a styled line to at most w visible columns, ANSI-aware.
@@ -210,20 +250,38 @@ func (m Model) summaryLines() []string {
 	}
 	head = append(head, styleDim.Render("of "+commafy(m.frozenTotal())))
 
-	lines := []string{strings.Join(head, fieldSep)}
+	// The account and the keystrokes on offer are what the summary is for, so they are kept
+	// whatever else has to go. A circuit break, a cancellation or R29's log failure names
+	// itself among them: AC20 requires the summary to say the log is why it stopped, and
+	// that line must never be the one dropped.
+	kept := []string{strings.Join(head, fieldSep)}
+	tail := []string{}
+	if sum.Reason != "" {
+		tail = append(tail, styleStop.Render(textsan.Sanitize(sum.Reason)))
+	}
+	tail = append(tail, styleDim.Render(strings.Join(m.summaryHints(), fieldSep)))
+
 	// Both lists are labelled, and neither by omission, exactly as the CLI's summary
 	// labels them: they print into one flat list, so an unlabelled group is read as
 	// whichever kind the reader assumed, and a skip is not a failure.
-	lines = append(lines, groupLines(sum.Failures, "failed: ", styleFailed)...)
-	lines = append(lines, groupLines(sum.Skips, "skipped: ", styleDim)...)
-	if sum.Reason != "" {
-		// A circuit break, a cancellation or R29's log failure. The log failure above all
-		// must never be a silent stop: AC20 requires the summary to name the log as the
-		// reason it stopped, and the reason carries the words the write failed with.
-		lines = append(lines, styleStop.Render(textsan.Sanitize(sum.Reason)))
+	groups := groupLines(sum.Failures, "failed: ", styleFailed)
+	groups = append(groups, groupLines(sum.Skips, "skipped: ", styleDim)...)
+
+	// R22 asks for a count for each reason and R14 forbids the strip from becoming a modal,
+	// and at a few hundred distinct reasons those two cannot both be had on one screen. The
+	// rows that fit are stated in full and the rest are counted, so a capped list never
+	// reads as a complete one. The whole list is not lost: the CLI prints every group from
+	// the same Summary, and R29's log carries every attempt with its reason.
+	budget := m.rowBudget() - len(kept) - len(tail)
+	if len(groups) > budget {
+		if budget > 0 {
+			dropped := len(groups) - budget + 1
+			groups = append(groups[:budget-1], styleDim.Render(fmt.Sprintf("%sand %d more reasons", groupIndent, dropped)))
+		} else {
+			groups = nil
+		}
 	}
-	lines = append(lines, styleDim.Render(strings.Join(m.summaryHints(), fieldSep)))
-	return lines
+	return append(append(kept, groups...), tail...)
 }
 
 // summaryHints names the keystrokes the summary offers: R22's retry where there is

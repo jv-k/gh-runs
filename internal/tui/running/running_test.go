@@ -225,16 +225,21 @@ func TestDismissClearsTheSummary(t *testing.T) {
 	}
 }
 
-// retrier records the Summary handed to Retry, standing in for the ops engine.
+// retrier records the Summary handed to Retry, standing in for the ops engine. err makes
+// it refuse, which is what the engine does for a spent re-attempt or a busy gate.
 type retrier struct {
 	got   ops.Summary
 	calls int
+	err   error
 }
 
 func (r *retrier) Retry(_ context.Context, sum ops.Summary) (ops.Started, error) {
 	r.calls++
 	r.got = sum
-	return ops.Started{Op: ops.OpDelete, Total: sum.FailedCount(), Cancel: func() {}}, nil
+	if r.err != nil {
+		return ops.Started{}, r.err
+	}
+	return ops.Started{Op: ops.OpDelete, Kind: ops.KindRun, Total: sum.FailedCount(), Cancel: func() {}}, nil
 }
 
 // TestRetryKeyReAttemptsTheRecordedFailures pins R22's keystroke end to end at the pane's
@@ -313,7 +318,9 @@ func widths(view string) []int {
 // R19a skip reason is the case that makes it real: it is the expected fine-grained-PAT
 // outcome and it renders at 177 columns.
 func TestNoLineOverrunsTheFrame(t *testing.T) {
-	for _, w := range []int{40, 60, 80, 100} {
+	// The narrow widths are not terminals anyone runs, but they are where a special case
+	// used to skip the clamp, and a skipped clamp is a Height that under-reports.
+	for _, w := range []int{1, 5, 19, 20, 40, 60, 80, 100, 130} {
 		m := sized(running.New(keys.Standard).WithRetrier(&retrier{}), w).Start(started(ops.OpDelete, 18258, func() {}))
 		m, _ = m.Update(ops.Progress{
 			Op: ops.OpDelete, Done: true,
@@ -387,18 +394,39 @@ func TestRangeCollapsesAcrossAUnitBoundary(t *testing.T) {
 	}
 }
 
-// TestSummaryStatesEveryFailureGroup pins R22's "a count for each": the summary states
-// every reason, never a truncated list with a tail count. The CLI prints all of them from
-// the same Summary, and two surfaces disagreeing about one pass is the drift this
-// codebase exists to avoid.
+// sizedTo lays the pane out in a whole terminal, so the row budget the strip works to has
+// a height to derive from.
+func sizedTo(m running.Model, w, h int) running.Model {
+	m, _ = m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	return m
+}
+
+// manyGroups builds n distinct failure reasons, the shape a flaky link produces: a
+// transport failure's reason embeds the request URL, so it carries the Run id and every
+// one is its own group.
+func manyGroups(n int) []ops.FailureGroup {
+	out := make([]ops.FailureGroup, n)
+	for i := range out {
+		out[i] = ops.FailureGroup{
+			Reason: "delete request failed: Delete \"https://api.github.com/repos/o/r/actions/runs/" +
+				strconv.Itoa(4675883901+i) + "\": dial tcp: lookup api.github.com: no such host",
+			Count: 1,
+		}
+	}
+	return out
+}
+
+// TestSummaryStatesEveryFailureGroup pins R22's "a count for each" where the frame can
+// hold them: the summary states every reason rather than the first few, so it does not
+// disagree with the CLI's printout of the same Summary.
 func TestSummaryStatesEveryFailureGroup(t *testing.T) {
 	groups := make([]ops.FailureGroup, 7)
 	for i := range groups {
 		groups[i] = ops.FailureGroup{Reason: "HTTP 5" + strconv.Itoa(i) + "0", Count: i + 1}
 	}
-	m := sized(running.New(keys.Standard).WithRetrier(&retrier{}), 100).Start(started(ops.OpDelete, 100, func() {}))
+	m := sizedTo(running.New(keys.Standard).WithRetrier(&retrier{}), 100, 40).Start(started(ops.OpDelete, 100, func() {}))
 	m, _ = m.Update(ops.Progress{
-		Op: ops.OpDelete, Done: true,
+		Op: ops.OpDelete, Kind: ops.KindRun, Done: true,
 		Sum: ops.Summary{Total: 100, Deleted: 72, Failures: groups},
 	})
 	got := plain(m.View())
@@ -408,7 +436,93 @@ func TestSummaryStatesEveryFailureGroup(t *testing.T) {
 		}
 	}
 	if strings.Contains(got, "more reasons") {
-		t.Errorf("the summary truncated its failure groups (R22):\n%s", got)
+		t.Errorf("the summary truncated its failure groups where the frame could hold them (R22):\n%s", got)
+	}
+}
+
+// TestStripNeverTakesMoreThanItsShareOfTheTerminal pins R14 in the other direction. A
+// Purge is not modal, and a strip covering the screen is a modal wearing a different name.
+// The group count is bounded by nothing the tool controls: a transport failure's reason
+// embeds the request URL, so it carries the Run id and every one is its own group, and the
+// breaker counts consecutive failures so an interleaved success resets it. One flaky link
+// mid-Purge is hundreds of groups.
+func TestStripNeverTakesMoreThanItsShareOfTheTerminal(t *testing.T) {
+	for _, h := range []int{10, 24, 40, 60} {
+		for _, n := range []int{5, 40, 200} {
+			m := sizedTo(running.New(keys.Standard).WithRetrier(&retrier{}), 100, h).
+				Start(started(ops.OpDelete, 5000, func() {}))
+			m, _ = m.Update(ops.Progress{
+				Op: ops.OpDelete, Kind: ops.KindRun, Done: true,
+				Sum: ops.Summary{
+					Total: 5000, Deleted: 4000,
+					Failures: manyGroups(n),
+					Skips:    manyGroups(n),
+					Reason:   "circuit breaker tripped after 50 consecutive failures",
+				},
+			})
+			got := m.Height()
+			if got > h/2 {
+				t.Errorf("at %d rows with %d groups the strip takes %d rows, more than half the terminal; that is a modal (R14, AC10)", h, n, got)
+			}
+			if got < 2 {
+				t.Errorf("at %d rows with %d groups the strip collapsed to %d rows and says nothing", h, n, got)
+			}
+			// Whatever is dropped, the account and the keystrokes on offer survive.
+			view := plain(m.View())
+			if !strings.Contains(view, "4,000 deleted") {
+				t.Errorf("at %d rows with %d groups the strip lost the tally:\n%s", h, n, view)
+			}
+			if !strings.Contains(view, "dismiss") {
+				t.Errorf("at %d rows with %d groups the strip lost its keystroke hints:\n%s", h, n, view)
+			}
+		}
+	}
+}
+
+// TestAnOverflowingSummarySaysSo pins that a capped list does not read as a complete one.
+// The reasons that did not fit are stated as a count rather than dropped in silence.
+func TestAnOverflowingSummarySaysSo(t *testing.T) {
+	m := sizedTo(running.New(keys.Standard).WithRetrier(&retrier{}), 100, 24).
+		Start(started(ops.OpDelete, 5000, func() {}))
+	m, _ = m.Update(ops.Progress{
+		Op: ops.OpDelete, Kind: ops.KindRun, Done: true,
+		Sum: ops.Summary{Total: 5000, Deleted: 4000, Failures: manyGroups(60)},
+	})
+	if got := plain(m.View()); !strings.Contains(got, "more reasons") {
+		t.Errorf("a capped list did not say how many reasons it dropped:\n%s", got)
+	}
+}
+
+// TestARefusedRetryKeepsTheOperationsName pins F3's glossary violation. The retry key is
+// the one launch path whose refusal carries no Kind of its own, and an empty Kind is a
+// real value (Reclamation's mixed Cache-and-Artifact list), so it cannot double as
+// unknown. Pressing the retry key twice on a finished Purge, which the single-use cell
+// refuses the second time, must not relabel that Purge a Reclamation.
+func TestARefusedRetryKeepsTheOperationsName(t *testing.T) {
+	r := &retrier{err: ops.ErrNothingToRetry}
+	m := sizedTo(running.New(keys.Standard).WithRetrier(r), 100, 40).Start(started(ops.OpDelete, 10, func() {}))
+	m, _ = m.Update(ops.Progress{
+		Op: ops.OpDelete, Kind: ops.KindRun, Done: true,
+		Sum: ops.Summary{Total: 10, Deleted: 8, Failures: []ops.FailureGroup{{Reason: "HTTP 500", Count: 2}}},
+	})
+	_, cmd := m.Update(press("ctrl+r"))
+	if cmd == nil {
+		t.Fatalf("the retry key issued no command")
+	}
+	msg, ok := cmd().(ops.LaunchFailed)
+	if !ok {
+		t.Fatalf("a refused retry returned %T, want an ops.LaunchFailed", msg)
+	}
+	if msg.Kind != ops.KindRun {
+		t.Errorf("the refusal carries Kind %q, want the Purge's %q; without it the pane falls through to the Reclamation label", msg.Kind, ops.KindRun)
+	}
+	m = m.Fail(msg)
+	got := plain(m.View())
+	if !strings.Contains(got, "Purge did not start") {
+		t.Errorf("a refused Purge retry is not named a Purge (CONTEXT.md):\n%s", got)
+	}
+	if strings.Contains(got, "Reclaim") {
+		t.Errorf("a refused Purge retry is labelled a Reclamation; the glossary holds those apart (CONTEXT.md):\n%s", got)
 	}
 }
 

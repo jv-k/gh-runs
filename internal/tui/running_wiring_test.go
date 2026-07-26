@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -279,6 +280,44 @@ func TestSurfaceReservesItsRowsFromTheTabs(t *testing.T) {
 	}
 	if last != 40-tabBarHeight-strip {
 		t.Errorf("with the surface up, the tab was laid out in %d rows, want %d (the strip's %d reserved)", last, 40-tabBarHeight-strip, strip)
+	}
+}
+
+// TestTheRootNeverLaysATabOutInNegativeRows pins the other half of the strip's bound. The
+// root subtracts the strip's rows from what it hands the tabs, and a summary that grew
+// without limit would make that subtraction negative: the tabs would be laid out in a
+// height no terminal has and the root would paint more rows than the screen holds. The
+// group count is bounded by nothing the tool controls, because a transport failure's
+// reason embeds the request URL and so carries the Run id.
+func TestTheRootNeverLaysATabOutInNegativeRows(t *testing.T) {
+	groups := make([]ops.FailureGroup, 200)
+	for i := range groups {
+		groups[i] = ops.FailureGroup{Reason: "delete request failed: run " + strconv.Itoa(i), Count: 1}
+	}
+	for _, h := range []int{4, 6, 10, 24, 40} {
+		got := make(chan int, 64)
+		probe := &sizeProbe{got: got}
+		m := Model{tabs: []tab{probe, &recordingTab{}, &recordingTab{}}, profile: keys.Standard, running: running.New(keys.Standard)}
+		next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: h})
+		m = next.(Model)
+
+		ch := make(chan ops.Progress, 1)
+		next, _ = m.Update(launched(ch, func() {}))
+		m = next.(Model)
+		next, _ = m.Update(on(ch, ops.Progress{
+			Op: ops.OpDelete, Kind: ops.KindRun, Done: true,
+			Sum: ops.Summary{Total: 5000, Deleted: 4000, Failures: groups, Skips: groups},
+		}))
+		m = next.(Model)
+
+		for len(got) > 0 {
+			if inner := <-got; inner < 0 {
+				t.Errorf("at %d rows the root laid a tab out in %d rows", h, inner)
+			}
+		}
+		if rows := strings.Count(m.View().Content, "\n") + 1; rows > h {
+			t.Errorf("at %d rows the root painted %d rows; the strip overran the screen (R14, AC10)", h, rows)
+		}
 	}
 }
 

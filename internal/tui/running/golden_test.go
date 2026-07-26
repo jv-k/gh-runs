@@ -1,6 +1,7 @@
 package running_test
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -131,6 +132,35 @@ func TestGoldenNarrowFrame(t *testing.T) {
 		},
 	})
 	goldie.New(t).Assert(t, "narrow_frame", []byte(m.View()))
+}
+
+// TestGoldenCappedSummary fixes what a summary looks like when its groups do not fit. A
+// transport failure's reason embeds the request URL and so carries the Run id, which makes
+// every one its own group, so one flaky link mid-Purge is hundreds of groups and R22's
+// "a count for each" and R14's "not modal" cannot both be had on one screen. The rows that
+// fit are stated in full and the rest are counted, and the tally, the stop reason and the
+// keystrokes survive whatever is dropped.
+func TestGoldenCappedSummary(t *testing.T) {
+	groups := make([]ops.FailureGroup, 48)
+	for i := range groups {
+		groups[i] = ops.FailureGroup{
+			Reason: "delete request failed: Delete \"https://api.github.com/repos/cli/cli/actions/runs/" +
+				strconv.Itoa(4675883901+i) + "\": dial tcp: lookup api.github.com: no such host",
+			Count: 1,
+		}
+	}
+	m := sizedTo(running.New(keys.Standard).WithRetrier(&retrier{}), 100, 24).
+		Start(ops.Started{Op: ops.OpDelete, Kind: ops.KindRun, Total: 18258, Cancel: func() {}})
+	m, _ = m.Update(ops.Progress{
+		Op: ops.OpDelete, Kind: ops.KindRun, Done: true,
+		Sum: ops.Summary{
+			Total: 18258, Deleted: 16204, Gone: 12,
+			Failures:     groups,
+			CircuitBroke: true,
+			Reason:       "circuit breaker tripped after 50 consecutive failures",
+		},
+	})
+	goldie.New(t).Assert(t, "capped_summary", []byte(m.View()))
 }
 
 // TestGoldenReclamationVerb fixes CONTEXT.md's vocabulary on the shared surface: the same

@@ -65,9 +65,13 @@ type Model struct {
 	profile keys.Profile
 	retrier Retrier
 
-	width int
-	phase phase
-	op    ops.Operation
+	// width and height are the whole terminal the root laid the strip out in. The height is
+	// what the strip's row budget derives from, so a summary can never take more than its
+	// share of the screen (R14).
+	width  int
+	height int
+	phase  phase
+	op     ops.Operation
 	// kind is the object the frozen set holds, which the operation alone does not name: a
 	// delete over Runs is a Purge and the same delete over Caches and Artifacts is a
 	// Reclamation (CONTEXT.md).
@@ -152,9 +156,18 @@ func (m Model) Fail(f ops.LaunchFailed) Model {
 		m.err = f.Err
 		return m
 	}
+	prevOp, prevKind := m.op, m.kind
 	m.phase = failed
 	m.op = f.Op
 	m.kind = f.Kind
+	// A refusal that names no Kind for the operation already on screen keeps the one the
+	// surface holds. The empty Kind is a real value, the mixed Cache-and-Artifact set that
+	// is Reclamation's ordinary list, so it cannot also mean unknown: without this a
+	// refused Purge retry falls through to the Reclamation label, which is the one
+	// distinction CONTEXT.md makes binding.
+	if f.Kind == "" && f.Op == prevOp {
+		m.kind = prevKind
+	}
 	m.err = f.Err
 	m.cancel = nil
 	m.last = ops.Progress{}
@@ -169,7 +182,7 @@ func (m Model) Fail(f ops.LaunchFailed) Model {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case ops.Progress:
 		return m.onProgress(msg), nil
@@ -188,7 +201,11 @@ func (m Model) onProgress(p ops.Progress) Model {
 	}
 	m.last = p
 	m.have = true
-	m.op = p.Op
+	// The verb and the noun both come from the frame, which is what ADR-0015 makes the
+	// stream carry and what a Reclamation joining this surface will rely on (#64). Reading
+	// one from the frame and the other from the launch handle would let a label be built
+	// from two sources that can disagree.
+	m.op, m.kind = p.Op, p.Kind
 	if p.Sum.Total > 0 {
 		m.total = p.Sum.Total
 	}
@@ -204,7 +221,7 @@ func (m Model) onKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch {
 	case key.Matches(k, m.profile.CancelRunning):
 		if m.phase == finished || m.phase == failed {
-			return New(m.profile).WithRetrier(m.retrier).sizedTo(m.width), nil // dismiss
+			return New(m.profile).WithRetrier(m.retrier).sizedTo(m.width, m.height), nil // dismiss
 		}
 		if m.cancel == nil || m.stopping {
 			return m, nil
@@ -233,19 +250,21 @@ func (m Model) retryCmd() tea.Cmd {
 	if m.phase != finished || m.retrier == nil || !m.have || m.last.Sum.FailedCount() == 0 {
 		return nil
 	}
-	r, sum, op := m.retrier, m.last.Sum, m.op
+	// The Kind travels with the refusal, because a refused launch is still a launch of a
+	// named thing: without it the pane cannot tell a Purge's retry from a Reclamation's.
+	r, sum, op, kind := m.retrier, m.last.Sum, m.op, m.kind
 	return func() tea.Msg {
 		st, err := r.Retry(context.Background(), sum)
 		if err != nil {
-			return ops.LaunchFailed{Op: op, Err: err}
+			return ops.LaunchFailed{Op: op, Kind: kind, Err: err}
 		}
 		return st
 	}
 }
 
-// sizedTo carries the laid-out width across a reset, so a dismissed pane relaunches at
+// sizedTo carries the laid-out terminal across a reset, so a dismissed pane relaunches at
 // the terminal's size rather than at zero.
-func (m Model) sizedTo(w int) Model {
-	m.width = w
+func (m Model) sizedTo(w, h int) Model {
+	m.width, m.height = w, h
 	return m
 }
