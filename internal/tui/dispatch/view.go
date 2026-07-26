@@ -93,10 +93,19 @@ func (m Model) refLine() string {
 	if kind != "" {
 		label += styleDim.Render("  (" + kind + ")")
 	}
-	if len(m.refs) > 1 && m.cursor == 0 {
+	if m.cursor == 0 && m.canPickRefs() {
 		label += styleDim.Render("  " + m.profile.ToggleSelect.Help().Key + " to switch")
 	}
 	return mark + label
+}
+
+// canPickRefs reports whether the picker has somewhere to go: a set holding more than the current
+// ref, or an enumeration this session has not yet spent (R24). The hint has to advertise the second
+// case, because the list is fetched lazily and a picker nobody knows is there is a picker nobody
+// uses. With no fetcher wired and no opener-supplied set, which is the golden path, there is no
+// picker and no hint.
+func (m Model) canPickRefs() bool {
+	return len(m.refs) > 1 || (!m.refsAsked && m.fetcher != nil)
 }
 
 // refKind labels the current ref a branch or a tag from the picker set, or empty when the set does

@@ -29,7 +29,7 @@ interactions:
       response:
         status: 200 OK
         code: 200
-        body: '[{"name":"owned-a","full_name":"acme/owned-a","owner":{"login":"acme"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"owned-b","full_name":"acme/owned-b","owner":{"login":"acme"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false}]'
+        body: '[{"name":"owned-a","full_name":"acme/owned-a","owner":{"login":"acme"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false,"default_branch":"main"},{"name":"owned-b","full_name":"acme/owned-b","owner":{"login":"acme"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false,"default_branch":"main"}]'
         headers:
             Content-Type:
                 - application/json; charset=utf-8
@@ -79,7 +79,7 @@ interactions:
       response:
         status: 200 OK
         code: 200
-        body: '{"name":"local","full_name":"jv-k/local","owner":{"login":"jv-k"},"permissions":{"admin":false,"maintain":false,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false}'
+        body: '{"name":"local","full_name":"jv-k/local","owner":{"login":"jv-k"},"permissions":{"admin":false,"maintain":false,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false,"default_branch":"main"}'
         headers:
             Content-Type:
                 - application/json; charset=utf-8

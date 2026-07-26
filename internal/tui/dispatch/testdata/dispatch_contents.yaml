@@ -1,9 +1,11 @@
 ---
 version: 2
-# The two reads the form makes, taped with no live network (workflow-dispatch R5, R7). The Contents
+# The reads the form makes, taped with no live network (workflow-dispatch R5, R7, R24). The Contents
 # API returns the Workflow YAML base64-encoded at the target ref, which the form decodes and parses
-# into the schema, and the environments endpoint returns the repository's environments for the
-# environment selects. Replayed in ModeReplayOnly.
+# into the schema, the environments endpoint returns the repository's environments for the
+# environment selects, and the branches and tags listings are the picker set. Two repositories are
+# taped: o/r has both branches and tags, and o/untagged has branches and an empty tag listing, which
+# is AC8's branches-only case. Replayed in ModeReplayOnly.
 interactions:
     - id: 0
       request:
@@ -40,4 +42,52 @@ interactions:
         headers:
             Content-Type: ["application/json; charset=utf-8"]
             X-Ratelimit-Remaining: ["4989"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/branches?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"main","commit":{"sha":"aaa"}},{"name":"release/1.2","commit":{"sha":"bbb"}}]'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4988"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 4
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/tags?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"v2.0.0","commit":{"sha":"ccc"}}]'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4987"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 5
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/untagged/branches?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"main","commit":{"sha":"ddd"}}]'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4986"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 6
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/untagged/tags?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '[]'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4985"]
             X-Ratelimit-Reset: ["1789000000"]

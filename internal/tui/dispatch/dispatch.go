@@ -23,14 +23,16 @@ type Dispatcher interface {
 	Dispatch(ctx context.Context, req ops.DispatchRequest) (ops.DispatchResult, error)
 }
 
-// Fetcher reads a Workflow's YAML at a ref (R5), the repository's environments (R7), and the
-// repository's default branch (R23). Injected at construction, backed by ghclient in main.go and a
-// cassette in tests. A nil Fetcher leaves the pane driven by injected messages alone, which is the
-// golden path (no network).
+// Fetcher reads a Workflow's YAML at a ref (R5), the repository's environments (R7), the picker's
+// branches and tags (R24), and the repository's default branch (R23, the fallback the Workflows tab
+// normally makes unnecessary by handing the discovered branch through Target). Injected at
+// construction, backed by ghclient in main.go and a cassette in tests. A nil Fetcher leaves the pane
+// driven by injected messages alone, which is the golden path (no network).
 type Fetcher interface {
 	DefaultBranch(repo domain.RepoID) (string, error)
 	WorkflowYAML(repo domain.RepoID, path, ref string) ([]byte, error)
 	Environments(repo domain.RepoID) ([]string, error)
+	Refs(repo domain.RepoID) ([]Ref, error)
 }
 
 // DocStore persists and recalls a named JSON document, the local-store primitive R2a uses to
@@ -52,8 +54,16 @@ type Ref struct {
 // Target is what the Workflows tab hands the pane when it opens the form over the Workflow under the
 // cursor. Eligible is R14's gate (permissions.push && !archived), computed by the opener from the
 // discovered repository so it costs no request (AC6); the pane refuses to submit when it is false
-// and states EligReason. Ref is the default branch the opener supplies (R23), and Refs is the
-// branches-and-tags picker set (R24), which may be empty when only the default is known.
+// and states EligReason.
+//
+// Ref is the default branch the opener supplies (R23). It rides the enumeration payload the gate
+// above rides, so the ordinary open pre-selects the default branch at no request; an empty Ref sends
+// the pane to its own resolver instead.
+//
+// Refs pre-seeds the branches-and-tags picker set (R24). It is normally empty: R24 fetches the list
+// lazily, so the pane enumerates on the picker's first use rather than making every form open pay
+// for a list most opens never touch. A non-empty Refs is a set the opener already holds, and
+// suppresses the fetch entirely.
 type Target struct {
 	Repo       domain.RepoID
 	Workflow   domain.Workflow
@@ -90,6 +100,15 @@ type EnvironmentsLoaded struct {
 	Err          error
 }
 
+// RefsLoaded carries the picker's branches and tags into the pane (R24). It arrives once per picker
+// session, in answer to the first press on the ref row, so a form dispatched at its default branch
+// never spends the two requests behind it. Err leaves the picker on the ref it already holds and
+// says so, rather than moving the form to a ref nobody chose (R4).
+type RefsLoaded struct {
+	Refs []Ref
+	Err  error
+}
+
 // Dispatched carries a Dispatch's outcome back into the pane (R16). On success the pane shows the
 // Run ID and persists the inputs (R25); on failure it surfaces the API's own reason (R14, R22, R15).
 type Dispatched struct {
@@ -116,6 +135,11 @@ type Model struct {
 
 	ref  string
 	refs []Ref
+	// refsAsked is R24's "at most once per picker session": the branch and tag list is enumerated on
+	// the picker's first use and never again for this form, whether the enumeration succeeded,
+	// failed, or was pre-seeded by the opener. Open resets it, which is what makes a session one
+	// open of the form.
+	refsAsked bool
 
 	form         Form
 	values       map[string]string
@@ -129,11 +153,53 @@ type Model struct {
 	editName  string
 	editInput textinput.Model
 
-	submitting bool
-	status     string
-	statusErr  bool
-	result     *ops.DispatchResult // R16: the Run the Dispatch created, shown until the form closes
+	// inflight and latched are the two halves of the re-submit guard, and neither is reset by Open
+	// or Close. A Dispatch creates a real Run, so the only acceptable failure mode is refusing a
+	// Dispatch the operator wanted, never issuing one they did not.
+	//
+	// inflight is a Dispatch this pane issued whose outcome has not arrived. It blocks a second
+	// press whether the form stayed open or was closed and reopened, which a form-scoped flag could
+	// not: Open resets the form, and a POST does not stop being in flight because the window it was
+	// typed into went away.
+	//
+	// latched is the target of the Dispatch this pane issued and did not see rejected, so a stray
+	// press after success cannot repeat it. It releases on a rejection (which created no Run, so a
+	// retry is right) and on a change to the ref or to any input value (which makes the next submit
+	// a different Dispatch rather than a repeat of the one already made, R25's premise).
+	inflight   bool
+	latched    *dispatchTarget
+	latchedRun int64 // the Run the latched Dispatch created, 0 when its outcome reached a closed pane
+
+	status    string
+	statusErr bool
+	result    *ops.DispatchResult // R16: the Run the Dispatch created, shown until the form closes
 }
+
+// dispatchTarget identifies one Dispatch for the latch: the repository, the Workflow and the ref.
+// The submitted inputs are deliberately not part of it. A form closed mid-POST loses the values it
+// was submitted with, because Open resets them and R25 persists only on a success the closed pane
+// never sees, so a key including them would stop matching on reopen, which is the one case the latch
+// exists for.
+type dispatchTarget struct {
+	repo     domain.RepoID
+	workflow int64
+	ref      string
+}
+
+// target is the Dispatch the form would issue right now, which the latch compares against.
+func (m Model) target() dispatchTarget {
+	return dispatchTarget{repo: m.repo, workflow: m.workflow.ID, ref: m.ref}
+}
+
+// statusDispatching is the pending line a Dispatch in flight shows. Open restores it when the form
+// is reopened over a POST that has not resolved, so a reopened form states what it is doing rather
+// than looking ready to do it again.
+const statusDispatching = "dispatching…"
+
+// statusListingRefs is the pending line the picker's lazy enumeration shows (R24). applyRefs clears
+// it only when it is still the line showing, so a Dispatch outcome that landed while the list was in
+// flight is not wiped by its arrival.
+const statusListingRefs = "listing branches and tags…"
 
 // Options carries the pane's construction seams. main.go fills them: Profile is the resolved
 // keybinding set, Fetch reads the YAML and the environments over the shared client, Ops dispatches
@@ -171,6 +237,7 @@ func (m Model) Open(t Target) (Model, tea.Cmd) {
 	m.eligReason = t.EligReason
 	m.ref = t.Ref
 	m.refs = t.Refs
+	m.refsAsked = len(t.Refs) > 0 // an opener-supplied set is the picker set; nothing is fetched
 	m.form = Form{}
 	m.values = nil
 	m.environments = nil
@@ -179,10 +246,15 @@ func (m Model) Open(t Target) (Model, tea.Cmd) {
 	m.cursor = 0
 	m.editing = false
 	m.editName = ""
-	m.submitting = false
 	m.status = ""
 	m.statusErr = false
 	m.result = nil
+	// inflight, latched and latchedRun are the re-submit guard and are deliberately not reset here.
+	// Resetting them is exactly what let closing the form mid-POST and reopening it issue a second
+	// Dispatch, and a second Dispatch is a second Run.
+	if m.inflight {
+		m.status = statusDispatching
+	}
 	// R2's fixed order: when the opener names no ref, resolve the repository's default branch first
 	// (R23), then fetch the YAML at it. When the opener supplies a ref, fetch at once.
 	if m.ref == "" {
@@ -236,7 +308,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.environments = msg.Environments
 		}
 		return m, nil
+	case RefsLoaded:
+		if !m.open {
+			return m, nil
+		}
+		return m.applyRefs(msg)
 	case Dispatched:
+		// The latch settles whether or not the form is still open. The pane issued the POST, so it
+		// must not forget it because the window closed: a closed pane that forgot is precisely what
+		// let a reopen issue a second Dispatch. Only the visible outcome (the status, the Run and
+		// R25's remembered inputs) belongs to an open form.
+		m = m.settle(msg)
 		if !m.open {
 			return m, nil
 		}
@@ -293,12 +375,25 @@ func (m Model) applyYAML(msg YAMLLoaded) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// applyDispatched records a Dispatch's outcome. On success it shows the Run ID from the response and
-// persists the inputs so the next Dispatch of this Workflow pre-fills them (R16, R25, AC5). On
-// failure it surfaces the API's own reason, which a DispatchError carries for a 422, 404 or 403
-// (R14, R22, R15).
+// settle records a Dispatch's outcome in the re-submit guard, whether or not the form is still open.
+// The in-flight half always clears, because the POST resolved. The done-latch survives a success, so
+// a stray press cannot repeat it, and releases on a rejection, which created no Run and is therefore
+// worth retrying.
+func (m Model) settle(msg Dispatched) Model {
+	m.inflight = false
+	if msg.Err != nil {
+		m.latched = nil
+		return m
+	}
+	m.latchedRun = msg.Result.RunID
+	return m
+}
+
+// applyDispatched records a Dispatch's outcome on the open form. On success it shows the Run ID from
+// the response and persists the inputs so the next Dispatch of this Workflow pre-fills them (R16,
+// R25, AC5). On failure it surfaces the API's own reason, which a DispatchError carries for a 422,
+// 404 or 403 (R14, R22, R15).
 func (m Model) applyDispatched(msg Dispatched) (Model, tea.Cmd) {
-	m.submitting = false
 	if msg.Err != nil {
 		m.status = "dispatch failed: " + msg.Err.Error()
 		m.statusErr = true
@@ -347,7 +442,7 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 func (m Model) handleEditKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch {
 	case key.Matches(k, m.profile.FilterAccept):
-		m.values[m.editName] = m.editInput.Value()
+		m.setValue(m.editName, m.editInput.Value())
 		m.editing = false
 		m.editInput.Blur()
 		return m, nil
@@ -391,22 +486,62 @@ func (m Model) cycleFocused() (Model, tea.Cmd) {
 	switch in.Type {
 	case TypeBoolean:
 		if m.values[in.Name] == "true" {
-			m.values[in.Name] = "false"
+			m.setValue(in.Name, "false")
 		} else {
-			m.values[in.Name] = "true"
+			m.setValue(in.Name, "true")
 		}
 	case TypeChoice:
-		m.values[in.Name] = cycle(in.Options, m.values[in.Name])
+		m.setValue(in.Name, cycle(in.Options, m.values[in.Name]))
 	case TypeEnvironment:
-		m.values[in.Name] = cycle(m.environments, m.values[in.Name])
+		m.setValue(in.Name, cycle(m.environments, m.values[in.Name]))
 	}
 	return m, nil
 }
 
-// cycleRef advances to the next ref in the picker and re-fetches the form for it, because a
-// Workflow's inputs can differ per branch and the form on the screen must always be the form for the
-// ref that will run (R3, R24). With no picker set it is a no-op, and the default branch stays (R23).
+// setValue writes one input's value and releases the done-latch when the value actually changed.
+// Every operator-driven change to the form goes through it, so "the submission is different from the
+// one already dispatched" has one definition rather than one per control. A no-op edit (enter over an
+// unchanged field, or cycling a select with nothing to cycle through) changes nothing and therefore
+// releases nothing.
+func (m *Model) setValue(name, value string) {
+	if m.values[name] == value {
+		return
+	}
+	m.values[name] = value
+	m.latched = nil
+}
+
+// applyRefs adopts the enumerated branches and tags as the picker set (R24). The current ref is left
+// alone: the operator asked for the list, not for a different ref, and R4 says which ref will run
+// must never be ambiguous. A failure keeps the form on the ref it holds and says so, and refsAsked
+// stays set, so a picker that could not be listed is not retried on every press.
+func (m Model) applyRefs(msg RefsLoaded) (Model, tea.Cmd) {
+	if msg.Err != nil {
+		m.status = "could not list refs: " + msg.Err.Error()
+		m.statusErr = true
+		return m, nil
+	}
+	m.refs = msg.Refs
+	if m.status == statusListingRefs {
+		m.status, m.statusErr = "", false
+	}
+	return m, nil
+}
+
+// cycleRef enumerates the picker on its first use and thereafter advances to the next ref and
+// re-fetches the form for it, because a Workflow's inputs can differ per branch and the form on the
+// screen must always be the form for the ref that will run (R3, R24).
+//
+// The enumeration is lazy by R24's letter: a Dispatch at the default branch, which is most of them,
+// spends nothing on a list it never looks at, and the two requests are paid by the press that asks
+// to switch. With nothing to enumerate and no picker set it is a no-op and the default branch stays
+// (R23).
 func (m Model) cycleRef() (Model, tea.Cmd) {
+	if !m.refsAsked && m.fetcher != nil {
+		m.refsAsked = true // R24: at most once per picker session, whatever the enumeration returns
+		m.status, m.statusErr = statusListingRefs, false
+		return m, m.loadRefsCmd()
+	}
 	if len(m.refs) == 0 {
 		return m, nil
 	}
@@ -430,8 +565,20 @@ func (m Model) cycleRef() (Model, tea.Cmd) {
 // input (R9, AC3). Otherwise it builds the inputs map and dispatches, and the API is the final
 // authority on the rest (R14).
 func (m Model) submit() (Model, tea.Cmd) {
-	if m.submitting {
-		return m, nil // a Dispatch is already in flight; a second x must not create a second Run
+	if m.inflight {
+		// A Dispatch this pane issued has not resolved. A second x must not create a second Run,
+		// whether the form stayed open or was closed and reopened over the POST.
+		m.status = "a Dispatch is already in flight for this Workflow"
+		m.statusErr = true
+		return m, nil
+	}
+	if m.latched != nil && *m.latched == m.target() {
+		// The done-latch: this exact Dispatch has already been made. Changing the ref or any input
+		// value releases it, so a deliberate second Dispatch is one edit away and an accidental one
+		// is impossible.
+		m.status = m.alreadyDispatched()
+		m.statusErr = true
+		return m, nil
 	}
 	if m.loadErr != "" || !m.form.Dispatchable {
 		m.status = "this Workflow declares no workflow_dispatch trigger at this ref"
@@ -451,10 +598,23 @@ func (m Model) submit() (Model, tea.Cmd) {
 	if m.dispatcher == nil {
 		return m, nil
 	}
-	m.submitting = true
-	m.status = "dispatching…"
+	m.inflight = true
+	target := m.target()
+	m.latched = &target
+	m.latchedRun = 0
+	m.status = statusDispatching
 	m.statusErr = false
 	return m, m.dispatchCmd()
+}
+
+// alreadyDispatched is the done-latch's refusal, naming the Run where the outcome was seen and
+// saying how to make a deliberate second Dispatch. A form reopened over a Dispatch whose outcome
+// landed on a closed pane has no Run to name, so it says so rather than reporting Run 0.
+func (m Model) alreadyDispatched() string {
+	if m.latchedRun == 0 {
+		return "already dispatched at " + m.ref + ". Change the ref or an input to dispatch again"
+	}
+	return fmt.Sprintf("already dispatched at %s, Run %d. Change the ref or an input to dispatch again", m.ref, m.latchedRun)
 }
 
 // missingRequired returns the name of the first required input with no value, or empty when every
@@ -526,6 +686,19 @@ func (m Model) loadYAMLCmd() tea.Cmd {
 	return func() tea.Msg {
 		data, err := f.WorkflowYAML(repo, path, ref)
 		return YAMLLoaded{Ref: ref, Path: path, Data: data, Err: err}
+	}
+}
+
+// loadRefsCmd enumerates the repository's branches and tags once per picker session, returning a
+// RefsLoaded (R24). With no fetcher wired it is nil, and cycleRef never reaches it.
+func (m Model) loadRefsCmd() tea.Cmd {
+	if m.fetcher == nil {
+		return nil
+	}
+	f, repo := m.fetcher, m.repo
+	return func() tea.Msg {
+		refs, err := f.Refs(repo)
+		return RefsLoaded{Refs: refs, Err: err}
 	}
 }
 

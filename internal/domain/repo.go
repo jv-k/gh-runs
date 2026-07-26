@@ -16,6 +16,14 @@ type Repo struct {
 	Permissions Permissions `json:"permissions"`
 	Archived    bool        `json:"archived"`
 	Disabled    bool        `json:"disabled"`
+
+	// DefaultBranch is the repository's default branch, which the dispatch form
+	// defaults its ref picker to (workflow-dispatch R23). It rides the same
+	// /user/repos payload the permissions and archived above ride, so carrying it
+	// here is what makes R23 cost no request: without it the form spent a
+	// GET /repos/{owner}/{repo} on every open to learn a string the enumeration
+	// had already returned.
+	DefaultBranch string `json:"default_branch"`
 }
 
 // Permissions is the API's five-boolean permissions object, verbatim.

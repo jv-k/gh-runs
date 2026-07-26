@@ -28,6 +28,8 @@ Discovery establishes which of the account's repositories actually have Runs, so
 
 **R7.** Discovery must record, per repository, the `permissions` object (`admin`, `maintain`, `push`, `triage`, `pull`), `archived` and `disabled`. All of them arrive with the repository list at no additional request cost, so gating costs nothing.
 
+**R7a.** Discovery must also record `default_branch`, which arrives on the same payload for the same reason. It is not capability, and nothing here reads it: it is carried because [workflow-dispatch](../workflow-dispatch/requirements.md) R23 defaults its ref picker to it, and a consumer that could not read it here spent a `GET /repos/{owner}/{repo}` per form open to learn a string this enumeration had already returned. A record persisted before this field existed reloads without one, which reads as not known here rather than as a wrong branch, and the next pass fills it in.
+
 **R8.** Discovery must expose recorded capability as three distinguishable values: permitted, refused, and **not yet known**. A consumer can then keep destructive actions disabled for a repository whose enumeration has not yet returned. A repository painted by the cold-start fast path (R14) reads as not-yet-known until enumeration completes, and its capability must not be inferred from the fact that its Runs listed.
 
 **R9.** Discovery must mark an archived repository as permanently read-only rather than as temporarily ungated. Its Runs can never be cleaned, and no retry, token change or elevation will alter that.

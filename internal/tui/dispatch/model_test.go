@@ -2,6 +2,7 @@ package dispatch_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -64,16 +65,23 @@ func (f *fakeDispatcher) Dispatch(_ context.Context, req ops.DispatchRequest) (o
 	return f.result, f.err
 }
 
-// fakeFetcher returns held YAML per ref and a held environments list, so a test drives the fetch
-// path with no network. A ref absent from the map returns empty bytes, which ParseForm reads as a
-// non-dispatchable empty form.
+// fakeFetcher returns held YAML per ref and a held environments and refs list, so a test drives the
+// fetch path with no network. A ref absent from the map returns empty bytes, which ParseForm reads
+// as a non-dispatchable empty form. Every call is counted, so a test can assert a read was never
+// made, which is the only way to carry a claim about a request that did not happen.
 type fakeFetcher struct {
 	defaultBranch string
 	yaml          map[string][]byte
 	envs          []string
+	refs          []dispatch.Ref
+	refsErr       error
+
+	defaultBranchCalls int
+	refsCalls          int
 }
 
 func (f *fakeFetcher) DefaultBranch(_ domain.RepoID) (string, error) {
+	f.defaultBranchCalls++
 	return f.defaultBranch, nil
 }
 
@@ -83,6 +91,11 @@ func (f *fakeFetcher) WorkflowYAML(_ domain.RepoID, _, ref string) ([]byte, erro
 
 func (f *fakeFetcher) Environments(_ domain.RepoID) ([]string, error) {
 	return f.envs, nil
+}
+
+func (f *fakeFetcher) Refs(_ domain.RepoID) ([]dispatch.Ref, error) {
+	f.refsCalls++
+	return f.refs, f.refsErr
 }
 
 func wf(id int64, path string) domain.Workflow {
@@ -325,6 +338,131 @@ func TestDoubleSubmitCreatesOneRun(t *testing.T) {
 	_ = m
 }
 
+// fillRequired fills the deployment fixture's required tag_name from the freshly loaded form, whose
+// cursor rests on the ref row. It is the minimum an operator must do before the form will submit
+// (R9), so a latch test drives the real submit path rather than R9's refusal.
+func fillRequired(m dispatch.Model, value string) dispatch.Model {
+	m = send(m, "down")  // ref row -> tag_name
+	m = send(m, "enter") // begin editing
+	m = typeText(m, value)
+	return send(m, "enter") // commit
+}
+
+// TestSubmitAfterSuccessCreatesNoSecondRun pins the done-latch: once a Dispatch has been accepted, a
+// stray submit key must not repeat it. A Dispatch creates a real Run (R16), so an accidental second
+// press is an accidental second Run, and the in-flight guard alone does not cover it because the
+// flag is already clear by the time the outcome lands.
+func TestSubmitAfterSuccessCreatesNoSecondRun(t *testing.T) {
+	disp := &fakeDispatcher{result: ops.DispatchResult{RunID: 42}}
+	m := openLoaded(t, dispatch.Options{Profile: keys.Standard, Ops: disp}, wf(9001, ".github/workflows/deploy.yml"), "deployment.yml")
+	m = fillRequired(m, "v1")
+
+	m, cmd := m.Update(press("x"))
+	m = runCmd(m, cmd) // the Dispatch is accepted and Run 42 is reported
+
+	m, cmd2 := m.Update(press("x")) // a stray second x after success
+	if cmd2 != nil {
+		m = runCmd(m, cmd2)
+	}
+	if len(disp.calls) != 1 {
+		t.Errorf("issued %d dispatches, want exactly 1; a submit after success must not create a second Run", len(disp.calls))
+	}
+	if !strings.Contains(strings.ToLower(m.View()), "already dispatched") {
+		t.Errorf("the refusal must say the Dispatch already happened: %q", m.View())
+	}
+}
+
+// TestCloseMidDispatchAndReopenCreatesNoSecondRun pins the case a form-scoped flag cannot cover: the
+// operator closes the form while the POST is in flight and reopens it, which used to reset the flag
+// and leave a second x free to create a second Run. The Dispatch this pane issued stays issued
+// whatever the form does, so the required input is refilled here deliberately: without it R9 would
+// refuse the second submit and the test would pass without exercising the latch at all.
+func TestCloseMidDispatchAndReopenCreatesNoSecondRun(t *testing.T) {
+	disp := &fakeDispatcher{result: ops.DispatchResult{RunID: 42}}
+	opts := dispatch.Options{Profile: keys.Standard, Ops: disp}
+	w := wf(9001, ".github/workflows/deploy.yml")
+
+	m := openLoaded(t, opts, w, "deployment.yml")
+	m = fillRequired(m, "v1")
+	m, cmd := m.Update(press("x")) // the POST is in flight
+	if cmd == nil {
+		t.Fatal("the first submit issued no Cmd")
+	}
+
+	m = m.Close()
+	m, _ = m.Open(dispatch.Target{Repo: rid("o", "r"), Workflow: w, Eligible: true, Ref: "main"})
+	m, _ = m.Update(dispatch.YAMLLoaded{Ref: "main", Path: w.Path, Data: fixture(t, "deployment.yml")})
+	m = fillRequired(m, "v1")
+
+	m, cmd2 := m.Update(press("x"))
+	if cmd2 != nil {
+		t.Errorf("a submit after closing and reopening mid-Dispatch issued a Cmd; it must not create a second Run")
+		m = runCmd(m, cmd2)
+	}
+	m = runCmd(m, cmd) // resolve the first
+	if len(disp.calls) != 1 {
+		t.Errorf("issued %d dispatches, want exactly 1 across a close and reopen", len(disp.calls))
+	}
+	_ = m
+}
+
+// TestChangingTheFormAfterDispatchAllowsANewRun pins that the latch is not a one-way door: it blocks
+// a repeat of the Dispatch already made, and changing what would be submitted is the operator saying
+// this is a different Dispatch. Without this, re-dispatching a Workflow with new inputs (R25's whole
+// premise) would be impossible for the rest of the session.
+func TestChangingTheFormAfterDispatchAllowsANewRun(t *testing.T) {
+	disp := &fakeDispatcher{result: ops.DispatchResult{RunID: 42}}
+	m := openLoaded(t, dispatch.Options{Profile: keys.Standard, Ops: disp}, wf(9001, ".github/workflows/deploy.yml"), "deployment.yml")
+	m = fillRequired(m, "v1")
+
+	m, cmd := m.Update(press("x"))
+	m = runCmd(m, cmd)
+
+	// The cursor rests on tag_name; editing it to a new value is a deliberate second Dispatch.
+	m = send(m, "enter")
+	m = typeText(m, "9")
+	m = send(m, "enter")
+
+	m, cmd2 := m.Update(press("x"))
+	if cmd2 == nil {
+		t.Fatal("a changed form issued no Cmd; the latch must release when the submission changes")
+	}
+	m = runCmd(m, cmd2)
+	if len(disp.calls) != 2 {
+		t.Fatalf("issued %d dispatches, want 2 (the second is deliberate)", len(disp.calls))
+	}
+	if disp.calls[1].Inputs["tag_name"] != "v19" {
+		t.Errorf("the second Dispatch carried tag_name %q, want the edited v19", disp.calls[1].Inputs["tag_name"])
+	}
+	if !strings.Contains(m.View(), "Run 42 created") {
+		t.Errorf("the second Dispatch did not report its Run (R16, AC5): %q", m.View())
+	}
+}
+
+// TestFailedDispatchStaysRetryable pins the latch's release on rejection: a Dispatch the API refused
+// created no Run, so the same submit must still be issuable. Latching a rejection would strand the
+// operator on a 403 that a token change fixes.
+func TestFailedDispatchStaysRetryable(t *testing.T) {
+	disp := &fakeDispatcher{err: &ops.DispatchError{Code: 403, Message: "Resource not accessible by integration"}}
+	m := openLoaded(t, dispatch.Options{Profile: keys.Standard, Ops: disp}, wf(9001, ".github/workflows/deploy.yml"), "deployment.yml")
+	m = fillRequired(m, "v1")
+
+	m, cmd := m.Update(press("x"))
+	m = runCmd(m, cmd) // rejected
+
+	m, cmd2 := m.Update(press("x"))
+	if cmd2 == nil {
+		t.Fatal("a retry after a rejected Dispatch issued no Cmd; a rejection created no Run")
+	}
+	m = runCmd(m, cmd2)
+	if len(disp.calls) != 2 {
+		t.Errorf("issued %d dispatches, want 2 (the rejected one and its retry)", len(disp.calls))
+	}
+	if !strings.Contains(m.View(), "dispatch failed") {
+		t.Errorf("the retry's own rejection was not surfaced (R14): %q", m.View())
+	}
+}
+
 // TestDispatchFailureSurfacesAPIReason pins R14 and R22: a rejected Dispatch surfaces the API's own
 // reason and does not report a Run, and nothing is persisted for a failed dispatch.
 func TestDispatchFailureSurfacesAPIReason(t *testing.T) {
@@ -398,4 +536,145 @@ func TestRefChangeRefetches(t *testing.T) {
 	if !strings.Contains(m.View(), "loading") {
 		t.Errorf("the form should re-enter loading while the new ref's YAML is fetched (R3): %q", m.View())
 	}
+}
+
+// openPicker opens the form over the deployment fixture with a lazily enumerable picker, leaving the
+// cursor on the ref row where the picker lives. It is the production shape: the opener supplies the
+// discovered default branch and no ref list, so the list is the pane's to fetch.
+func openPicker(t *testing.T, fetch *fakeFetcher) dispatch.Model {
+	t.Helper()
+	fetch.yaml = map[string][]byte{
+		"main":   fixture(t, "deployment.yml"),
+		"topic":  fixture(t, "deployment.yml"),
+		"v2.0.0": fixture(t, "deployment.yml"),
+	}
+	m := dispatch.New(dispatch.Options{Profile: keys.Standard, Fetch: fetch})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m, _ = m.Open(dispatch.Target{
+		Repo:     rid("o", "r"),
+		Workflow: wf(9001, ".github/workflows/deploy.yml"),
+		Eligible: true,
+		Ref:      "main",
+	})
+	m, _ = m.Update(dispatch.YAMLLoaded{Ref: "main", Path: ".github/workflows/deploy.yml", Data: fixture(t, "deployment.yml")})
+	return m
+}
+
+// TestRefPickerListsBranchesAndTags pins R24 and AC8 end to end: the picker the production opener
+// leaves empty enumerates itself on first use, offers both branches and tags labelled distinctly,
+// and enumerates at most once per picker session however many times the operator cycles.
+func TestRefPickerListsBranchesAndTags(t *testing.T) {
+	fetch := &fakeFetcher{refs: []dispatch.Ref{
+		{Name: "main"}, {Name: "topic"}, {Name: "v2.0.0", IsTag: true},
+	}}
+	m := openPicker(t, fetch)
+
+	if fetch.refsCalls != 0 {
+		t.Fatalf("opening the form enumerated refs %d times; R24 fetches them lazily", fetch.refsCalls)
+	}
+	// The first press on the ref row asks for the list rather than advancing, because there is no
+	// list yet. The ref must not move: R4 says which ref will run is never ambiguous.
+	m, cmd := m.Update(press("space"))
+	if cmd == nil {
+		t.Fatal("the picker's first use issued no enumeration Cmd (R24)")
+	}
+	if !strings.Contains(m.View(), "Ref: main") {
+		t.Errorf("listing the refs moved the ref; it must stay until one is chosen (R4): %q", m.View())
+	}
+	m = runCmd(m, cmd)
+	if fetch.refsCalls != 1 {
+		t.Fatalf("the picker enumerated %d times, want 1 (R24)", fetch.refsCalls)
+	}
+
+	// AC8: cycling reaches both a branch and a tag, and the two are distinguishable on screen.
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		m, cmd = m.Update(press("space"))
+		m = runCmd(m, cmd)
+		view := m.View()
+		switch {
+		case strings.Contains(view, "Ref: v2.0.0"):
+			if !strings.Contains(view, "(tag)") {
+				t.Errorf("a tag was not labelled as one (R24, AC8): %q", view)
+			}
+			seen["tag"] = true
+		case strings.Contains(view, "Ref: topic"), strings.Contains(view, "Ref: main"):
+			if !strings.Contains(view, "(branch)") {
+				t.Errorf("a branch was not labelled as one (R24, AC8): %q", view)
+			}
+			seen["branch"] = true
+		}
+	}
+	if !seen["branch"] || !seen["tag"] {
+		t.Errorf("cycling the picker reached %v, want both a branch and a tag (AC8)", seen)
+	}
+	if fetch.refsCalls != 1 {
+		t.Errorf("the picker enumerated %d times across a whole session, want 1 (R24)", fetch.refsCalls)
+	}
+}
+
+// TestRefPickerWithNoTagsListsBranchesOnly pins AC8's second half: a repository with no tags lists
+// its branches and nothing else, and nothing in the picker claims a tag.
+func TestRefPickerWithNoTagsListsBranchesOnly(t *testing.T) {
+	fetch := &fakeFetcher{refs: []dispatch.Ref{{Name: "main"}, {Name: "topic"}}}
+	m := openPicker(t, fetch)
+
+	m, cmd := m.Update(press("space"))
+	m = runCmd(m, cmd)
+	for i := 0; i < 3; i++ {
+		m, cmd = m.Update(press("space"))
+		m = runCmd(m, cmd)
+		if strings.Contains(m.View(), "(tag)") {
+			t.Fatalf("a repository with no tags offered one (AC8): %q", m.View())
+		}
+		if !strings.Contains(m.View(), "(branch)") {
+			t.Errorf("the picker did not label the branch it landed on (AC8): %q", m.View())
+		}
+	}
+}
+
+// TestRefEnumerationFailureKeepsTheForm pins R24's failure shape: a picker that could not be listed
+// leaves the form on the ref it holds, says so, and is not retried on every press, so a repository
+// whose refs a token cannot list is still dispatchable at its default branch (R23).
+func TestRefEnumerationFailureKeepsTheForm(t *testing.T) {
+	fetch := &fakeFetcher{refsErr: errors.New("403 Resource not accessible")}
+	m := openPicker(t, fetch)
+
+	m, cmd := m.Update(press("space"))
+	m = runCmd(m, cmd)
+	if !strings.Contains(m.View(), "Ref: main") {
+		t.Errorf("a failed enumeration moved the ref: %q", m.View())
+	}
+	if !strings.Contains(m.View(), "could not list refs") {
+		t.Errorf("a failed enumeration was not surfaced: %q", m.View())
+	}
+	m, cmd = m.Update(press("space"))
+	m = runCmd(m, cmd)
+	if fetch.refsCalls != 1 {
+		t.Errorf("the picker retried the enumeration %d times; R24 spends it at most once per session", fetch.refsCalls)
+	}
+	if !strings.Contains(m.View(), "Ref: main") {
+		t.Errorf("the form left the ref it holds after a failed enumeration (R23): %q", m.View())
+	}
+}
+
+// TestDispatchAtTheDefaultBranchEnumeratesNoRefs pins R24's laziness as the Budget property it is: a
+// Dispatch at the default branch, which is most of them, never opens the picker and therefore never
+// pays for the branch and tag listing behind it.
+func TestDispatchAtTheDefaultBranchEnumeratesNoRefs(t *testing.T) {
+	fetch := &fakeFetcher{refs: []dispatch.Ref{{Name: "main"}, {Name: "v1", IsTag: true}}}
+	m := openPicker(t, fetch)
+
+	// The whole form is filled and submitted without ever touching the ref row.
+	m = fillRequired(m, "v9.9.9")
+	m, cmd := m.Update(press("x"))
+	m = runCmd(m, cmd)
+
+	if fetch.refsCalls != 0 {
+		t.Errorf("a Dispatch at the default branch spent %d ref enumerations, want none (R24)", fetch.refsCalls)
+	}
+	if fetch.defaultBranchCalls != 0 {
+		t.Errorf("a Dispatch at an opener-supplied ref spent %d default-branch reads, want none (R23)", fetch.defaultBranchCalls)
+	}
+	_ = m
 }

@@ -36,6 +36,13 @@ func NewClientFetch(client Requester) ClientFetch {
 // DefaultBranch fetches the repository's default branch, which the form defaults the ref picker to
 // (R23). It is the only ref where a workflow_dispatch is guaranteed present, and it matches gh
 // workflow run. An error yields an empty string, which the pane falls back on.
+//
+// This is the fallback path, not the ordinary one. default_branch rides the /user/repos payload
+// discovery already reads, so the Workflows tab hands the pane the branch it discovered and R23
+// costs no request (repo-discovery R7, AC8). This call remains for the one case discovery cannot
+// answer: a record persisted before discovery carried the field, reloaded warm so no pass has
+// refreshed it. Answering with a guess there would put the form on the wrong ref, which R4 says must
+// never be ambiguous, so one request is the right price for that session.
 func (c ClientFetch) DefaultBranch(repo domain.RepoID) (string, error) {
 	resp, err := c.client.Request(http.MethodGet, "repos/"+repo.Owner+"/"+repo.Name, nil)
 	if err != nil {
@@ -115,6 +122,66 @@ func (c ClientFetch) Environments(repo domain.RepoID) ([]string, error) {
 	return names, nil
 }
 
+// Refs lists the repository's branches and then its tags, which is the picker set R24 requires:
+// gh's --ref accepts either, so a picker offering branches alone would make the interactive surface
+// a strict subset of the CLI. The pane calls it lazily, on the picker's first use and at most once
+// per picker session, so a Dispatch at the default branch never pays for it.
+//
+// A tags read that fails or returns nothing yields the branches alone, which is R24's
+// no-tags case and is also the right answer when a token can list branches but not tags: withholding
+// the branches too would make a repository undispatchable at any ref but the default over a list the
+// form only needed for convenience. A branches failure is an error, because a picker with no
+// branches is not a picker.
+//
+// Each side is one page at the API's ceiling. A repository with more refs than that lists the first
+// page, and R23's default branch is reachable regardless because the pane holds it as the ref before
+// the picker is ever opened.
+func (c ClientFetch) Refs(repo domain.RepoID) ([]Ref, error) {
+	branches, err := c.refNames(refsPath(repo, "branches"))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Ref, 0, len(branches))
+	for _, name := range branches {
+		out = append(out, Ref{Name: name})
+	}
+	tags, err := c.refNames(refsPath(repo, "tags"))
+	if err != nil {
+		return out, nil
+	}
+	for _, name := range tags {
+		out = append(out, Ref{Name: name, IsTag: true})
+	}
+	return out, nil
+}
+
+// refNames reads a branch or tag listing, both of which are arrays of objects carrying a name. The
+// two endpoints differ in what else they carry and in nothing this reads.
+func (c ClientFetch) refNames(path string) ([]string, error) {
+	resp, err := c.client.Request(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var payload []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(payload))
+	for _, p := range payload {
+		if p.Name != "" {
+			names = append(names, p.Name)
+		}
+	}
+	return names, nil
+}
+
 // contentsPath is the Contents API endpoint for a file at a ref (R5). The ref is query-escaped so a
 // branch or tag carrying a slash resolves as one parameter.
 func contentsPath(repo domain.RepoID, path, ref string) string {
@@ -124,4 +191,9 @@ func contentsPath(repo domain.RepoID, path, ref string) string {
 // environmentsPath is the repository environments endpoint (R7).
 func environmentsPath(repo domain.RepoID) string {
 	return "repos/" + repo.Owner + "/" + repo.Name + "/environments"
+}
+
+// refsPath is the branches or tags listing endpoint for the picker (R24), at the API's page ceiling.
+func refsPath(repo domain.RepoID, kind string) string {
+	return "repos/" + repo.Owner + "/" + repo.Name + "/" + kind + "?per_page=100"
 }
