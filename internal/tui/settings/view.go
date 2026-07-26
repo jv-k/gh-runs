@@ -149,6 +149,8 @@ func (m Model) rawValue(r row) string {
 		return filterLine(m.cfg.LaunchFilter)
 	case rowExclude:
 		return repoList(m.cfg.Exclude, m.valueRoom())
+	case rowPin:
+		return repoList(m.cfg.Pin, m.valueRoom())
 	case rowConfirmThreshold:
 		return strconv.Itoa(m.cfg.ConfirmThreshold)
 	case rowBreakerFailures:
@@ -180,6 +182,8 @@ func (m Model) label(r row) string {
 		return "Launch filter"
 	case rowExclude:
 		return "Excluded repositories"
+	case rowPin:
+		return "Pinned repositories"
 	case rowConfirmThreshold:
 		return "Confirmation threshold"
 	case rowBreakerFailures:
@@ -219,6 +223,11 @@ func (m Model) description(r row) string {
 		return "The Runs feed starts filtered by this. Same syntax as its / filter."
 	case rowExclude:
 		return "Kept out of discovery and never polled. Naming one with -R still works."
+	case rowPin:
+		// The description states what the code does and no more (#97): the promotion is to
+		// the medium tier, which is the cadence an on-screen repository already gets, and
+		// exclusion wins because it applies at discovery before any tier is chosen.
+		return "Polled as often as an on-screen one, even when scrolled away. Excluding wins."
 	case rowConfirmThreshold:
 		return "Deletions at or above this many make you type the count."
 	case rowBreakerFailures:

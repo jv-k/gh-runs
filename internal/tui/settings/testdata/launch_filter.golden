@@ -9,6 +9,7 @@
   Storage scope             [1;38;2;0;175;255mall-repos[m
 [1m> [m[1mLaunch filter             [m[1;38;2;0;175;255mbranch:main status:queued status:failure[m  [38;2;138;138;138m(enter to edit)[m
   Excluded repositories     [1;38;2;0;175;255mnone[m
+  Pinned repositories       [1;38;2;0;175;255mnone[m
   Confirmation threshold    [1;38;2;0;175;255m50[m
   Purge breaker threshold   [1;38;2;0;175;255m50[m
   Discovery refresh         [1;38;2;0;175;255m5 min[m

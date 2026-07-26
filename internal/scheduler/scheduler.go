@@ -198,9 +198,17 @@ type Scheduler struct {
 	mu       sync.Mutex
 	lastRuns map[string][]domain.Run // per repo: the Runs its last 200 carried, for the fast tier
 	viewport map[string]bool         // the Feed's current viewport, the medium tier (R5)
-	lastPoll map[string]time.Time    // per repo: the injected-clock instant of its last poll
-	inFlight map[string]bool         // per repo: a poll is out, so the next due tick is skipped (R18)
-	lastETag map[string]string       // per repo: the ETag its last 200 carried, to spot a 304 (R19)
+	// pinned is settings R7's pin list: repositories the operator promoted to the medium
+	// tier persistently, where the viewport promotes by scroll position (#97). It is the
+	// tier's second input and the only one whose size the terminal does not cap, which is
+	// why mediumSetInterval binds the tier to the secondary ceiling.
+	pinned map[string]bool
+	// mediumCount is |viewport union pinned|, the medium tier's membership, cached because
+	// the scheduling loop reads it per repository and both inputs change rarely.
+	mediumCount int
+	lastPoll    map[string]time.Time // per repo: the injected-clock instant of its last poll
+	inFlight    map[string]bool      // per repo: a poll is out, so the next due tick is skipped (R18)
+	lastETag    map[string]string    // per repo: the ETag its last 200 carried, to spot a 304 (R19)
 
 	// wfLists is each repository's Workflow list as the engine uses it, read once through
 	// the WorkflowLister and held for the process. An entry exists once the read has been
@@ -266,6 +274,7 @@ func New(opts Options) *Scheduler {
 		opts:     opts,
 		lastRuns: make(map[string][]domain.Run),
 		viewport: make(map[string]bool),
+		pinned:   make(map[string]bool),
 		lastPoll: make(map[string]time.Time),
 		inFlight: make(map[string]bool),
 		lastETag: make(map[string]string),
@@ -527,12 +536,56 @@ func (s *Scheduler) SetViewport(ids []domain.RepoID) {
 	}
 	s.mu.Lock()
 	s.viewport = next
+	s.recountMediumLocked()
 	s.mu.Unlock()
 	// A scroll can promote a repository from the slow tier to the medium tier, so wake
 	// the loop to adopt the new cadence now rather than at the next scheduling
 	// decision, which could be a full slow interval (30s) away while the loop sleeps.
 	// This is symmetric with the poll-driven tier change that wakes the loop (R8).
 	s.signalWake()
+}
+
+// SetPinned publishes settings R7's pin list: the repositories the operator promoted to
+// the medium tier persistently (#97). Where the viewport promotes by scroll position,
+// this promotes by stated intent, and the two are one tier with one interval.
+//
+// Calling it again adopts the new list live, exactly as the viewport and the poll set
+// are (R3, AC17): unpinning returns a repository to the tier it otherwise holds at the
+// next decision rather than stranding it in the medium tier. main.go publishes the
+// resolved config's list once before the first poll, which is the same shape the exclude
+// half has, so a pin edited in the Settings view reaches the file and takes effect at the
+// next launch. Wiring the view to republish is a change to the root's plumbing rather
+// than to this seam, which already accepts it.
+//
+// Pinning never resurrects an excluded repository. Exclusion is applied at discovery, so
+// an excluded repository is not in the poll set and nothing here can schedule it: a
+// repository named in both lists is excluded and the pin has no observable effect
+// (settings R7, AC14).
+func (s *Scheduler) SetPinned(ids []domain.RepoID) {
+	next := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		next[id.String()] = true
+	}
+	s.mu.Lock()
+	s.pinned = next
+	s.recountMediumLocked()
+	s.mu.Unlock()
+	// A pin promotes from the slow tier, so wake the loop for the same reason a scroll
+	// does: otherwise the new cadence waits out a full slow interval.
+	s.signalWake()
+}
+
+// recountMediumLocked recomputes the medium tier's membership, the union of the viewport
+// and the pin list. It is the size mediumSetInterval prices, so it is maintained where
+// the two inputs change rather than counted per repository in the scheduling loop.
+func (s *Scheduler) recountMediumLocked() {
+	n := len(s.viewport)
+	for key := range s.pinned {
+		if !s.viewport[key] {
+			n++
+		}
+	}
+	s.mediumCount = n
 }
 
 // PollSetChanged tells the engine its poll set may have changed, so it re-evaluates now

@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -60,23 +61,69 @@ func TestExcludeReadFromFile(t *testing.T) {
 	}
 }
 
-// TestPinKeyIsNotRecognised pins R7's pin half as deferred rather than half-built. The
-// key warns as an unrecognised setting and changes nothing, which is settings R11's
-// ruling applied here: a key with no subsystem behind it defers with the subsystem
-// rather than shipping inert, and R14 means a config carrying one still starts. Issue
-// #97 carries the pin, and R3 plus R14 mean adding the key later needs no migration.
-func TestPinKeyIsNotRecognised(t *testing.T) {
+// TestPinDefaultsToEmpty pins R3 and AC1 for R7's pin half: with no config file the list
+// is empty and cadence is exactly what it was, so the key costs nothing until it is used.
+func TestPinDefaultsToEmpty(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, "pin:\n  - jv-k/main-project\n")
 	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
 
-	_, diags := config.Load(env, config.Flags{})
+	cfg, diags := config.Load(env, config.Flags{})
 
-	if len(diags) != 1 || !strings.Contains(diags[0].Message, "pin") {
-		t.Fatalf("diagnostics = %v, want one naming the unrecognised pin key", diags)
+	if len(cfg.Pin) != 0 {
+		t.Errorf("Pin = %v, want empty with no config file", cfg.Pin)
 	}
-	if !strings.Contains(diags[0].Message, "unrecognised") {
-		t.Errorf("diagnostic %q is not the generic unknown-key message", diags[0].Message)
+	if len(diags) != 0 {
+		t.Errorf("an absent config produced diagnostics: %v", diags)
+	}
+}
+
+// TestPinReadFromFile pins R7's pin half now that it has a subsystem behind it (#97).
+// The key was deliberately unrecognised while nothing consumed it, on settings R11's
+// ruling that a key with no subsystem defers with the subsystem rather than shipping
+// inert. The scheduler now promotes a pinned repository to the medium tier, so the key
+// is a setting a person can write and observe, and it loads like R7's other list.
+func TestPinReadFromFile(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "pin:\n  - jv-k/main-project\n  - github.com/cli/cli\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, diags := config.Load(env, config.Flags{})
+
+	want := []domain.RepoID{
+		{Host: domain.HostGitHub, Owner: "jv-k", Name: "main-project"},
+		{Host: domain.HostGitHub, Owner: "cli", Name: "cli"},
+	}
+	if !reflect.DeepEqual(cfg.Pin, want) {
+		t.Errorf("Pin = %v, want %v", cfg.Pin, want)
+	}
+	if len(diags) != 0 {
+		t.Errorf("a well-formed pin list produced diagnostics: %v", diags)
+	}
+}
+
+// TestPinWrongTypeFallsBackToEmpty pins settings R14 for the pin key, the same rule its
+// sibling list follows: a value that is not a list falls that one setting back to an
+// empty list with a diagnostic naming it, the run does not fail, and the unrelated key
+// stands. A pin that silently failed would be worse than one that says so, because its
+// whole effect is a cadence nobody watches a clock to verify.
+func TestPinWrongTypeFallsBackToEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "pin: jv-k/main-project\nbudget: greedy\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, diags := config.Load(env, config.Flags{})
+
+	if len(cfg.Pin) != 0 {
+		t.Errorf("Pin = %v, want the empty default to stand", ids(cfg.Pin))
+	}
+	if len(diags) != 1 {
+		t.Fatalf("diagnostics = %v, want exactly one for the wrong-typed pin", diags)
+	}
+	if msg := diags[0].Message; !strings.Contains(msg, "pin") {
+		t.Errorf("diagnostic %q does not name the pin key", msg)
+	}
+	if cfg.Budget != config.TierGreedy {
+		t.Errorf("Budget = %q, want the valid sibling key kept", cfg.Budget)
 	}
 }
 

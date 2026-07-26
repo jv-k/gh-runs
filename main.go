@@ -299,6 +299,10 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 	// R9, live-run-feed R22). The Feed holds the same value from its first frame; this is the
 	// server-side half of one setting, and both halves read the resolved config.
 	sched.SetFilter(cfg.LaunchFilter)
+	// R7's pin list, published before the first poll for the same reason the launch filter
+	// is: a pinned repository should be on its promoted cadence from the opening tick rather
+	// than from whenever the list happens to reach the scheduler (settings R7, #97).
+	sched.SetPinned(cfg.Pin)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

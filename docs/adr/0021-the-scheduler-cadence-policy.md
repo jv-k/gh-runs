@@ -14,6 +14,31 @@ A repository is on screen while it has at least one row in the Feed's current vi
 
 The consequence is that scrolling changes tier assignments, so the Feed publishes its viewport's repositories to the scheduler. [ADR-0015](./0015-the-async-model.md)'s routing already carries size and data everywhere, and R3 already obliges the scheduler to adopt set changes live, so the mechanism exists.
 
+## Amendment: the medium tier is the viewport or a pin, and it is priced against the ceiling
+
+[settings](../features/settings/requirements.md) R7 makes repositories pinnable and requires that pinning prioritise one. Issue #97 asked what "prioritise" means in a tool where nothing was consumed for order, and the answer is this tier: a pinned repository is promoted to the medium tier and holds that cadence while off screen. The viewport says "I am looking at this now" and a pin says "I care about this one" persistently, so the two are one tier rather than a fourth.
+
+**The self-capping property does not survive the addition, so the tier is priced instead.** The viewport's cost is bounded by terminal height. A pin list is operator-authored and unbounded, so promoting it naively reintroduces exactly the cliff this section rejected the wider readings for: the whole set at 5s is 312 points/min at 26 repositories and unaffordable at 100.
+
+Rather than cap the list at a fresh constant, which this ADR disfavours, the medium tier's base interval is auto-scaled against the ~900 points/min secondary ceiling the ambient tier is already scaled against (R11).
+
+It is priced against the headroom the ambient tier leaves, not against the whole ceiling. R11 bounds projected consumption, not one tier's share of it, and a tier priced in isolation is not a bound: a poll set of 300 with 100 pinned would put the medium tier at its own 900 and the ambient tier at another 400 on top, each affordable alone and 1,300 together. The medium base therefore solves against what is left:
+
+| Poll set | Medium set | Ambient base | Medium base | Total projection |
+|---|---|---|---|---|
+| 26 | 10 on screen | 30s | 5s, unstretched | 152 points/min |
+| 26 | 26 | 30s | 5s, unstretched | 312 points/min |
+| 100 | 100 | 30s | 6.7s | ~900 points/min |
+| 300 | 100 | 30s | 12s | ~900 points/min |
+
+At reference scale the target holds and the whole-set row is this section's own 312 figure. At 100, the size this section called unaffordable, the base stretches and holds the schedule at the ceiling instead. Past that it degrades gradually rather than falling off a cliff, which is the property the viewport reading got from terminal height and this one gets from the budget.
+
+**The medium base never exceeds the ambient one.** A medium interval slower than the slow tier's would poll a pinned repository *less* often than an unpinned one, inverting R7's fastest-tier-wins and [settings](../features/settings/requirements.md) R7's "pinning MUST prioritise". Without the clamp that is reachable: at more than 450 promoted repositories the budgeted medium interval passes 30s. The two tiers converge instead, so a pin at that scale is worth nothing rather than worth less than nothing.
+
+**Exclusion still wins, and not by a precedence rule.** The two settings meet at different layers: exclusion is applied at discovery, so an excluded repository never enters the poll set, and a tier is only ever chosen for a repository the poll set carries. There is no order of operations in which a pin reaches a repository exclusion removed (settings R7, AC14).
+
+The fast tier is unchanged, so a pinned repository with a moving Run is fast-tier as any other would be (R7's fastest-tier-wins). Demotion is unchanged too: the pin promotes to the medium tier, and the medium tier demotes under pressure exactly as it did.
+
 ## The fast tier is progress, not incompleteness
 
 A repository qualifies for the fast tier when its recent Runs include at least one whose Status is `queued` or `in_progress`. The parked statuses, `waiting`, `requested` and `pending`, qualify it for nothing, and the repository polls at whatever tier it otherwise holds.
