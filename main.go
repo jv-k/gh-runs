@@ -500,7 +500,7 @@ func knownRepos(disc *discovery.Discovery) []domain.Repo {
 // accounted like every other. The reader is the same one the Workflows tab uses, because a
 // second decoder here would be a second place that knows the endpoint and its envelope. The
 // two consumers share the reader and not the list: the tab still fans out and holds its own
-// copy, which is what issue #93 proposes to fix by moving the reader to a neutral package,
+// copy, which is what issue #95 proposes to fix by moving the reader to a neutral package,
 // where the CLI's blocked -w NAME and workflowName consumers can reach it too.
 //
 // The engine takes a function over domain types and imports no tab, which keeps ADR-0011's
@@ -516,7 +516,7 @@ func knownRepos(disc *discovery.Discovery) []domain.Repo {
 // to no State for the session, and its Runs read as not-deleted, which is the answer a join
 // that finds nothing gives anywhere else. Refusing the whole list over a missing tail would
 // lose the Workflows that are on it, and re-reading it would fetch the same first page
-// forever. Paginating it is issue #93's, with the move.
+// forever. Paginating it is issue #95's, with the move.
 func (c clients) workflowLister() scheduler.WorkflowLister {
 	fetch := workflows.ClientFetch(c.shared)
 	return func(id domain.RepoID) ([]domain.Workflow, error) {
