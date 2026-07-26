@@ -141,11 +141,11 @@ func TestPopulatedLogBehavesIdentically(t *testing.T) {
 func TestCancellationStopsAndLeavesNoJobState(t *testing.T) {
 	h := newHarness(t, "delete_ok", 50, 50)
 	ctx, cancel := context.WithCancel(context.Background())
-	h.counting.onDelete = func(n int) {
+	h.counting.setOnDelete(func(n int) {
 		if n == 3 {
 			cancel() // cancel after the third DELETE lands
 		}
-	}
+	})
 	c := h.confirmed(t, ops.OpDelete, items("o", "r", 1, 2, 3, 4, 5, 6, 7, 8), snapshot(writableRepo("o", "r")))
 	sum := runPurgeCtx(t, h, ctx, c)
 

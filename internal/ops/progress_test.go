@@ -130,11 +130,11 @@ func TestStartedCancelStopsTheWalk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	h.counting.onDelete = func(n int) {
+	h.counting.setOnDelete(func(n int) {
 		if n == 3 {
 			st.Cancel() // the surface's cancel key, pressed after the third DELETE lands
 		}
-	}
+	})
 
 	got := drainProgress(t, h, st)
 	final := got[len(got)-1]
@@ -376,7 +376,7 @@ func blockedProgress(t *testing.T, h *harness, st ops.Started) (release func() [
 func firstRequest(h *harness) <-chan struct{} {
 	landed := make(chan struct{})
 	var once sync.Once
-	h.counting.onDelete = func(int) { once.Do(func() { close(landed) }) }
+	h.counting.setOnDelete(func(int) { once.Do(func() { close(landed) }) })
 	return landed
 }
 

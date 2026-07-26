@@ -51,7 +51,18 @@ type countingRT struct {
 	base     http.RoundTripper
 	mu       sync.Mutex
 	calls    []call
-	onDelete func(n int) // called after the nth DELETE completes on the wire
+	onDelete func(n int) // called after the nth DELETE completes on the wire, guarded by mu
+}
+
+// setOnDelete arms the after-the-nth-DELETE hook under the same lock RoundTrip reads it
+// through. The walk runs on the goroutine Start spawned and issues its requests from
+// there, so a plain field assignment is a write racing that goroutine's read: the cancel
+// test arms the hook after Start, because the handle it cancels does not exist until
+// Start returns.
+func (c *countingRT) setOnDelete(f func(n int)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onDelete = f
 }
 
 type call struct {
