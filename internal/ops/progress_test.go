@@ -412,9 +412,17 @@ func TestStartRefusesASecondOperationWhileOneRuns(t *testing.T) {
 		t.Errorf("the first operation ran to completion after being cancelled (%d DELETEs of 8)", h.counting.deletes())
 	}
 	// Once it is over, the gate is free and the second set may be launched.
-	if _, err := h.ops.Start(context.Background(), second); err != nil {
-		t.Errorf("the gate stayed held after the operation ended: %v", err)
+	reopened, err := h.ops.Start(context.Background(), second)
+	if err != nil {
+		t.Fatalf("the gate stayed held after the operation ended: %v", err)
 	}
+	// Stop and drain it. A walk left running outlives the test and keeps writing R29's
+	// log into the directory t.TempDir() is concurrently removing, which surfaces as
+	// "TempDir RemoveAll cleanup: directory not empty" in whichever test the runner
+	// happens to be cleaning up. That failed an unrelated pull request rather than this
+	// one, which is what makes a leaked goroutine worth closing rather than tolerating.
+	reopened.Cancel()
+	drainProgress(t, h, reopened)
 }
 
 // TestConcurrentDeletionsCannotBothHoldTheLog pins R29's record against splitting. Two
