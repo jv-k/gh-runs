@@ -351,16 +351,40 @@ func (m Model) contentWidth() int {
 	return m.width
 }
 
-// listCapacity is the number of merged-list rows the viewport shows, the height less the
-// summary, the rollup, the list header, the hint and the download status line when one is
-// showing. It floors at one so a tiny terminal still pages.
+// listCapacity is the number of merged-list rows the viewport shows: the height less every
+// line View paints around them. It floors at one so a tiny terminal still pages, which is
+// the one case where the frame is taller than the terminal and the root's own clamp is what
+// keeps it on screen.
 func (m Model) listCapacity() int {
-	chrome := 2 + m.rollupChrome() + 2 + m.statusChrome() // summary+blank, rollup, list header, hint(+blank), status
-	n := m.height - chrome
+	n := m.height - m.chromeLines()
 	if n < 1 {
 		return 1
 	}
 	return n
+}
+
+// chromeLines counts every line of the frame that is not a merged-list row, in the order
+// View appends them. It is derived from that composition rather than from a constant,
+// because an undercount here does not shrink the frame, it draws rows past the bottom of the
+// terminal and pushes the hint line naming the tab's keys off screen. That is what the
+// summary's incomplete label did: it is a second summary line under R2 and R3, and it was
+// counted as none.
+func (m Model) chromeLines() int {
+	chrome := m.summaryChrome() + m.rollupChrome()
+	chrome += 2 // the blank line before the list, and the list header
+	if m.hintLine() != "" {
+		chrome += 2 // the blank line before the hint, and the hint
+	}
+	return chrome + m.statusChrome()
+}
+
+// summaryChrome is the line count of the summary block: its one line of totals, plus the
+// incomplete label when the enumeration did not account for R1's figures (R2, R3).
+func (m Model) summaryChrome() int {
+	if m.incompleteLabel() != "" {
+		return 2
+	}
+	return 1
 }
 
 // statusChrome is the line the download status occupies, zero while there is none (R13).
