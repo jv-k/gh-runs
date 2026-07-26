@@ -504,17 +504,23 @@ func TestOneGoroutineCannotReleaseAnothersGate(t *testing.T) {
 		t.Fatalf("a third operation started while the second still held the gate (%v); one goroutine's release cleared another's, which orphans the second operation's cancel (R16)", err)
 	}
 
-	// Let the parked second walk finish, so no goroutine outlives the test.
+	// Let the parked second walk finish, so no goroutine outlives the test. The barrier is
+	// the stream's own close rather than a timer: the walk cannot reach it while parked in
+	// the pacer, so once the drain ends there are no further frames to service. A timer
+	// here would sleep through a real interval, which this package's seams exist to avoid,
+	// and would park the walk for the process lifetime on a loaded machine.
 	second.Cancel()
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		for range second.Progress {
 		}
 	}()
-	for i := 0; i < 4; i++ {
+	for {
 		select {
 		case <-pacer.hit:
 			pacer.resume <- struct{}{}
-		case <-time.After(time.Second):
+		case <-drained:
 			return
 		}
 	}
