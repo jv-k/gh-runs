@@ -30,12 +30,15 @@ import (
 // Outcome is where the operator has taken the confirmation. The opener reads it after
 // every key: Pending keeps the modal up, Aborted dismisses it having issued nothing,
 // and Confirmed hands back the Input the opener passes to ops.Confirm (purge AC6, AC7).
+// Escalated is run-lifecycle R6's chosen escalation from a cancel to a force-cancel: it
+// confirms nothing, and the opener re-prices the same frozen set for the harder verb.
 type Outcome int
 
 const (
 	Pending Outcome = iota
 	Confirmed
 	Aborted
+	Escalated
 )
 
 // Model is the pane's state: the Plan it renders, the friction-driven collection
@@ -146,11 +149,27 @@ func (m Model) handleModalKey(k tea.KeyPressMsg) Model {
 	case key.Matches(k, m.profile.ConfirmAbort): // n, esc
 		m.outcome = Aborted
 		return m
+	case m.offersEscalation() && key.Matches(k, m.profile.ForceCancel):
+		// run-lifecycle R5, R6, AC6: force-cancel is offered as the escalation the operator
+		// chooses, and this is where they choose it. It confirms nothing. The pane does not
+		// rewrite its own Plan, because a Plan is ops's to build and its friction is priced
+		// for the verb it was built for (ADR-0019); the opener re-prices the same frozen
+		// Items, so the escalation carries the friction rather than skipping it.
+		m.outcome = Escalated
+		return m
 	}
 	if m.plan.Friction() == ops.FrictionTypedCount {
 		return m.handleTypedCountKey(k)
 	}
 	return m.handleYNKey(k)
+}
+
+// offersEscalation reports whether this Plan may escalate to force-cancel, which is a
+// plain cancel and nothing else (run-lifecycle R6). A Purge has no escalation, a re-run
+// has none, and a force-cancel is already the escalation, so the key is inert on all
+// three and cannot pick up a second meaning on a destructive modal.
+func (m Model) offersEscalation() bool {
+	return m.plan.Operation() == ops.OpCancel
 }
 
 // handleYNKey is the below-threshold confirmation: y confirms, and Enter aborts on

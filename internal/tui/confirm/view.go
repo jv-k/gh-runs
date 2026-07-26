@@ -68,9 +68,28 @@ func (m Model) modalView() string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, m.promptLine())
+	if offer, ok := m.escalationLine(); ok {
+		lines = append(lines, offer)
+	}
 	lines = append(lines, "")
 	lines = append(lines, styleDim.Render(m.inspectHint()))
 	return strings.Join(lines, "\n")
+}
+
+// escalationLine is run-lifecycle R5 and R6's offer of force-cancel, shown on a cancel
+// modal alone. It states what the escalation is for, in the words R5 uses about a Run
+// that is not cancelable, and names the key from the registry so the modal advertises
+// exactly the binding the pane matches (R7a, AC18).
+//
+// It is an offer and never a substitution (R6). The operator presses the key, the opener
+// re-prices the same frozen set as a force-cancel, and the graduated confirmation runs
+// again in front of the harder verb.
+func (m Model) escalationLine() (string, bool) {
+	if !m.offersEscalation() {
+		return "", false
+	}
+	return styleDim.Render(indent + "A Run that is not cancelable needs force-cancel: press " +
+		m.profile.ForceCancel.Help().Key + " to escalate."), true
 }
 
 // headline is R6's count with the operation and the noun: "Delete 47 Runs across 3

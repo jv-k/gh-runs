@@ -129,3 +129,60 @@ func TestLifecycleKeysInertWithoutPlanner(t *testing.T) {
 		}
 	}
 }
+
+// TestCancelModalEscalatesToForceCancel is run-lifecycle R5, R6 and AC6 end to end at the
+// Feed: the force-cancel key inside a cancel modal re-prices the same frozen set for the
+// harder verb and puts the graduated confirmation back up in front of it. The escalation
+// is a choice the operator makes, never a substitution the tool makes for them (R6), so
+// nothing is issued until the new modal is answered.
+func TestCancelModalEscalatesToForceCancel(t *testing.T) {
+	m := newFeedWithOps(t)
+	m = m.Update2(press("down"))
+	m = m.Update2(press("space"))
+	m = m.Update2(press("c"))
+	if m.confirm.Plan().Operation() != ops.OpCancel {
+		t.Fatalf("the cancel key did not open a cancel confirmation")
+	}
+
+	m = m.Update2(press("C")) // escalate
+
+	if !m.confirmOpen {
+		t.Fatalf("escalating closed the modal; the harder verb still takes a confirmation (R6, R17)")
+	}
+	if got := m.confirm.Plan().Operation(); got != ops.OpForceCancel {
+		t.Errorf("the escalated modal's Plan operation = %q, want force-cancel (R6, AC6)", got)
+	}
+	if got := m.View(); !strings.Contains(got, "Force-cancel") {
+		t.Errorf("the escalated modal does not name force-cancel:\n%s", got)
+	}
+}
+
+// TestEscalationKeepsTheFrozenSet pins R16 across the escalation: the set froze when the
+// cancel modal opened, and Feed activity after that moment must not change it. So the
+// force-cancel is re-priced over the Items the cancel Plan already holds, never over a
+// fresh read of the selection, and a Run that arrived in between is not swept in.
+func TestEscalationKeepsTheFrozenSet(t *testing.T) {
+	m := newFeedWithOps(t)
+	m = m.Update2(press("down"))
+	m = m.Update2(press("space"))
+	m = m.Update2(press("c"))
+	frozen := m.confirm.Plan().Items()
+
+	// A poll lands while the modal is up, adding a Run and selecting nothing.
+	m = feedRuns(m, repoID("o", "r"),
+		mkRun(3, "o", "r", "CI", domain.StatusInProgress, "", t0.Add(time.Minute)),
+		mkRun(1, "o", "r", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0),
+		mkRun(2, "o", "r", "CI", domain.StatusCompleted, domain.ConclusionFailure, t0.Add(-time.Minute)),
+	)
+	m = m.Update2(press("C"))
+
+	got := m.confirm.Plan().Items()
+	if len(got) != len(frozen) {
+		t.Fatalf("the escalated set holds %d Items, want the %d the cancel froze (R16)", len(got), len(frozen))
+	}
+	for i := range got {
+		if got[i].ID != frozen[i].ID {
+			t.Errorf("the escalated set's Item %d is Run %d, want %d (R16)", i, got[i].ID, frozen[i].ID)
+		}
+	}
+}

@@ -769,8 +769,37 @@ func (m Model) handleConfirmKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.confirm = m.confirm.Close()
 		m.confirmOpen = false
 		return m, tea.Batch(cmd, m.launch(plan, in))
+	case confirm.Escalated:
+		return m.escalateToForceCancel(), cmd
 	}
 	return m, cmd
+}
+
+// escalateToForceCancel re-prices the cancel modal's frozen set as a force-cancel and
+// puts the confirmation back up over it (run-lifecycle R5, R6, AC6). It is the operator's
+// chosen escalation and never a substitution: a fresh Plan is built for the distinct
+// operation, its friction is priced for that operation, and the modal asks again.
+//
+// The set is the Items the cancel Plan already holds, never a fresh read of the selection.
+// R16 freezes the set when the confirm modal opens, and Feed activity after that moment
+// must not change it, so a poll landing while the modal was up cannot be swept into the
+// harder verb. ops.Plan re-stamps eligibility over the same repository snapshot, which is
+// right: the gate is the repository's, and the escalation does not inherit a stamp made
+// for another operation.
+//
+// A refused re-plan leaves the modal open on the cancel it was already showing, which is
+// the fail-closed reading: nothing was confirmed and nothing was issued.
+func (m Model) escalateToForceCancel() Model {
+	if m.planner == nil {
+		return m
+	}
+	plan, err := m.planner.Plan(ops.OpForceCancel, m.confirm.Plan().Items(), m.repoSnapshot())
+	if err != nil {
+		return m
+	}
+	m.confirm = m.confirm.Open(plan)
+	m.confirmOpen = true
+	return m
 }
 
 // launch runs the confirmed set and hands back the progress stream (ADR-0015: the
