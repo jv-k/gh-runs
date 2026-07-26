@@ -509,6 +509,22 @@ func (g *Governor) WriteRate() float64 {
 	return g.effectiveRateLocked()
 }
 
+// WriteCeiling reports R11's current dynamic write ceiling and R11's floor, both in
+// writes per second. The ceiling already subtracts the reads observed in the trailing
+// minute, so it is what a Purge could reach right now with the Feed polling beside it,
+// and it moves as the Feed's demand does.
+//
+// It is the pair purge R15's remaining-time range is computed between: the optimistic
+// end from the ceiling, and the pessimistic end from the observed rate clamped never
+// worse than the floor (AC23). Both ends therefore come from the governor's own bounds,
+// which is what makes the range always contain the truth rather than merely look wide.
+// This is an observation, like the Readout, and never a rate anything may set (R17).
+func (g *Governor) WriteCeiling() (ceiling, floor float64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.dynamicCeilingLocked(g.clk.Now()), rampFloor
+}
+
 func parseHeaderInt(v string) (int64, bool) {
 	if v == "" {
 		return 0, false

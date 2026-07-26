@@ -1,0 +1,71 @@
+---
+version: 2
+# R22's retry, in two passes over one tape. The first pass deletes Run 1 cleanly, and
+# Runs 2 and 3 fail for two DIFFERENT reasons, so the summary groups them into two
+# groups with a count each (AC18). The second pass is the retry: it re-attempts exactly
+# the two recorded failures, and only those, so a third pass over Run 1 has no tape and
+# a retry that re-attempted the whole set would fail the replay rather than pass quietly.
+# The retried DELETEs answer 204, which is the ordinary outcome of retrying a transient
+# failure and what makes the retry worth a keystroke.
+interactions:
+    # Pass 1, Run 1: a clean deletion.
+    - id: 0
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/1
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4990"]
+            X-Ratelimit-Reset: ["1789000000"]
+    # Pass 1, Run 2: an authorization 403 whose documentation_url points at this
+    # endpoint's own reference page, the measured authorization shape, so the governor
+    # classifies it as NOT a rate limit and it is a failure (R20).
+    - id: 1
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/2
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"Must have admin rights to Repository.","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#delete-a-workflow-run"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4989"]
+    # Pass 1, Run 3: a 5xx, a second and distinct failure reason (R20, AC18).
+    - id: 2
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/3
+      response:
+        status: 500 Internal Server Error
+        code: 500
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4988"]
+    # Pass 2, the retry: exactly the two recorded failures, in the order they were
+    # recorded, both clean this time.
+    - id: 3
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/2
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4987"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 4
+      request:
+        method: DELETE
+        url: https://api.github.com/repos/o/r/actions/runs/3
+      response:
+        status: 204 No Content
+        code: 204
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4986"]
+            X-Ratelimit-Reset: ["1789000000"]

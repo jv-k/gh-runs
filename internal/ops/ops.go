@@ -22,17 +22,33 @@ type Requester interface {
 	RequestWithContext(ctx context.Context, method, path string, body io.Reader) (*http.Response, error)
 }
 
+// Pacer reports the governor's current dynamic write ceiling and its floor, both in
+// writes per second (rate-governor R11). ops reads it to stamp the two bounds purge R15
+// computes its remaining-time range between, so the range is arithmetic on a frame the
+// surface already holds rather than a second seam every surface has to be handed
+// (AC23). *governor.Governor satisfies it.
+//
+// It is deliberately not the Budget Readout. The Readout is an observation about the
+// primary limit, which a Purge's writes do not spend (ADR-0007), and it is broadcast on
+// change: a float that moves with every read would turn that broadcast into a storm.
+type Pacer interface {
+	WriteCeiling() (ceiling, floor float64)
+}
+
 // Options carries ops's seams and its two configured numbers. main.go fills them:
 // the client is the store-then-governor-then-limiter chain, the clock is the
 // injected one (purge R27), LogPath is $XDG_STATE_HOME/gh-runs/deletions.log which
 // main.go resolves so ops owns no directory policy (ADR-0011, R29), and the two
 // thresholds are the values config already resolved and clamped (settings R12, R21).
+// Pacing is the governor itself, read for R15's remaining-time range; a nil one leaves
+// both bounds zero, which a surface reads as having no estimate to offer yet.
 type Options struct {
 	Client           Requester
 	Clock            clock.Clock
 	LogPath          string
 	ConfirmThreshold int
 	BreakerFailures  int
+	Pacing           Pacer
 }
 
 // logSink is the append-only deletion record Execute writes, narrowed to the two
@@ -56,6 +72,7 @@ type Ops struct {
 	logPath          string
 	confirmThreshold int
 	breakerFailures  int
+	pacer            Pacer
 
 	// openLog opens the deletion log. It is a field so a test can inject a failing
 	// sink; production wires the real append-only file. It is never a seam a caller
@@ -77,6 +94,7 @@ func New(opts Options) *Ops {
 		logPath:          opts.LogPath,
 		confirmThreshold: opts.ConfirmThreshold,
 		breakerFailures:  opts.BreakerFailures,
+		pacer:            opts.Pacing,
 		openLog: func(path string, c clock.Clock) (logSink, error) {
 			return openDeletionLog(path, c)
 		},

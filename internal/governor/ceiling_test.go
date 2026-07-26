@@ -37,3 +37,29 @@ func TestCeilingTracksReads(t *testing.T) {
 		t.Errorf("with no reads in flight the ceiling = %v, want the 2.5 cap (R11, AC2a)", got)
 	}
 }
+
+// TestWriteCeilingPublishesBothBounds pins the pair purge R15's remaining-time range is
+// computed between (AC23). The ceiling tracks the observed reads exactly as WriteRate's
+// clamp does, and the floor is R11's, published so a surface never has to compile a copy
+// of it. It is an observation, like the Readout: nothing sets a delete rate through it
+// (purge R17).
+func TestWriteCeilingPublishesBothBounds(t *testing.T) {
+	clk := baseClock()
+	g := governor.New(respondWith(http.StatusOK, 4811, baseUnix+3600, "{}"), clk)
+	getN(t, g, 312)
+
+	ceiling, floor := g.WriteCeiling()
+	if ceiling < 1.9 || ceiling > 2.0 {
+		t.Errorf("with 312 read points/min the published ceiling = %v, want ~1.96 = (900-312)/300 (R11)", ceiling)
+	}
+	if floor != 0.5 {
+		t.Errorf("the published floor = %v, want R11's 0.5/sec, the rate the pessimistic end is clamped at (AC23)", floor)
+	}
+
+	// The ceiling is dynamic: with the reads aged out of the trailing minute it rises to
+	// the cap, and the optimistic end of the range rises with it.
+	clk.Advance(61 * time.Second)
+	if ceiling, _ = g.WriteCeiling(); ceiling != 2.5 {
+		t.Errorf("with the reads aged out the published ceiling = %v, want the 2.5 cap (R11)", ceiling)
+	}
+}
