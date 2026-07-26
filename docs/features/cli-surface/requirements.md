@@ -92,6 +92,14 @@
 
 **R27.** `--all-repos` MUST work on `delete` with the same semantics as on `list`, so a cross-repository Purge is expressible non-interactively. The rails are the existing ones: `--yes` (R11), `--all` for match-all (R26), `--dry-run`'s per-repository rows (R10), and the deletion log ([purge](../purge/requirements.md) R29). The widest expressible command, `gh runs delete --all-repos --all --yes`, is three explicit opt-ins, and no default or working directory reaches it by accident.
 
+**R28.** The surface MUST offer `gh runs cancel` and `gh runs rerun`, the non-interactive form of [run-lifecycle](../run-lifecycle/requirements.md)'s four operations. `--force` selects force-cancel and `--failed` selects re-run failed Jobs, each a distinct operation against a distinct endpoint (that document's R6 and R13), and `--debug` is R14's opt-in. The spellings are gh's own on `gh run cancel --force` and `gh run rerun --failed --debug`, which [ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md) commits to mirroring.
+
+**R29.** Both commands MUST accept either positional Run IDs or R4's filter axes, and MUST refuse an invocation carrying both. Positional Run IDs name their targets, so the command MUST issue no crawl and MUST refuse a bare Run ID under fan-out, where it names no repository. A filter MUST resolve through the same crawl `delete` uses, so R20's one-code-path rule covers these verbs too.
+
+**R30.** R26's rule MUST extend to both commands: the zero filter matches every Run, so `gh runs cancel --yes` with no Run ID, no filter and no `--all` MUST fail with a usage diagnostic and issue no request. Cancelling every running Run in scope by omission is the same hazard R26 closes for deletion, and cancelled work cannot be recovered.
+
+**R31.** The confirmation these commands require MUST be the one the Plan priced, never a rule restated here. `--yes` MUST be required exactly when the friction [ADR-0019](../../adr/0019-ops-plan-and-confirmed.md) computes is above none, which makes a single `gh runs rerun <id>` need no flag ([run-lifecycle](../run-lifecycle/requirements.md) R18) and every cancel need one. One table stays authoritative, and a change to the pricing cannot leave this surface behind.
+
 ## Acceptance criteria
 
 **AC1: The TUI needs a TTY.** `gh runs` with no arguments, on a TTY, opens the TUI. The same command with stdout redirected to a file exits non-zero with a diagnostic and writes no escape sequences.

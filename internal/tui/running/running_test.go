@@ -704,3 +704,41 @@ func TestStoppedEarlyStatesWhyItStopped(t *testing.T) {
 		t.Errorf("the summary does not name the log as the reason it stopped (R29, AC20):\n%s", got)
 	}
 }
+
+// TestNotCancelableIsASkipNotAFailure pins run-lifecycle AC6 at the surface an operator
+// reads it on. A 409 from cancel means the Run is not cancelable, which R5 holds to be a
+// fact about the Run's Status rather than an error, so the pane must raise no failure over
+// it, must state the fact, and must name force-cancel as the escalation R6 permits.
+//
+// The distinction is the whole of AC6 and it is invisible in a count: skipped and failed
+// both mean "not cancelled", and only the labelled reason tells the operator that the Run
+// finished on its own rather than that the request went wrong. ops records the reason
+// (TestCancelMixedOutcomes pins that against a cassette); this pins that it reaches a frame.
+func TestNotCancelableIsASkipNotAFailure(t *testing.T) {
+	const reason = "run is not cancelable; escalate with force-cancel"
+	m := sized(running.New(keys.Standard), 100).
+		Start(started(ops.OpCancel, 2, func() {}))
+	m, _ = m.Update(ops.Progress{
+		Op:   ops.OpCancel,
+		Kind: ops.KindRun,
+		Sum: ops.Summary{
+			Total: 2, Acted: 1, Skipped: 1,
+			Skips: []ops.FailureGroup{{Reason: reason, Count: 1}},
+		},
+		Done: true,
+	})
+
+	got := plain(m.View())
+	if !strings.Contains(got, "skipped: "+reason) {
+		t.Errorf("the 409's reason is not reported under skips (R5, R20, AC6):\n%s", got)
+	}
+	if strings.Contains(got, "failed: "+reason) {
+		t.Errorf("the 409 was reported as a failure; R5 holds it to be a fact about the Run (AC6):\n%s", got)
+	}
+	// AC6: force-cancel is offered. The escalation is a key the operator already has (the
+	// Feed's force-cancel binding, and --force headless), so what this surface owes is
+	// naming it at the moment the 409 makes it the next move.
+	if !strings.Contains(got, "force-cancel") {
+		t.Errorf("the frame does not offer force-cancel after a 409 (R5, R6, AC6):\n%s", got)
+	}
+}
