@@ -303,8 +303,13 @@ func (m Model) filterLine() (string, bool) {
 	if q == "" {
 		return "", false
 	}
-	return styleDim.Render(fmt.Sprintf("filter %s  (%s edit, then %s clears)",
-		q, hint(m.profile.Filter), hint(m.profile.FilterCancel))), true
+	// A filter's values are not ours: an actor, a branch and a Workflow name are API data any
+	// author on a polled repository controls, so the line is sanitised like every run-derived
+	// cell. It is clamped for the same reason failedLine is, because chromeLineCount counts it
+	// as exactly one line and a commit SHA alone is 47 columns.
+	label := fmt.Sprintf("filter %s  (%s edit, then %s clears)",
+		q, hint(m.profile.Filter), hint(m.profile.FilterCancel))
+	return styleDim.Render(truncPad(textsan.Sanitize(label), m.width)), true
 }
 
 // headerLine is the column header, in the fixed order the rows follow.

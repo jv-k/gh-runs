@@ -19,7 +19,11 @@ import (
 // operator arrives at an empty Feed (workflow-management R13, AC4).
 func TestWorkflowFilterPollsTheWorkflowEndpoint(t *testing.T) {
 	a := gh("acme", "legacy")
-	h := newHarness(t, harnessConfig{base: openCassette(t, "workflow_endpoint"), pollSet: []domain.RepoID{a}})
+	h := newHarness(t, harnessConfig{
+		base:          openCassette(t, "workflow_endpoint"),
+		pollSet:       []domain.RepoID{a},
+		wireWorkflows: true,
+	})
 	h.s.SetFilter(filter.Filter{Workflow: "9004"})
 	h.start(t)
 
@@ -70,6 +74,41 @@ func TestWorkflowSelectorResolvesByName(t *testing.T) {
 	}
 	if n := h.counting.countPath("/actions/workflows?"); n != 1 {
 		t.Errorf("Workflow-list reads = %d, want exactly 1: the resolution rides the one read per repository the join already pays for", n)
+	}
+}
+
+// TestNumericSelectorReachesOnlyTheOwningRepository is the merged case, the one the tool
+// actually runs in: a Workflow id is repository-scoped, so exactly one repository in the poll
+// set can own it. Asking the others for it is a guaranteed 404 each, on every tier interval,
+// for as long as the filter is active, and each of those repositories would stop reporting
+// its own Runs and light the failed-poll indicator with nothing able to clear it.
+//
+// This is the spelling the Workflows tab's navigation sends, so a numeric selector must be
+// checked against the repository's Workflow list exactly as a name is, and fall back where it
+// is absent. Two repositories, because a one-repository poll set cannot see this at all.
+func TestNumericSelectorReachesOnlyTheOwningRepository(t *testing.T) {
+	owner, other := gh("acme", "legacy"), gh("acme", "other")
+	h := newHarness(t, harnessConfig{
+		base:          openCassette(t, "workflow_endpoint_merged"),
+		pollSet:       []domain.RepoID{owner, other},
+		wireWorkflows: true,
+	})
+	h.s.SetFilter(filter.Filter{Workflow: "9004"})
+	h.start(t)
+
+	h.waitUpdates(t, 2)
+
+	if n := h.counting.countPath("/acme/legacy/actions/workflows/9004/runs"); n != 1 {
+		t.Errorf("polls of the owning repository's Workflow listing = %d, want 1", n)
+	}
+	if n := h.counting.countPath("/acme/other/actions/workflows/9004/runs"); n != 0 {
+		t.Errorf("polls asking acme/other for a Workflow it does not own = %d, want 0: every one is a 404", n)
+	}
+	if n := h.counting.countPath("/acme/other/actions/runs"); n != 1 {
+		t.Errorf("polls of acme/other's own listing = %d, want 1: a repository without the Workflow keeps polling", n)
+	}
+	for _, f := range h.failures() {
+		t.Errorf("a repository reported a failed poll (%v: %v); the fallback exists so none does", f.Repo, f.Err)
 	}
 }
 

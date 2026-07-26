@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
 )
@@ -99,6 +101,53 @@ func TestNarrowedEmptyListSaysSo(t *testing.T) {
 	view := m.View()
 	if !strings.Contains(view, "No Runs match") {
 		t.Errorf("a filter matching nothing painted no explanation:\n%s", view)
+	}
+}
+
+// TestFilterLineIsClampedAndSanitised pins the two properties every chrome line carrying
+// text we did not author must have. It is counted as exactly one line by chromeLineCount, so
+// a wrap overruns the frame by a row: a commit SHA alone is 47 columns and a full filter
+// runs past 200 at a 100-column frame. And a Workflow name is API data any author on a
+// polled repository controls, so an escape sequence in one would rewrite the terminal.
+func TestFilterLineIsClampedAndSanitised(t *testing.T) {
+	m := newFeed(100, 12)
+	m = feedRuns(m, repoID("cli", "cli"), wfRun(1, "CI", 9001))
+
+	m = m.Update2(ShowRuns(filter.Filter{
+		Branch:   "release/2026-07-a-very-long-branch-name-somebody-really-pushed",
+		Commit:   "0123456789abcdef0123456789abcdef01234567",
+		Actor:    "a-long-handle-here",
+		Workflow: "a\x1b[31mred\x07",
+	}))
+
+	line, ok := m.filterLine()
+	if !ok {
+		t.Fatal("no filter line for an active filter")
+	}
+	if w := lipgloss.Width(line); w != 100 {
+		t.Errorf("filter line is %d columns at a 100-column frame, want exactly 100 (chromeLineCount counts it as one line)", w)
+	}
+	if strings.ContainsAny(line, "\x1b\x07") && strings.Contains(line, "\x1b[31m") {
+		t.Errorf("the filter line carries an unsanitised escape sequence: %q", line)
+	}
+}
+
+// TestShowRunsClosesADetailPaneWithNothingUnderIt pins that a narrowing that empties the
+// list takes the detail pane with it. The pane is opened over a row, so with no row it
+// refers to nothing: it would paint one Run's Jobs under a list saying nothing matches, and
+// a live Run would keep its ~3s refresh going for a row nobody can see (run-detail R13, R16).
+func TestShowRunsClosesADetailPaneWithNothingUnderIt(t *testing.T) {
+	m := feedWithDetail(120, 40)
+	m = feedRuns(m, repoID("cli", "cli"), wfRun(1, "CI", 9001))
+	m = m.Update2(press("enter")) // open the pane over the Run
+	if !m.detailOpen {
+		t.Fatal("setup: the detail pane did not open")
+	}
+
+	m = m.Update2(ShowRuns(filter.Filter{Workflow: "4242"}))
+
+	if m.detailOpen {
+		t.Error("the detail pane stayed open over a Run the filter removed from the list")
 	}
 }
 

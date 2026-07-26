@@ -126,8 +126,8 @@ func (s *Scheduler) poll(id domain.RepoID) {
 	// claimed match count R24 reads.
 	f := s.activeFilter()
 	query := f.Query()
-	path, filtered := s.runsResource(id, f, query)
-	resp, err := s.opts.Client.Request(http.MethodGet, path, nil)
+	resource, filtered := s.runsResource(id, f, query)
+	resp, err := s.opts.Client.Request(http.MethodGet, resource, nil)
 	if err != nil {
 		// Both failure shapes arrive here. A transport error carries no status. Every
 		// non-2xx also arrives here rather than on a response, because the RESTClient
@@ -233,18 +233,23 @@ func (s *Scheduler) poll(id domain.RepoID) {
 // the State empty, which reads as not-deleted, so the cost is a marker that does not light
 // and never one that lights wrongly.
 //
-// Reading it lazily, from the poll that has Runs to stamp, means a repository the operator
-// never sees Runs from costs nothing at all. A paused loop spawns no poll, so exhaustion
-// stops this read with everything else (R16).
+// It serves two readers from the one read: the State join above, and the resolution of a
+// Filter's raw Workflow selector to the id its endpoint needs (ADR-0016).
+//
+// **When it is read depends on which reader asks.** The join asks after the response, from
+// the poll that has Runs to stamp, so a repository the operator never sees Runs from costs
+// nothing. The selector resolution asks before the request, and asks for every repository in
+// the poll set while a Workflow filter is active, including repositories that would have
+// returned no Runs at all. That is the price of not asking a repository for a Workflow it
+// does not have (resolveWorkflow says what that costs), and the one read per repository
+// bounds it: a filter active for an hour costs the same as one active for a second. A paused
+// loop spawns no poll, so exhaustion stops this read with everything else (R16).
 //
 // It is called from the poll goroutine, which already holds the repository's single-flight
 // flag, so two reads of one repository never overlap and the wire bound stays the transport
 // limiter's (ADR-0018). A failure emits nothing: the poll itself succeeded, and a
 // RepoPollFailed here would report a repository whose Runs have just arrived as failing to
 // update.
-// It serves two readers, from the one read: the State join above, and the resolution of a
-// Filter's raw Workflow selector to the id its endpoint needs (ADR-0016). A selector that is
-// already numeric resolves without it and never triggers the read.
 func (s *Scheduler) workflowList(id domain.RepoID) workflowList {
 	key := id.String()
 	s.mu.Lock()
@@ -288,24 +293,34 @@ type workflowList struct {
 	ids    map[string]int64 // a Workflow's name, path and filename, each to its id
 }
 
-// resolveWorkflow turns a Filter's raw Workflow selector into the id its server-side listing
-// needs (ADR-0016: the field holds the raw selector, and the consumer holding the Workflow
-// list resolves it). A numeric selector is the id already, which is what the Workflows tab's
-// navigation sends and what costs nothing to resolve. A name or filename resolves through the
-// list the join already reads once per repository.
+// resolveWorkflow turns a Filter's raw Workflow selector into the id this repository's
+// server-side listing needs (ADR-0016: the field holds the raw selector, and the consumer
+// holding the Workflow list resolves it). A name or filename resolves through the list the
+// join already reads once per repository. A numeric selector is an id already, but it is
+// checked against the same list, because a Workflow id belongs to one repository.
 //
-// It reports false for a selector this repository has no Workflow for, which is the ordinary
-// case in a merged Feed: a name filter spans repositories that do not all have that Workflow.
-// The caller then polls the repository listing, where the client-side Match evicts every Run,
-// rather than stopping the repository's poll.
+// **Every resolution is against this repository's own list, whatever the spelling.** A merged
+// Feed polls every repository in the set under one Filter, and only one of them can own a
+// given Workflow. Trusting a numeric selector unchecked would ask each of the others for a
+// Workflow it does not have, which answers 404 on every tier interval for as long as the
+// filter is active: each repository would stop reporting its own Runs, and the Feed's
+// failed-poll indicator would name them with nothing able to clear it, because clearing it
+// takes an Update that can never arrive.
+//
+// So it reports false for a selector this repository has no Workflow for, which is the
+// ordinary case rather than the exception. The caller then polls the repository listing, where
+// the client-side Match evicts every Run, and the repository stays in the rotation. A
+// repository whose Workflow list could not be read resolves nothing and takes the same path.
 func (s *Scheduler) resolveWorkflow(id domain.RepoID, selector string) (int64, bool) {
 	if selector == "" {
 		return 0, false
 	}
+	list := s.workflowList(id)
 	if n, err := strconv.ParseInt(selector, 10, 64); err == nil {
-		return n, true
+		_, owned := list.states[n]
+		return n, owned
 	}
-	wfID, ok := s.workflowList(id).ids[selector]
+	wfID, ok := list.ids[selector]
 	return wfID, ok
 }
 
@@ -420,9 +435,16 @@ type apiRunsPage struct {
 // the only server-side form the axis has, because there is no workflow query parameter. Any
 // other filter rides the repository listing with Query()'s parameters.
 //
-// A Workflow listing is a filtered listing whatever else the Filter carries: its total_count
-// is that Workflow's whole match count, and the listing caps at 1,000 like every other
-// filtered one, which is exactly what R24's label must stay honest about.
+// A Workflow listing counts as filtered whatever else the Filter carries, so its total_count
+// travels back as the claimed count R24's label reads. That is what the number is: the
+// Workflow's whole match count, against a page that reaches a hundred of them, and a view
+// showing 100 rows of a 4,106-Run Workflow with nothing saying so would be the dishonest one.
+//
+// **Whether this endpoint caps at 1,000 is unmeasured.** The measured cap attaches to the
+// repository listing under the documented filter parameters (PRD), none of which a bare
+// Workflow poll sends, and the unfiltered repository listing reaches far past 1,000. The
+// label degrades safely either way, because it states reachable first and marks claimed
+// approximate. Treating it as capped is the assumption, not an observation.
 func (s *Scheduler) runsResource(id domain.RepoID, f filter.Filter, q url.Values) (string, bool) {
 	if wfID, ok := s.resolveWorkflow(id, f.Workflow); ok {
 		return workflowRunsPath(id, wfID, q), true
@@ -452,6 +474,14 @@ func workflowRunsPath(id domain.RepoID, wfID int64, q url.Values) string {
 // could have carried, which a client-side axis then filtered over. It is one request either
 // way: a 304 is free and unchanged by the count, and the cap R24 labels is the API's own
 // 1,000, well past a page.
+//
+// **It is not free per minute, because the tier reads the whole page.** hasLiveRun scans
+// every Run the page carried, so a Run stuck in queued or in_progress holds its repository at
+// the fast tier until newer Runs push it off the page, and there are now 100 of those rather
+// than 30. On a busy repository that is a longer residency at ~3s, which is the multiplier
+// polling-scheduler R11's budget table is most sensitive to. The trade is deliberate: a
+// window a third the size made every client-side axis search a third of the Runs, and the
+// stuck-Run case is bounded by the same page it always was.
 const pageSize = "100"
 
 // withPageSize returns q with the page size set, leaving the caller's values untouched: the

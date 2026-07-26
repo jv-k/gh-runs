@@ -802,6 +802,11 @@ func (m Model) retargetDetail() (Model, tea.Cmd) {
 	}
 	r, ok := m.cursorRun()
 	if !ok {
+		// The list is empty, so no row is under the cursor and the pane is open over a Run
+		// nothing on screen refers to. Leaving it up paints a Run's Jobs under a list that
+		// says nothing matches, and a live Run would keep its ~3s refresh going for a row
+		// the operator can no longer see (run-detail R13, R16).
+		m.detailOpen = false
 		return m, nil
 	}
 	repo, known := m.repoCapability(r)

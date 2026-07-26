@@ -1,13 +1,36 @@
 ---
 version: 2
 interactions:
+    # Interaction 0: the repository's Workflow list, the one read per repository the state
+    # join already pays for. Every selector resolves against it, a numeric one included,
+    # because a Workflow id belongs to one repository and the poll set holds many. The
+    # deleted Workflow is still listed, with state deleted, which is what makes its Orphaned
+    # Runs reachable.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/acme/legacy/actions/workflows?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        body: '{"total_count":2,"workflows":[{"id":9004,"name":"Old Pipeline","path":".github/workflows/old.yml","state":"deleted"},{"id":9002,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            Etag:
+                - '"legacy-workflows-v1"'
+            X-Ratelimit-Remaining:
+                - "5000"
     # A filter naming Workflow 9004 by its numeric id. The poll must reach the Workflow's own
     # Run listing, the only server-side form the Workflow axis has (ADR-0016), carrying the
     # same per_page the rest of the tool sends. total_count is the Workflow's whole match
     # count, far past what one page reaches, which is the claimed count R24's cap label reads.
     # The Runs are the deleted Workflow's Orphaned Runs: old, and unreachable from the newest
     # page of the repository listing, which is the case this endpoint exists to serve.
-    - id: 0
+    - id: 1
       request:
         method: GET
         url: https://api.github.com/repos/acme/legacy/actions/workflows/9004/runs?per_page=100
