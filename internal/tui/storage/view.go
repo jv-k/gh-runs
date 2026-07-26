@@ -39,9 +39,13 @@ var (
 	styleTombstone = lipgloss.NewStyle().Foreground(palette.Muted) // a Tombstone reclaims nothing (R9)
 	styleCache     = lipgloss.NewStyle().Foreground(palette.Selected)
 	styleArtifact  = lipgloss.NewStyle().Foreground(palette.Positive)
-	styleSelected  = lipgloss.NewStyle().Foreground(palette.Attention)
-	styleWarn      = lipgloss.NewStyle().Foreground(palette.Warn)
-	styleArchived  = lipgloss.NewStyle().Foreground(palette.Danger)
+	// styleSelected deliberately does not take palette.Selected: this tab paints its Cache
+	// rows in that role already, so a selection in it would be invisible. The role names the
+	// colour, never the row, and swapping this to palette.Selected is a behaviour change that
+	// the Storage golden will report as a diff rather than as the bug it is.
+	styleSelected = lipgloss.NewStyle().Foreground(palette.Attention)
+	styleWarn     = lipgloss.NewStyle().Foreground(palette.Warn)
+	styleArchived = lipgloss.NewStyle().Foreground(palette.Danger)
 )
 
 // View renders the tab from held state alone, with no live terminal and no network (R25).

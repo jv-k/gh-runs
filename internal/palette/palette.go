@@ -55,8 +55,11 @@ func (a Appearance) String() string {
 var current atomic.Int32
 
 // Use switches the ambient appearance and returns the restore for the previous one, so a
-// caller that only needs it for a frame cannot leak it. main.go and the root model call it
-// on startup, on the terminal's background answer, and on a theme change.
+// caller that only needs it for a frame cannot leak it. The root model is the only
+// production caller: it applies the theme as it is constructed, again when the terminal
+// answers with its background, and again when the operator changes the setting. main.go
+// resolves the colour profile and deliberately leaves the appearance to the root, because
+// the theme the running Settings view holds is the authority (settings R17).
 func Use(a Appearance) (restore func()) {
 	prev := current.Swap(int32(a))
 	return func() { current.Store(prev) }
@@ -113,6 +116,10 @@ func pair(dark, light string) Colour {
 //
 // Meaning never rides on colour alone (R16), so none of these carries a distinction that
 // its text label does not also carry. They exist to make a frame readable, not to encode.
+//
+// Four light values sit below WCAG AA's 4.5:1 on white, Failing worst at 3.80:1, measured
+// and tracked in issue #93. A role added here should beat that line rather than match these.
+// The dark values must not move: every golden in the tree is taken under them.
 var (
 	// Muted is secondary text: help lines, column rules, a completed or cancelled state.
 	Muted = pair("#8a8a8a", "#6c6c6c")

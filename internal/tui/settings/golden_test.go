@@ -17,6 +17,11 @@ import (
 // environment, so these bytes are stable on any machine (ADR-0013). One of them is AC12's
 // absence assertion, made byte-exact here and by name in TestRejectedSettingsNeverAppear.
 // Regenerate with: go test ./internal/tui/settings/ -run Golden -update.
+//
+// **No test in this package may take t.Parallel.** The palette's appearance is ambient
+// (ADR-0011), so every golden but the light one is taken under the default dark set, and a
+// parallel test holding Light would paint another test's frame in the wrong palette. The
+// failure is a golden diff of colour bytes with nothing in it to say why.
 
 // TestGoldenDefaultView fixes the view a fresh install shows: every setting at its default,
 // the Budget row focused, the discovery refresh row present (AC12), and no row for any of
@@ -42,7 +47,10 @@ func TestGoldenThemeFocused(t *testing.T) {
 // under the dark palette, the default, so this one is where the light set is pinned: the
 // text and the layout are the dark golden's, and every colour differs.
 func TestGoldenLightPalette(t *testing.T) {
-	defer palette.Use(palette.Light)()
+	// The default is left behind rather than restored, so a stray appearance stops here
+	// rather than walking forward into the next test.
+	defer palette.Use(palette.Dark)
+	palette.Use(palette.Light)
 
 	m := settings.New(keys.Standard, defaultConfig(), nil).Open()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})

@@ -16,6 +16,13 @@ import (
 // The root owns the palette because it owns the Settings pane and it is the only model the
 // terminal answers (ADR-0011). These pin settings R6's auto member: the palette follows the
 // terminal background where the theme says auto, and is fixed where it says dark or light.
+//
+// The appearance is ambient, so every test here leaves the package default behind rather
+// than restoring whatever it found: restoring the previous value would walk a stray
+// appearance from an earlier test forward into the next one instead of stopping it. None of
+// these may take t.Parallel for the same reason, and neither may a golden anywhere in the
+// tree, because two tests holding different appearances at once would paint one frame in
+// the other's palette with no clue in the diff as to why.
 
 // white and black stand in for what a terminal reports for its background.
 var (
@@ -67,7 +74,7 @@ func TestRootAsksTheTerminalForItsBackground(t *testing.T) {
 // TestAutoFollowsTheTerminalBackground pins R6's auto member: the terminal answers, and the
 // palette follows it, as gh does.
 func TestAutoFollowsTheTerminalBackground(t *testing.T) {
-	defer palette.Use(palette.Dark)()
+	defer palette.Use(palette.Dark)
 
 	m := New(Options{Profile: keys.Standard, Config: themedConfig(config.ThemeAuto)})
 	m = step(t, m, tea.BackgroundColorMsg{Color: white})
@@ -84,15 +91,21 @@ func TestAutoFollowsTheTerminalBackground(t *testing.T) {
 // TestExplicitThemeIgnoresTheBackground pins the other half of R6: dark and light state the
 // palette outright, so what the terminal reports does not move them.
 func TestExplicitThemeIgnoresTheBackground(t *testing.T) {
-	defer palette.Use(palette.Dark)()
+	defer palette.Use(palette.Dark)
 
+	// Each half forces the appearance it must not end at after construction has applied the
+	// theme, so the assertion is earned by the message handler rather than by the constructor
+	// that ran before it. A handler that ignored the theme, or did nothing at all, leaves the
+	// forced value in place and fails.
 	dark := New(Options{Profile: keys.Standard, Config: themedConfig(config.ThemeDark)})
+	palette.Use(palette.Light)
 	step(t, dark, tea.BackgroundColorMsg{Color: white})
 	if got := palette.Current(); got != palette.Dark {
 		t.Errorf("theme dark on a light terminal resolved to %v, want dark (R6)", got)
 	}
 
 	light := New(Options{Profile: keys.Standard, Config: themedConfig(config.ThemeLight)})
+	palette.Use(palette.Dark)
 	step(t, light, tea.BackgroundColorMsg{Color: black})
 	if got := palette.Current(); got != palette.Light {
 		t.Errorf("theme light on a dark terminal resolved to %v, want light (R6)", got)
@@ -104,7 +117,7 @@ func TestExplicitThemeIgnoresTheBackground(t *testing.T) {
 // than at the next launch. It is the second setting that applies live, after the keybinding
 // profile.
 func TestThemeChangeAppliesImmediately(t *testing.T) {
-	defer palette.Use(palette.Dark)()
+	defer palette.Use(palette.Dark)
 
 	m := New(Options{Profile: keys.Standard, Config: themedConfig(config.ThemeAuto)})
 	m = step(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
