@@ -184,8 +184,9 @@ func timeAgoFunc(now time.Time, input string) (string, error) {
 // timeAgo is gh's bucketing and gh's wording, boundary for boundary: minutes below an
 // hour, hours below a day, days below thirty days, months below a year, years above it.
 // Each bucket truncates rather than rounds, and the unit is pluralised only when the
-// count is not one. The table's terse age() renderer is deliberately a separate
-// function with separate wording (ADR-0023): one clock, two renderers.
+// count is not one. The table's terse renderer is deliberately separate, with its own
+// wording, and lives in timefmt because the Feed's relative timestamp format shares it
+// ([settings] R10). ADR-0023's reading is unchanged: one clock, and a renderer per density.
 func timeAgo(ago time.Duration) string {
 	switch {
 	case ago < time.Minute:

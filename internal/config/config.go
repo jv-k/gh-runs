@@ -224,14 +224,50 @@ func themeList() string {
 	return strings.Join(names, ", ")
 }
 
-// Tiers, KeybindingProfiles, Scopes and Themes return the valid values of each selector
-// setting in the order the diagnostics list them, exported so the Settings view offers
-// exactly the set Load validates against and cycles it in a documented order. Each
+// TimestampFormat selects how a Run's instant is rendered. There are exactly two:
+// absolute states the instant itself, and relative states its age (settings R10). It is a
+// two-way switch and never a format string, so no strftime-style spelling is admitted.
+type TimestampFormat string
+
+const (
+	TimestampAbsolute TimestampFormat = "absolute"
+	TimestampRelative TimestampFormat = "relative"
+)
+
+// timestampFormats is the valid set, the single source for validation and the diagnostic
+// that lists the valid values (R10, R14). absolute leads because it is the default:
+// live-run-feed R4a sizes the run_started_at column to the absolute instant as its
+// reference rendering and makes the relative form narrower, never wider.
+var timestampFormats = []TimestampFormat{TimestampAbsolute, TimestampRelative}
+
+// valid reports whether f is one of the two recognised formats.
+func (f TimestampFormat) valid() bool {
+	for _, v := range timestampFormats {
+		if f == v {
+			return true
+		}
+	}
+	return false
+}
+
+// timestampList renders the valid formats for a diagnostic (R14).
+func timestampList() string {
+	names := make([]string, len(timestampFormats))
+	for i, f := range timestampFormats {
+		names[i] = string(f)
+	}
+	return strings.Join(names, ", ")
+}
+
+// Tiers, KeybindingProfiles, Scopes, Themes and TimestampFormats return the valid values of
+// each selector setting in the order the diagnostics list them, exported so the Settings view
+// offers exactly the set Load validates against and cycles it in a documented order. Each
 // returns a copy, so a caller cannot reorder or extend the registry the loader reads.
 func Tiers() []Tier                           { return append([]Tier(nil), tiers...) }
 func KeybindingProfiles() []KeybindingProfile { return append([]KeybindingProfile(nil), profiles...) }
 func Scopes() []Scope                         { return append([]Scope(nil), scopes...) }
 func Themes() []Theme                         { return append([]Theme(nil), themes...) }
+func TimestampFormats() []TimestampFormat     { return append([]TimestampFormat(nil), timestampFormats...) }
 
 // Config is the resolved settings the rest of the tool reads.
 type Config struct {
@@ -256,6 +292,10 @@ type Config struct {
 	// An unrecognised theme is rejected and the default stands. It never reaches whether
 	// colour is emitted at all, which is NO_COLOR's to decide (R15, ColorProfile).
 	Theme Theme
+	// Timestamp selects how the Feed renders a Run's instant: absolute or relative,
+	// defaulting to absolute (settings R10). An unrecognised value is rejected and the
+	// default stands.
+	Timestamp TimestampFormat
 	// WorkflowsScope and StorageScope are the two tabs' independent repository scopes
 	// (settings R19). Each is all-repos or this-repo, defaults to all-repos, and is
 	// settable without disturbing the other. An unrecognised value is rejected and the
@@ -304,6 +344,7 @@ func Load(env Env, flags Flags) (Config, []Diagnostic) {
 		DiscoveryRefreshMinutes: discoveryRefreshDefault,
 		KeybindingProfile:       KeybindingStandard,
 		Theme:                   ThemeAuto,
+		Timestamp:               TimestampAbsolute,
 		WorkflowsScope:          ScopeAllRepos,
 		StorageScope:            ScopeAllRepos,
 	}
@@ -432,6 +473,19 @@ func resolveFile(cfg Config, data []byte, diags []Diagnostic) (Config, []Diagnos
 				diags = append(diags, Diagnostic{Message: fmt.Sprintf(
 					"theme: %q is not a valid theme; using %q. Valid themes: %s",
 					string(t), ThemeAuto, themeList())})
+			}
+		case "timestamp":
+			var f TimestampFormat
+			if node.Decode(&f) != nil {
+				diags = append(diags, typeErr(key, "one of "+timestampList(), node))
+			} else if f.valid() {
+				cfg.Timestamp = f
+			} else {
+				// R10 is a two-way switch rather than a format string, so anything outside
+				// the pair is rejected and the message names both (R10, R14).
+				diags = append(diags, Diagnostic{Message: fmt.Sprintf(
+					"timestamp: %q is not a valid timestamp format; using %q. Valid formats: %s",
+					string(f), TimestampAbsolute, timestampList())})
 			}
 		case "workflows_scope":
 			cfg.WorkflowsScope, diags = resolveScope(key, node, cfg.WorkflowsScope, diags)
@@ -685,6 +739,7 @@ func changedKeys(prev, next Config) []change {
 	add(prev.DiscoveryRefreshMinutes != next.DiscoveryRefreshMinutes, "discovery_refresh_minutes", next.DiscoveryRefreshMinutes)
 	add(prev.KeybindingProfile != next.KeybindingProfile, "keybinding_profile", string(next.KeybindingProfile))
 	add(prev.Theme != next.Theme, "theme", string(next.Theme))
+	add(prev.Timestamp != next.Timestamp, "timestamp", string(next.Timestamp))
 	add(prev.WorkflowsScope != next.WorkflowsScope, "workflows_scope", string(next.WorkflowsScope))
 	add(prev.StorageScope != next.StorageScope, "storage_scope", string(next.StorageScope))
 	// R7's exclude list is written as a sequence of the bare OWNER/REPO spelling, the

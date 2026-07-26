@@ -139,6 +139,8 @@ func (m Model) rawValue(r row) string {
 		return string(m.cfg.KeybindingProfile)
 	case rowTheme:
 		return string(m.cfg.Theme)
+	case rowTimestamp:
+		return string(m.cfg.Timestamp)
 	case rowWorkflowsScope:
 		return string(m.cfg.WorkflowsScope)
 	case rowStorageScope:
@@ -168,6 +170,8 @@ func (m Model) label(r row) string {
 		return "Keybinding profile"
 	case rowTheme:
 		return "Theme"
+	case rowTimestamp:
+		return "Timestamps"
 	case rowWorkflowsScope:
 		return "Workflows scope"
 	case rowStorageScope:
@@ -198,6 +202,8 @@ func (m Model) description(r row) string {
 		return "Motion keys: Vim (k/j) or Standard (arrows)."
 	case rowTheme:
 		return "Palette: auto follows your terminal background. NO_COLOR overrides all three."
+	case rowTimestamp:
+		return "When a run started: the instant itself, or how long ago it was."
 	// Both scope rows say "starts" for the reason R9's launch filter does, and it is the
 	// requirement rather than a hedge: each tab chooses its scope at construction, because
 	// narrowing it also means dropping the held state, so a toggle takes effect at the next
@@ -234,6 +240,8 @@ func (m Model) optionsHint(r row) string {
 		return joinProfiles(config.KeybindingProfiles())
 	case rowTheme:
 		return joinThemes(config.Themes())
+	case rowTimestamp:
+		return joinTimestampFormats(config.TimestampFormats())
 	case rowWorkflowsScope, rowStorageScope:
 		return joinScopes(config.Scopes())
 	default:
@@ -384,6 +392,14 @@ func joinThemes(ts []config.Theme) string {
 	out := make([]string, len(ts))
 	for i, t := range ts {
 		out[i] = string(t)
+	}
+	return strings.Join(out, " / ")
+}
+
+func joinTimestampFormats(fs []config.TimestampFormat) string {
+	out := make([]string, len(fs))
+	for i, f := range fs {
+		out[i] = string(f)
 	}
 	return strings.Join(out, " / ")
 }

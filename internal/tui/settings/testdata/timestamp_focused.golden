@@ -3,8 +3,8 @@
 
   Budget                    [1;38;2;0;175;255mnormal[m
   Keybinding profile        [1;38;2;0;175;255mstandard[m
-[1m> [m[1mTheme                     [m[1;38;2;0;175;255mauto[m  [38;2;138;138;138m(auto / dark / light)[m
-  Timestamps                [1;38;2;0;175;255mabsolute[m
+  Theme                     [1;38;2;0;175;255mauto[m
+[1m> [m[1mTimestamps                [m[1;38;2;0;175;255mabsolute[m  [38;2;138;138;138m(absolute / relative)[m
   Workflows scope           [1;38;2;0;175;255mall-repos[m
   Storage scope             [1;38;2;0;175;255mall-repos[m
   Launch filter             [1;38;2;0;175;255mnone[m
@@ -13,5 +13,5 @@
   Purge breaker threshold   [1;38;2;0;175;255m50[m
   Discovery refresh         [1;38;2;0;175;255m5 min[m
 
-[38;2;138;138;138mPalette: auto follows your terminal background. NO_COLOR overrides all three.[m
+[38;2;138;138;138mWhen a run started: the instant itself, or how long ago it was.[m
 [38;2;138;138;138m↑/↓ move   space change   esc close[m

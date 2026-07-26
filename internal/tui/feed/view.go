@@ -12,6 +12,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/palette"
 	"github.com/jv-k/gh-runs/v2/internal/textsan"
+	"github.com/jv-k/gh-runs/v2/internal/timefmt"
 )
 
 // The Feed's column geometry (R4a). A fixed gutter leads the row, four columns are fixed
@@ -383,7 +384,7 @@ func (m Model) renderRow(r domain.Run, isCursor, isSelected bool) string {
 	statusCell := decorate(statusStyle(r.Status)).Render(truncPad(textsan.Sanitize(string(r.Status)), statusW))
 	conclusionCell := decorate(conclusionStyle(r.Conclusion)).Render(truncPad(textsan.Sanitize(conclusionText(r)), conclusionW))
 	runIDCell := decorate(lipgloss.NewStyle()).Render(truncPad(strconv.FormatInt(r.ID, 10), runIDW))
-	startedCell := decorate(lipgloss.NewStyle()).Render(truncPad(formatStarted(r), startedW))
+	startedCell := decorate(lipgloss.NewStyle()).Render(truncPad(m.formatStarted(r), startedW))
 
 	// The gutter says a cancel or force-cancel was accepted for this Run and no poll has
 	// observed the transition yet (R4, AC5). It is deliberately not a Conclusion and not a
@@ -479,12 +480,21 @@ func workflowLabel(r domain.Run) string {
 	return r.Name
 }
 
-// formatStarted renders the sort key as the measured 20-character instant (R4a). A zero
-// time renders empty rather than the epoch.
-func formatStarted(r domain.Run) string {
+// formatStarted renders the sort key in the configured format ([settings] R10): the
+// measured 20-character instant by default, or its age under the relative form, which R4a
+// requires to be narrower and never wider. A zero time renders empty rather than the epoch.
+//
+// Relative needs a clock, and without one it renders absolute rather than reading the wall
+// clock here. A golden builds this model with no clock (R36: held state alone), and a
+// renderer that reached for time.Now to cover the gap would make every frame it paints a
+// function of when the suite ran.
+func (m Model) formatStarted(r domain.Run) string {
 	t := r.EffectiveStart()
 	if t.IsZero() {
 		return ""
+	}
+	if m.timestamp == TimestampRelative && m.clk != nil {
+		return timefmt.Age(m.clk.Now(), t)
 	}
 	return t.UTC().Format(startedLayout)
 }

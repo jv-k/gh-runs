@@ -26,6 +26,7 @@ func defaultConfig() config.Config {
 		DiscoveryRefreshMinutes: 5,
 		KeybindingProfile:       config.KeybindingStandard,
 		Theme:                   config.ThemeAuto,
+		Timestamp:               config.TimestampAbsolute,
 		WorkflowsScope:          config.ScopeAllRepos,
 		StorageScope:            config.ScopeAllRepos,
 	}
@@ -232,6 +233,30 @@ func TestCyclesTheme(t *testing.T) {
 	}
 }
 
+// TestCyclesTimestampFormat pins settings R10 and R17: the timestamp selector cycles
+// through exactly the two members config validates, wraps, and persists each change. It is
+// a two-way switch, so one press reaches the other member and the next returns.
+func TestCyclesTimestampFormat(t *testing.T) {
+	r := &recorder{}
+	m := focus(t, open(r), "timestamp")
+
+	if m.Config().Timestamp != config.TimestampAbsolute {
+		t.Fatalf("Timestamp = %q, want the default %q", m.Config().Timestamp, config.TimestampAbsolute)
+	}
+	for _, want := range []config.TimestampFormat{config.TimestampRelative, config.TimestampAbsolute} {
+		m = send(m, "space")
+		if m.Config().Timestamp != want {
+			t.Fatalf("Timestamp = %q, want %q after a cycle", m.Config().Timestamp, want)
+		}
+		if len(r.saved) == 0 || r.last().Timestamp != want {
+			t.Fatalf("cycling the timestamp format to %q did not persist it (R17)", want)
+		}
+	}
+	if m.Config().Theme != config.ThemeAuto {
+		t.Errorf("cycling the timestamp format disturbed another setting: %+v", m.Config())
+	}
+}
+
 // TestThemeEditWritesOnlyThatKey pins settings AC11 through the real persister rather than
 // the recorder: cycling the theme in the view and leaving writes theme and nothing else,
 // with unrelated comments, key order and unknown keys intact in the file.
@@ -293,6 +318,18 @@ func TestThemeRowIsRendered(t *testing.T) {
 	for _, want := range []string{"theme", "auto", "dark", "light"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the Settings view does not render %q on the theme row (R6, AC12):\n%s", want, view)
+		}
+	}
+}
+
+// TestTimestampRowIsRendered pins settings R10, R17 and AC12: the view carries a timestamp
+// row showing the format in force and, when focused, the pair it switches between, so the
+// Settings view and the config file are the same settings.
+func TestTimestampRowIsRendered(t *testing.T) {
+	view := strings.ToLower(focus(t, open(&recorder{}), "timestamp").View())
+	for _, want := range []string{"timestamp", "absolute", "relative"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the Settings view does not render %q on the timestamp row (R10, AC12):\n%s", want, view)
 		}
 	}
 }

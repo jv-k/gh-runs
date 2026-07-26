@@ -88,6 +88,20 @@ type RevalidatedAt time.Time
 // seam as an unowned string.
 type ShowRuns filter.Filter
 
+// TimestampFormat is how the STARTED column renders a Run's instant ([settings] R10). There
+// are exactly two: absolute states the instant itself and relative states its age. The zero
+// value reads as absolute and renderRow resolves it, so a caller that states no format gets
+// the default R10 fixes, which is also the rendering live-run-feed R4a sizes the column to.
+//
+// It is the Feed's own vocabulary rather than the config type, because a tab may not import
+// config: the root converts, exactly as it does for the two tab scopes (ADR-0011).
+type TimestampFormat string
+
+const (
+	TimestampAbsolute TimestampFormat = "absolute"
+	TimestampRelative TimestampFormat = "relative"
+)
+
 // Options carries the Feed's construction seams. The root fills them: the profile is
 // the resolved keybinding set (R7a), and SetViewport publishes the visible
 // repositories to the scheduler's medium tier (R5, ADR-0021), nil in a golden test.
@@ -107,7 +121,12 @@ type Options struct {
 	// filter, which matches every Run and is the default (R3). Nothing else applies it: the
 	// composition root publishes the same value to the scheduler before the first poll, so
 	// the opening listing is the filtered one rather than a narrowing of an unfiltered page.
-	Filter      filter.Filter
+	Filter filter.Filter
+	// Timestamp is how the STARTED column renders a Run's instant ([settings] R10). The
+	// zero value reads as absolute, the default, so a caller that states no format gets the
+	// rendering live-run-feed R4a sizes the column to. The relative form needs Clock, and
+	// falls back to absolute without one rather than reading a clock of its own.
+	Timestamp   TimestampFormat
 	DetailFetch rundetail.Fetch
 	Clock       clock.Clock
 	// Ops freezes the selection into a Plan when the delete key opens the confirmation
@@ -138,7 +157,14 @@ type Model struct {
 
 	profile     keys.Profile
 	setViewport func([]domain.RepoID)
-	setFilter   func(filter.Filter) // publishes the active filter to the scheduler (R22)
+
+	// timestamp is the STARTED column's rendering and clk is what the relative form measures
+	// an age from ([settings] R10). The clock is the same one the detail pane takes, injected
+	// once by the root, so the two panes can never disagree about what time it is.
+	timestamp TimestampFormat
+	clk       clock.Clock
+
+	setFilter func(filter.Filter) // publishes the active filter to the scheduler (R22)
 
 	// live is each repository's latest Runs, keyed by RepoID.String() and replaced
 	// wholesale as its RunsFetched arrives (ADR-0015).
@@ -293,6 +319,8 @@ func New(opts Options) Model {
 	return Model{
 		active:          true,
 		profile:         opts.Profile,
+		timestamp:       opts.Timestamp,
+		clk:             opts.Clock,
 		setViewport:     opts.SetViewport,
 		setFilter:       opts.SetFilter,
 		filter:          opts.Filter,

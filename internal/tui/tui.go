@@ -252,7 +252,12 @@ func New(opts Options) Model {
 		// The Feed opens on the settings' launch filter (settings R9, AC3), which is already
 		// resolved: config.Load applied the flag over the file over the default before this
 		// value reached the root. There is no second precedence here, and there must not be.
-		Filter:        opts.Config.LaunchFilter,
+		Filter: opts.Config.LaunchFilter,
+		// The STARTED column's rendering is the loaded setting (settings R10), converted here
+		// because a tab carries its own vocabulary rather than importing config, exactly as the
+		// two tab scopes are converted for their tabs (ADR-0011). The relative form measures an
+		// age from the clock below, which is the same one the detail pane takes.
+		Timestamp:     feed.TimestampFormat(opts.Config.Timestamp),
 		DetailFetch:   opts.DetailFetch,
 		Clock:         opts.Clock,
 		Ops:           opts.Ops,

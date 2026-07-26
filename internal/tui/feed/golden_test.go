@@ -46,6 +46,21 @@ func TestGoldenRowRendering(t *testing.T) {
 	goldie.New(t).Assert(t, "row_rendering", []byte(m.View()))
 }
 
+// TestGoldenRelativeTimestamps fixes [settings] R10's opt-in rendering: the same two rows
+// TestGoldenRowRendering paints, with the STARTED column carrying each Run's age instead of
+// its instant. It is the golden that proves R4a's "narrower, never wider", because the
+// column keeps its measured 20 and the ages sit inside it.
+func TestGoldenRelativeTimestamps(t *testing.T) {
+	m := relativeFeed(100, 4)
+	id := repoID("home-assistant", "core")
+	m = discovered(m, repo("home-assistant", "core", true, false))
+	m = feedRuns(m, id,
+		mkRun(29516338954, "home-assistant", "core", "CI", domain.StatusInProgress, "", t0),
+		mkRun(29516338001, "home-assistant", "core", "Release", domain.StatusCompleted, domain.ConclusionSuccess, t0.Add(-3*24*time.Hour)),
+	)
+	goldie.New(t).Assert(t, "relative_timestamps", []byte(m.View()))
+}
+
 // TestGoldenCancellationRequested fixes run-lifecycle AC5's frame. A test over the model can
 // assert that the mark is held; only a golden proves the row still says in_progress with an
 // empty Conclusion beside the marker, which is the whole of what R4 permits a 202 to claim.
