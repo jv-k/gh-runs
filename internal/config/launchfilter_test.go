@@ -193,14 +193,123 @@ func TestLaunchFilterReadsEveryAxis(t *testing.T) {
 
 // TestLaunchFilterAxisCountIsDeliberate fails the day ADR-0016's Filter grows an axis, so
 // adding one is a decision about the config file rather than a silent omission from it.
-// Eight of the nine fields are spelled in the file; the ninth is the repository axis, left
-// out because the grammar the Settings view edits has no token for it (R17, ADR-0016).
+// Every field is now spelled in the file: the repository axis was the one omission, and
+// issue #102 closed it by giving the grammar the Settings view edits a repo: token.
 func TestLaunchFilterAxisCountIsDeliberate(t *testing.T) {
-	const carried, deliberatelyAbsent = 8, 1
+	const carried, deliberatelyAbsent = 9, 0
 	if got := reflect.TypeOf(filter.Filter{}).NumField(); got != carried+deliberatelyAbsent {
 		t.Fatalf("filter.Filter has %d axes, and launch_filter carries %d with %d left out on purpose. "+
 			"Decide where the new one belongs: a sub-key in launchfilter.go, or a documented omission here",
 			got, carried, deliberatelyAbsent)
+	}
+}
+
+// TestLaunchFilterReadsTheRepositoryAxis pins R9's ninth axis (#102). The key is a sequence
+// of refs, decoded through the same door R7's exclude list uses, and both spellings of a ref
+// name the same repository (ADR-0009).
+func TestLaunchFilterReadsTheRepositoryAxis(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "launch_filter:\n  repos:\n    - cli/cli\n    - github.com/jv-k/gh-runs\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, diags := config.Load(env, config.Flags{})
+
+	want := []domain.RepoID{
+		{Host: domain.HostGitHub, Owner: "cli", Name: "cli"},
+		{Host: domain.HostGitHub, Owner: "jv-k", Name: "gh-runs"},
+	}
+	if !reflect.DeepEqual(cfg.LaunchFilter.Repos, want) {
+		t.Errorf("LaunchFilter.Repos = %v, want %v", cfg.LaunchFilter.Repos, want)
+	}
+	if len(diags) != 0 {
+		t.Errorf("a well-formed repos list produced diagnostics: %v", diags)
+	}
+}
+
+// TestRepositoryOnlyLaunchFilterIsNotEmpty pins the trap the axis used to be. The Feed
+// decides a filter is active by asking whether QueryString is non-empty, and Load tells "no
+// filter was set" from one that was the same way. While the axis had no token, a filter
+// carrying only repositories narrowed the rows while every predicate above called it empty.
+func TestRepositoryOnlyLaunchFilterIsNotEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "launch_filter:\n  repos:\n    - cli/cli\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, _ := config.Load(env, config.Flags{})
+
+	if got := cfg.LaunchFilter.QueryString(); got == "" {
+		t.Errorf("QueryString = %q for a filter carrying a repository: it would report no active filter", got)
+	}
+	if reflect.DeepEqual(cfg.LaunchFilter, filter.Filter{}) {
+		t.Error("a repository-only launch filter read back as the zero Filter")
+	}
+}
+
+// TestLaunchFilterRepositoryEntryDropsOneBadEntry pins R14 for the new key, the rule R7's
+// exclude list already follows: the malformed entry is named as written with its line, the
+// entries that parsed stand, and the run does not fail.
+func TestLaunchFilterRepositoryEntryDropsOneBadEntry(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "launch_filter:\n  repos:\n    - cli/cli\n    - not-a-ref\n    - jv-k/gh-runs\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, diags := config.Load(env, config.Flags{})
+
+	want := []domain.RepoID{
+		{Host: domain.HostGitHub, Owner: "cli", Name: "cli"},
+		{Host: domain.HostGitHub, Owner: "jv-k", Name: "gh-runs"},
+	}
+	if !reflect.DeepEqual(cfg.LaunchFilter.Repos, want) {
+		t.Errorf("LaunchFilter.Repos = %v, want the two that parsed: %v", cfg.LaunchFilter.Repos, want)
+	}
+	if len(diags) != 1 {
+		t.Fatalf("diagnostics = %v, want exactly one", diags)
+	}
+	if !strings.Contains(diags[0].Message, "not-a-ref") {
+		t.Errorf("diagnostic %q does not name the entry as written", diags[0].Message)
+	}
+	if !strings.Contains(diags[0].Message, "launch_filter.repos") {
+		t.Errorf("diagnostic %q does not name the key", diags[0].Message)
+	}
+}
+
+// TestSaveLaunchFilterRepositoryRoundTrips pins R17 for the new axis end to end: a filter
+// the view produced from a repo: token in its line persists to the file and returns on the
+// next load, in the bare OWNER/REPO spelling the exclude list already writes.
+func TestSaveLaunchFilterRepositoryRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "# mine\nlaunch_filter:\n  branch: main # keep me\n  someday: soon\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	prev, _ := config.Load(env, config.Flags{})
+	next := prev
+	edited, err := filter.ParseQuery("branch:main repo:cli/cli")
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	next.LaunchFilter = edited
+
+	if err := config.Save(env, prev, next); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	saved := readSaved(t, dir)
+	if !strings.Contains(saved, "- cli/cli") {
+		t.Errorf("the repository axis was not written in the bare spelling:\n%s", saved)
+	}
+	for _, want := range []string{"# mine", "branch: main # keep me", "someday: soon"} {
+		if !strings.Contains(saved, want) {
+			t.Errorf("saved config lost %q:\n%s", want, saved)
+		}
+	}
+	// R17 asks for key order too, not only comments and unknown keys: adding an axis must
+	// append rather than reshuffle what the operator already had.
+	if i, j := strings.Index(saved, "branch:"), strings.Index(saved, "someday:"); i > j {
+		t.Errorf("writing the new axis reordered the existing sub-keys:\n%s", saved)
+	}
+	cfg, _ := config.Load(env, config.Flags{})
+	if !reflect.DeepEqual(cfg.LaunchFilter, next.LaunchFilter) {
+		t.Errorf("reloaded LaunchFilter = %+v, want %+v:\n%s", cfg.LaunchFilter, next.LaunchFilter, saved)
 	}
 }
 

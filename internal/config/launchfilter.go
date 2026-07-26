@@ -20,22 +20,21 @@ import (
 //	  branch: main
 //	  status: [queued, in_progress]
 //	  conclusion: [failure]
+//	  repos: [cli/cli]
 //
 // Every sub-key is optional, exactly as every top-level key is (R3). An absent launch
 // filter is the zero Filter, which matches every Run.
 //
-// The repository axis ADR-0016 gives Filter has no sub-key here, deliberately. R17 makes the
-// view and the file the same settings, the view edits this filter in the input grammar
-// filter owns, and that grammar carries no repository token: filter's QueryString says so in
-// its own doc, and its file records that token spellings are that package's choice rather
-// than the canon's. A stored repos key would therefore be a setting the view could neither
-// show nor edit, which is the half of R17 a key like that breaks.
+// The file spells all nine of ADR-0016's axes. The repository axis was the one omission,
+// left out while the input grammar the Settings view edits had no token for it, which made
+// a repos key a setting the view could neither show nor edit. Issue #102 gave the grammar a
+// repo: token, so the key is now a setting the view reads and writes like every other, and
+// R17's view-and-file equivalence holds for the whole type rather than for eight ninths of
+// it.
 //
-// This is not ADR-0016's decision, and that ADR leans the other way: its repository-axis
-// section names "the Feed's filter input" as the consumer that needs Repos. So the canon
-// expects that surface to carry the axis and the grammar does not, which is a disagreement
-// worth naming rather than resolving here. Issue #102 holds it, and settings R9's note
-// records what it costs.
+// The repos key stores a named repository. It is not "the repository of the working
+// directory": R1 and R2 make this file a single directory-independent document, so a pinned
+// name does not follow the operator between directories. Issue #117 carries that.
 const (
 	axisBranch     = "branch"
 	axisCommit     = "commit"
@@ -45,6 +44,7 @@ const (
 	axisCreated    = "created"
 	axisStatus     = "status"
 	axisConclusion = "conclusion"
+	axisRepos      = "repos"
 )
 
 // launchFilterAxes is the file's spelling of the axes above, in the order the marshaller
@@ -53,7 +53,7 @@ const (
 // the other half knows.
 var launchFilterAxes = []string{
 	axisBranch, axisCommit, axisActor, axisEvent,
-	axisWorkflow, axisCreated, axisStatus, axisConclusion,
+	axisWorkflow, axisCreated, axisStatus, axisConclusion, axisRepos,
 }
 
 // resolveLaunchFilter decodes the launch_filter key (R9). A node that is not a mapping is
@@ -96,6 +96,10 @@ func resolveLaunchFilter(key string, node yaml.Node, diags []Diagnostic) (filter
 			f.Created, diags = filterCreated(path, item, diags)
 		case axisStatus, axisConclusion:
 			diags = resolveStatusAxis(path, sub, item, &f, diags)
+		case axisRepos:
+			// The same decode R7's exclude list uses, so one malformed entry is named as
+			// written with its line and the rest of the list stands (R14, ADR-0009).
+			f.Repos, diags = resolveRepoList(path, item, diags)
 		default:
 			diags = append(diags, Diagnostic{Message: fmt.Sprintf(
 				"%s: unrecognised filter axis, ignored", path)})
@@ -248,6 +252,10 @@ func launchFilterValue(f filter.Filter, axis string) any {
 		return listOrNil(namesOf(f.Statuses))
 	case axisConclusion:
 		return listOrNil(namesOf(f.Conclusions))
+	case axisRepos:
+		// The bare OWNER/REPO spelling, through the same renderer R7's exclude list uses,
+		// so the file and the input line agree on one form (ADR-0009).
+		return listOrNil(repoRefs(f.Repos))
 	default:
 		return nil
 	}
@@ -296,8 +304,13 @@ func sameLaunchFilter(a, b filter.Filter) bool { return reflect.DeepEqual(a, b) 
 // and ParseQuery returns nil sets, so the zero comparison happened to hold: that is luck,
 // and this is the contract.
 //
-// It reads QueryString for the eight axes the grammar spells and names the ninth, which has
-// no token, rather than enumerating all nine here. A tenth axis would slip past this the way
-// Repos would have, and TestLaunchFilterAxisCountIsDeliberate is what fails the day one
-// arrives.
-func emptyFilter(f filter.Filter) bool { return f.QueryString() == "" && len(f.Repos) == 0 }
+// It reads QueryString, which now spells every axis including the repository one (#102), so
+// the separate Repos count this used to carry beside it is gone: the grammar is the whole
+// enumeration rather than most of it plus an exception.
+//
+// That makes this correct exactly while the grammar stays complete, which filter's own
+// TestGrammarSpellsEveryAxis is what pins. The axis-count guard below is a different
+// question and does not cover this one: it compares Filter's field count against this
+// package's sub-key list, so an axis with a key here and no token would leave it green
+// while a filter carrying that axis read as empty, which is the #102 trap returning.
+func emptyFilter(f filter.Filter) bool { return f.QueryString() == "" }

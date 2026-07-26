@@ -16,6 +16,8 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 
 **R3.** The Feed must present the owning repository as a column on every row and as a filter. It must not present repositories as tabs, sections or any other per-repository navigation: the reference account has 163 repositories and ~26 with Runs, and ~26 tabs is not navigable.
 
+**Both halves are built.** The column is R4a's leading flex column. The filter half is the `repo:OWNER/REPO` token in the Feed's one filter input, which reaches `Filter.Repos` and matches the stamped Repo, OR within the set ([ADR-0016](../../adr/0016-the-filter-representation.md), issue [#102](https://github.com/jv-k/gh-runs/issues/102)). It arrived later than the column: `Repos` and its matcher existed from the start, but no surface could state the axis, so the filter half of this MUST sat unsatisfied while looking built from the type alone.
+
 **R4.** The Feed must render Status and Conclusion as two distinct, separately labelled columns, and must never merge them into one column.
 
 **R4a.** The Feed's minimum width is **100 columns**. Below it the Feed must state that the terminal is too narrow, name the width it needs, and paint no rows. A fixed gutter leads the row, four columns are fixed and must never shrink, and two flex above their floors:
