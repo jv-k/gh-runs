@@ -94,6 +94,8 @@
 
 **R28.** The surface MUST offer `gh runs cancel` and `gh runs rerun`, the non-interactive form of [run-lifecycle](../run-lifecycle/requirements.md)'s four operations. `--force` selects force-cancel and `--failed` selects re-run failed Jobs, each a distinct operation against a distinct endpoint (that document's R6 and R13), and `--debug` is R14's opt-in. The spellings are gh's own on `gh run cancel --force` and `gh run rerun --failed --debug`, which [ADR-0008](../../adr/0008-full-cli-surface-despite-gh-overlap.md) commits to mirroring.
 
+**gh's `-j/--job` is the one flag not carried, and it is a deferral rather than a divergence.** It re-runs a single Job against a Job endpoint, which is a fifth operation the write engine does not have ([#106](https://github.com/jv-k/gh-runs/issues/106)). Accepting the flag and re-running the whole Run instead would be the class of dishonesty R16 forbids about counts, applied to a write.
+
 **R29.** Both commands MUST accept either positional Run IDs or R4's filter axes, and MUST refuse an invocation carrying both. Positional Run IDs name their targets, so the command MUST issue no crawl and MUST refuse a bare Run ID under fan-out, where it names no repository. A filter MUST resolve through the same crawl `delete` uses, so R20's one-code-path rule covers these verbs too.
 
 **R30.** R26's rule MUST extend to both commands: the zero filter matches every Run, so `gh runs cancel --yes` with no Run ID, no filter and no `--all` MUST fail with a usage diagnostic and issue no request. Cancelling every running Run in scope by omission is the same hazard R26 closes for deletion, and cancelled work cannot be recovered.
@@ -143,6 +145,8 @@
 **AC20: Purge exit codes.** Against R19's fixtures, a Purge whose deletes all succeed exits 0. A Purge with any real failure (a 403 among the deletes) exits 1. A Purge whose filter matches zero Runs exits 0 and prints a summary saying so.
 
 **AC21: `-t` runs gh's pure funcs and names the dropped four.** `gh runs list --json createdAt -t '{{range .}}{{timeago .createdAt}}{{"\n"}}{{end}}'` renders gh's wording (`3 hours ago`), computed off the injected clock. `{{truncate 10 .displayTitle}}` shortens to display width with gh's `"..."` ellipsis. A template calling `{{color "green" .status}}`, `autocolor`, `tablerow` or `tablerender` fails with an error naming the func as unsupported, not the standard library's bare `function "color" not defined`. ([ADR-0023](../../adr/0023-the-template-function-subset.md))
+
+**AC22: the lifecycle commands act, and name what they asked for.** Against R19's fixtures, `gh runs cancel --all --yes` issues one cancel per crawled Run and exits 0, and its summary reports a requested cancellation with no `cancelled` in it. `--force` issues force-cancel against its own endpoint and no plain cancel. A 409 is reported as a skip whose reason states the Run is not cancelable and names force-cancel, and the command still exits 0. `gh runs rerun <id>` issues one re-run with no `--yes` and no `enable_debug_logging`. `--debug` sends it. `--failed` addresses the re-run-failed-jobs endpoint and not the re-run one. `gh runs rerun --all` without `--yes` exits non-zero having issued zero requests. A re-run whose Run 404s exits 1 and a cancel of the same Run exits 0 with a skip. A `--dry-run` trailer claims only the write it withheld, because the crawl that resolved the set did issue reads. No invocation writes a line to the deletion log.
 
 ## Constraints
 
