@@ -735,14 +735,21 @@ func (m Model) launch(plan ops.Plan, in ops.Input) tea.Cmd {
 	return func() tea.Msg {
 		confirmed, err := planner.Confirm(plan, in)
 		if err != nil {
-			return ops.LaunchFailed{Op: plan.Operation(), Err: err}
+			return ops.LaunchFailed{Op: plan.Operation(), Kind: plan.Kind(), Err: err}
 		}
 		// context.Background rather than a context threaded from main.go: the operation's
 		// lifetime is its own, and Started.Cancel is R16's stop. A Purge outlives the
 		// keystroke that started it and must not be tied to any shorter-lived scope.
+		//
+		// A refusal here is reported rather than dropped, and the one a running Purge makes
+		// likely is ErrBusy: the engine runs one operation at a time so the first keeps the
+		// only cancel it has (R16). The Confirmed is unspent in that case, but the modal has
+		// closed, so the operator confirms again once the running one is over. Holding a live
+		// Confirmed across that wait would be a resolved set kept on the side, which is the
+		// shape R23 refuses.
 		st, err := planner.Start(context.Background(), confirmed)
 		if err != nil {
-			return ops.LaunchFailed{Op: plan.Operation(), Err: err}
+			return ops.LaunchFailed{Op: plan.Operation(), Kind: plan.Kind(), Err: err}
 		}
 		return st
 	}

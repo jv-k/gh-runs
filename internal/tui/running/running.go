@@ -65,9 +65,13 @@ type Model struct {
 	profile keys.Profile
 	retrier Retrier
 
-	width  int
-	phase  phase
-	op     ops.Operation
+	width int
+	phase phase
+	op    ops.Operation
+	// kind is the object the frozen set holds, which the operation alone does not name: a
+	// delete over Runs is a Purge and the same delete over Caches and Artifacts is a
+	// Reclamation (CONTEXT.md).
+	kind   ops.Kind
 	total  int
 	cancel context.CancelFunc
 
@@ -104,11 +108,13 @@ func (m Model) WithRetrier(r Retrier) Model {
 func (m Model) Start(st ops.Started) Model {
 	m.phase = running
 	m.op = st.Op
+	m.kind = st.Kind
 	m.total = st.Total
 	m.cancel = st.Cancel
 	m.last = ops.Progress{}
 	m.have = false
 	m.stopping = false
+	m.err = nil
 	return m
 }
 
@@ -121,9 +127,6 @@ func (m Model) Active() bool { return m.phase != idle }
 // record, so the retry key reads this.
 func (m Model) Running() bool { return m.phase == running }
 
-// Operation is the verb the surface is showing, so the root can name it in a diagnostic.
-func (m Model) Operation() ops.Operation { return m.op }
-
 // Handles reports whether this key press is the surface's, which the root reads to route
 // it here and to no tab, so one keystroke does one thing (ADR-0011). It is false while the
 // surface is idle, so the two chords fall through to the focused tab rather than being
@@ -135,12 +138,23 @@ func (m Model) Handles(k tea.KeyPressMsg) bool {
 	return key.Matches(k, m.profile.CancelRunning) || key.Matches(k, m.profile.RetryFailures)
 }
 
-// Fail puts a refused launch on screen (ADR-0019's declined Confirm, a spent one, or a
-// retry the engine refused). It is a notice with a dismiss and nothing else: nothing was
-// started, so there is nothing to stop and nothing to retry.
+// Fail puts a refused launch on screen (ADR-0019's declined Confirm, a spent one, a
+// launch refused because one is already running, or a retry with nothing left).
+//
+// While an operation is running the refusal is a note beside the live line and nothing
+// more. It must not become the surface's state, because the handle this pane holds carries
+// the only cancel the running operation has: replacing it is precisely the orphaning that
+// makes a Purge invisible and unstoppable, and the commonest refusal there is (ErrBusy)
+// arrives exactly when one is running. Reporting it is still required, because a keystroke
+// that silently does nothing is the defect this surface exists to fix.
 func (m Model) Fail(f ops.LaunchFailed) Model {
+	if m.phase == running {
+		m.err = f.Err
+		return m
+	}
 	m.phase = failed
 	m.op = f.Op
+	m.kind = f.Kind
 	m.err = f.Err
 	m.cancel = nil
 	m.last = ops.Progress{}

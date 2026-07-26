@@ -2,11 +2,14 @@ package running_test
 
 import (
 	"context"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
@@ -17,7 +20,7 @@ import (
 // root (ADR-0015). No ops engine is involved: the pane consumes frames and knows nothing
 // about who produced them, which is what makes every frame below fabricable.
 func started(op ops.Operation, total int, cancel func()) ops.Started {
-	return ops.Started{Op: op, Total: total, Cancel: func() { cancel() }}
+	return ops.Started{Op: op, Kind: ops.KindRun, Total: total, Cancel: func() { cancel() }}
 }
 
 func sized(m running.Model, w int) running.Model {
@@ -38,6 +41,7 @@ func press(s string) tea.KeyPressMsg {
 func frame(total, deleted, outstanding int, elapsed time.Duration, rate, ceiling, floor float64) ops.Progress {
 	return ops.Progress{
 		Op:          ops.OpDelete,
+		Kind:        ops.KindRun,
 		Sum:         ops.Summary{Total: total, Deleted: deleted},
 		Outstanding: outstanding,
 		Elapsed:     elapsed,
@@ -277,6 +281,209 @@ func TestRetryKeyInertWhileRunning(t *testing.T) {
 	}
 	if r.calls != 0 {
 		t.Errorf("Retry was called mid-operation")
+	}
+}
+
+// longReason is the R19a reclassification's recorded reason carrying a fine-grained PAT's
+// verbatim 403, which R13 and AC14a make the expected case rather than a corner. It is 177
+// columns, so it is the line that proves the frame is laid out rather than assumed.
+const longReason = "still rejected after 3 attempts, so the backoff was abandoned and the Run skipped (R19a). " +
+	"The API said: HTTP 403: Resource not accessible by personal access token"
+
+// ansiRE matches the ANSI styling lipgloss emits.
+var ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// plain strips the styling so an assertion reads the words the operator sees rather than
+// the escape sequences between them. lipgloss puts one around every styled segment, so a
+// count and its label are not adjacent in the raw string even though they are on screen.
+func plain(s string) string { return ansiRE.ReplaceAllString(s, "") }
+
+// widths returns each rendered line's visible width, ignoring the ANSI styling.
+func widths(view string) []int {
+	var out []int
+	for _, line := range strings.Split(view, "\n") {
+		out = append(out, lipgloss.Width(line))
+	}
+	return out
+}
+
+// TestNoLineOverrunsTheFrame pins that the surface lays out to the width it was given.
+// A line wider than the frame wraps in the terminal and draws more rows than Height
+// reported, so the root reserves too few and the strip overruns the tab beneath it. The
+// R19a skip reason is the case that makes it real: it is the expected fine-grained-PAT
+// outcome and it renders at 177 columns.
+func TestNoLineOverrunsTheFrame(t *testing.T) {
+	for _, w := range []int{40, 60, 80, 100} {
+		m := sized(running.New(keys.Standard).WithRetrier(&retrier{}), w).Start(started(ops.OpDelete, 18258, func() {}))
+		m, _ = m.Update(ops.Progress{
+			Op: ops.OpDelete, Done: true,
+			Sum: ops.Summary{
+				Total: 18258, Deleted: 18000, Skipped: 200,
+				Failures: []ops.FailureGroup{{Reason: longReason, Count: 5}},
+				Skips:    []ops.FailureGroup{{Reason: longReason, Count: 200}},
+				Reason:   "append to " + strings.Repeat("very-long-path/", 12) + "deletions.log: no space left on device",
+			},
+		})
+		view := m.View()
+		for i, got := range widths(view) {
+			if got > w {
+				t.Errorf("at width %d, line %d renders %d columns; it wraps and the root's row reservation is wrong", w, i, got)
+			}
+		}
+		if got, want := m.Height(), len(strings.Split(view, "\n")); got != want {
+			t.Errorf("at width %d, Height() = %d but the view holds %d lines", w, got, want)
+		}
+	}
+}
+
+// TestProgressLineFitsTheFrame pins the same property for the live line, which carries a
+// count, a rate, an elapsed and a range and is the one on screen for hours.
+func TestProgressLineFitsTheFrame(t *testing.T) {
+	for _, w := range []int{40, 60, 80} {
+		m := sized(running.New(keys.Standard), w).Start(started(ops.OpDelete, 18258, func() {}))
+		p := frame(18258, 12204, 6054, 100*time.Minute, 1.93, 1.96, 0.5)
+		p.Sum.Gone = 148
+		p.Sum.Skipped = 1204
+		p.Sum.Failures = []ops.FailureGroup{{Reason: longReason, Count: 37}}
+		m, _ = m.Update(p)
+		for i, got := range widths(m.View()) {
+			if got > w {
+				t.Errorf("at width %d, progress line %d renders %d columns", w, i, got)
+			}
+		}
+	}
+}
+
+// TestRangeCollapsesAcrossAUnitBoundary pins R15's collapse rule where it matters most:
+// at the end of a Purge, when the two ends are seconds apart but fall either side of a
+// unit boundary. Comparing rendered strings leaves "60s to 1m" on screen through a
+// Purge's last minute, which is the shape the requirement's own reasoning rules out.
+func TestRangeCollapsesAcrossAUnitBoundary(t *testing.T) {
+	cases := []struct {
+		name        string
+		outstanding int
+		rate        float64
+		ceiling     float64
+	}{
+		// 60 outstanding: 60s at the ceiling, 59s at the observed rate. One second apart,
+		// across the minute boundary.
+		{"minute boundary", 60, 60.0 / 59.0, 1.0},
+		// 3,600 outstanding: 60m at the ceiling, 60m15s at the observed rate. Across the
+		// hour boundary.
+		{"hour boundary", 3600, 3600.0 / 3615.0, 1.0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sized(running.New(keys.Standard), 100).Start(started(ops.OpDelete, 10000, func() {}))
+			m, _ = m.Update(frame(10000, 0, tc.outstanding, time.Minute, tc.rate, tc.ceiling, 0.5))
+			got := m.View()
+			if strings.Contains(got, " to ") {
+				t.Errorf("the range did not collapse across the %s; the ends differ by less than one displayed step (R15, AC23):\n%s", tc.name, got)
+			}
+			if !strings.Contains(got, "estimate") {
+				t.Errorf("the collapsed figure is not labelled an estimate (R15):\n%s", got)
+			}
+		})
+	}
+}
+
+// TestSummaryStatesEveryFailureGroup pins R22's "a count for each": the summary states
+// every reason, never a truncated list with a tail count. The CLI prints all of them from
+// the same Summary, and two surfaces disagreeing about one pass is the drift this
+// codebase exists to avoid.
+func TestSummaryStatesEveryFailureGroup(t *testing.T) {
+	groups := make([]ops.FailureGroup, 7)
+	for i := range groups {
+		groups[i] = ops.FailureGroup{Reason: "HTTP 5" + strconv.Itoa(i) + "0", Count: i + 1}
+	}
+	m := sized(running.New(keys.Standard).WithRetrier(&retrier{}), 100).Start(started(ops.OpDelete, 100, func() {}))
+	m, _ = m.Update(ops.Progress{
+		Op: ops.OpDelete, Done: true,
+		Sum: ops.Summary{Total: 100, Deleted: 72, Failures: groups},
+	})
+	got := plain(m.View())
+	for _, g := range groups {
+		if !strings.Contains(got, g.Reason) {
+			t.Errorf("the summary omits the group %q; R22 requires a count for each reason", g.Reason)
+		}
+	}
+	if strings.Contains(got, "more reasons") {
+		t.Errorf("the summary truncated its failure groups (R22):\n%s", got)
+	}
+}
+
+// TestLiveLineKeepsDeletedAndGoneApart pins that the live line does not fold a 404 into
+// the deletions. R18 counts a 404 a success and R29's log records it as gone precisely
+// because "I deleted it" and "it was already gone" are different facts about the world.
+// A line reading "1,228 deleted" over 1,220 deletions and 8 that were already gone is the
+// dishonest count this whole tool exists to correct.
+func TestLiveLineKeepsDeletedAndGoneApart(t *testing.T) {
+	m := sized(running.New(keys.Standard), 100).Start(started(ops.OpDelete, 18258, func() {}))
+	p := frame(18258, 1220, 17030, 10*time.Minute, 1.9, 1.96, 0.5)
+	p.Sum.Gone = 8
+	m, _ = m.Update(p)
+	got := plain(m.View())
+	if !strings.Contains(got, "1,220 deleted") {
+		t.Errorf("the live line does not report the deletions on their own (R18, R29):\n%s", got)
+	}
+	if strings.Contains(got, "1,228") {
+		t.Errorf("the live line folds the 404s into the deletions; they are different facts (R18, R29):\n%s", got)
+	}
+	if !strings.Contains(got, "8 gone") {
+		t.Errorf("the live line does not report the 404s at all (R18):\n%s", got)
+	}
+}
+
+// TestVerbNamesTheObjectAndNotOnlyTheVerb pins CONTEXT.md's vocabulary against the
+// Operation alone. A Purge is a filtered bulk deletion of Runs; the same Operation over
+// Caches and Artifacts is a Reclamation, and over a Run's logs it is neither. A surface
+// reading only the verb would label a Reclamation a Purge, which is the label #64 would
+// inherit.
+func TestVerbNamesTheObjectAndNotOnlyTheVerb(t *testing.T) {
+	cases := []struct {
+		kind ops.Kind
+		want string
+	}{
+		{ops.KindRun, "Purge"},
+		{ops.KindCache, "Reclaim"},
+		{ops.KindArtifact, "Reclaim"},
+		{"", "Reclaim"}, // a mixed Cache-and-Artifact set, which is Reclamation's ordinary list
+		{ops.KindLog, "Delete logs"},
+	}
+	for _, tc := range cases {
+		m := sized(running.New(keys.Standard), 100).Start(ops.Started{Op: ops.OpDelete, Kind: tc.kind, Total: 9, Cancel: func() {}})
+		if got := plain(m.View()); !strings.Contains(got, tc.want) {
+			t.Errorf("a delete over %q renders %q, want it to name %q (CONTEXT.md)", tc.kind, strings.Split(got, "\n")[0], tc.want)
+		}
+	}
+}
+
+// TestARefusedLaunchDoesNotDisturbARunningOne pins the other half of R16's orphaning
+// guard. The engine refuses a second launch while one runs, and that refusal arrives here
+// as a message: showing it must not replace the running operation's state, because the
+// handle this pane holds carries the only cancel the running operation has.
+func TestARefusedLaunchDoesNotDisturbARunningOne(t *testing.T) {
+	stopped := false
+	m := sized(running.New(keys.Standard), 100).Start(started(ops.OpDelete, 4000, func() { stopped = true }))
+	m, _ = m.Update(frame(4000, 400, 3600, time.Minute, 1.0, 2.0, 0.5))
+	m = m.Fail(ops.LaunchFailed{Op: ops.OpDelete, Kind: ops.KindRun, Err: ops.ErrBusy})
+
+	if !m.Running() {
+		t.Fatalf("a refused second launch replaced the running operation's state")
+	}
+	if got := plain(m.View()); !strings.Contains(got, "400 deleted") {
+		t.Errorf("the running operation's progress stopped being painted:\n%s", got)
+	}
+	if got := plain(m.View()); !strings.Contains(got, "already running") {
+		t.Errorf("the refusal is not reported at all; the keystroke would look like it did nothing:\n%s", got)
+	}
+	_, cmd := m.Update(press("ctrl+x"))
+	if cmd == nil {
+		t.Fatalf("the cancel key stopped working after a refused launch")
+	}
+	cmd()
+	if !stopped {
+		t.Errorf("the cancel no longer reaches the running operation; it was orphaned (R16)")
 	}
 }
 
