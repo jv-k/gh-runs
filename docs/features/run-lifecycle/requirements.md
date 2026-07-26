@@ -28,6 +28,8 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **R6.** Force-cancel MUST be a distinct operation against a distinct endpoint, offered as the escalation for when plain cancel does not take effect. It MUST NOT be the default, and MUST NOT be silently substituted for cancel. The tool MUST offer it on a 409 from plain cancel (R5), and otherwise on demand as an escalation the user chooses. It MUST NOT infer from a timer that an accepted cancel is stuck, because an asynchronous cancel has no reliable stuck-signal.
 
+**R6a.** The cancel confirmation MUST carry R6's offer at the point of decision: the modal names force-cancel as the escalation and names the key that reaches it, and that key MUST be inert on every other modal, so it cannot pick up a second meaning in front of a Purge. Choosing it MUST confirm nothing. The opener re-prices the same frozen Items as a force-cancel and the graduated confirmation runs again, so the escalation carries the friction the harder verb is owed rather than inheriting the one priced for cancel. The set MUST be the Items the cancel Plan already holds and never a fresh read of the selection, because R16 froze it when the modal opened and a poll landing while the modal was up must not be swept into the harder verb.
+
 **R7.** The tool MUST NOT render `cancelled` as a Status. A cancelled Run has Status `completed` and Conclusion `cancelled`, and every surface MUST show them in their own fields.
 
 ### Re-run and the Attempt model
@@ -45,6 +47,8 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 **R13.** Re-run failed Jobs MUST be a distinct operation from re-run, offered only where the Run has Jobs that failed. Both are re-runs and both MUST obey R8 through R12.
 
 **R14.** Re-run and re-run failed Jobs MUST each offer a debug-logging option at the point of invocation, defaulting to off. Both endpoints accept `enable_debug_logging`, and `gh run rerun` exposes `--debug` alongside `--failed`.
+
+**Re-running one Job is a fifth operation and is not in 2.0.0 scope ([#106](https://github.com/jv-k/gh-runs/issues/106)).** gh offers `gh run rerun --job <id>` against a Job endpoint, and R1 fixes this feature at exactly four operations, all of which act on a Run. The non-interactive surface therefore mirrors every `gh run rerun` flag except `-j/--job`, which is left off rather than accepted and widened to the whole Run: re-running a Run when the operator named one Job spends Actions minutes they did not ask to spend, and R12 makes the prior Attempt's Jobs unreachable in the process. What it would cost is recorded on the issue.
 
 **R15.** The tool MUST NOT hide, disable, or pre-emptively reject a re-run based on the Run's age. If the API rejects a re-run, the tool MUST surface the API's own reason. This follows R3: the API is the authority, and the age limit described in open question 1 is unverified.
 
@@ -96,7 +100,7 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **AC5: A 202 is a request, not an outcome.** Given a cancel returning 202, the row does not display Conclusion `cancelled` before a poll has observed the transition. It displays a cancellation-requested indicator.
 
-**AC6: A 409 offers force-cancel.** Given a cancel returning 409, no error dialog is raised, the message states the Run is not cancelable, and force-cancel is offered.
+**AC6: A 409 offers force-cancel, and so does the modal.** Given a cancel returning 409, no error dialog is raised, the message states the Run is not cancelable, and force-cancel is offered. Given a cancel confirmation over a frozen set, the modal names force-cancel and the key that reaches it, and pressing that key leaves the modal open on a force-cancel Plan over the same Items, having issued nothing. The same key on a Purge, a re-run or a force-cancel modal does nothing.
 
 **AC7: The gate states its reason.** Given a Run in a repository with `push: false`, all four operations are unavailable, a reason is shown, and no request is issued. The same holds with `archived: true`, and the reason distinguishes the two.
 

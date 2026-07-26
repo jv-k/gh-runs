@@ -248,7 +248,10 @@ func printLifecycleDryRun(deps Deps, plan ops.Plan, op ops.Operation) error {
 	if plan.Skipped() > 0 {
 		note += fmt.Sprintf(", %d skipped", plan.Skipped())
 	}
-	_, _ = fmt.Fprintln(deps.Stderr, note+" (no request issued)")
+	// The trailer names the write and not "no request", because the set was resolved by the
+	// same crawl the real operation runs, so GETs did travel. --dry-run withholds the
+	// mutation alone, which is the claim the delete trailer already makes about its DELETE.
+	_, _ = fmt.Fprintln(deps.Stderr, note+" (no POST issued)")
 	return nil
 }
 

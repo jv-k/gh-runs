@@ -164,6 +164,33 @@ func TestLifecycleDryRunIssuesNoWrite(t *testing.T) {
 	}
 }
 
+// TestLifecycleDryRunTrailerClaimsOnlyTheWrite pins that the trailer says what it observed
+// and no more. A dry run resolves the set through the same crawl the real operation uses,
+// so GETs were issued and a trailer reading "no request issued" is false. What the flag
+// actually withholds is the write, which is the claim the delete trailer already makes
+// accurately about its DELETE.
+//
+// It matters because --dry-run is the flag an operator reaches for when they are unsure
+// what a filter selects, and a trailer that overstates its own restraint is the wrong
+// thing to be teaching them about a tool that spends Actions minutes.
+func TestLifecycleDryRunTrailerClaimsOnlyTheWrite(t *testing.T) {
+	h := newHarness(t, "cancel_all").withCurrent(gh("o", "r"))
+	if code := h.runDriven("cancel", "--all", "--dry-run"); code != 0 {
+		t.Fatalf("cancel --all --dry-run exited %d, want 0 (R10)", code)
+	}
+	if len(h.counting.urls) == 0 {
+		t.Fatal("the dry run issued no request at all, so this test is pinning nothing")
+	}
+	err := h.stderr.String()
+	if strings.Contains(err, "no request issued") {
+		t.Errorf("the trailer claims no request was issued, but the crawl issued %d:\n%s",
+			len(h.counting.urls), err)
+	}
+	if !strings.Contains(err, "no POST issued") {
+		t.Errorf("the trailer does not name the write it withheld:\n%s", err)
+	}
+}
+
 // TestRunIDAndFilterAreMutuallyExclusive pins that the two grammars do not silently
 // combine. Naming Run 8 and passing -s failure asks two different questions, and guessing
 // which one was meant is how a write lands somewhere nobody named.
@@ -203,5 +230,28 @@ func TestRunIDRejectsANonNumericArgument(t *testing.T) {
 	}
 	if h.counting.count() != 0 {
 		t.Errorf("the rejection issued %d requests; it must issue zero", h.counting.count())
+	}
+}
+
+// TestRerun404IsAFailureAndCancel404IsASkip is run-lifecycle R22 and AC13: the same status
+// reads by the requested end state. A re-run of a deleted Run cannot gain an Attempt, so
+// it fails and the command exits 1. A cancel of the same Run finds it not running, which
+// is what was asked for, so it is a skip and the command exits 0.
+func TestRerun404IsAFailureAndCancel404IsASkip(t *testing.T) {
+	rerun := newHarness(t, "rerun_missing").withCurrent(gh("o", "r"))
+	if code := rerun.runDriven("rerun", "--all", "--yes"); code != 1 {
+		t.Errorf("a re-run whose Run 404s exited %d, want 1 (R22, AC13). stderr: %s", code, rerun.stderr.String())
+	}
+
+	cancel := newHarness(t, "rerun_missing").withCurrent(gh("o", "r"))
+	if code := cancel.runDriven("cancel", "--all", "--yes"); code != 0 {
+		t.Errorf("a cancel whose Run 404s exited %d, want 0 (R22, AC13). stderr: %s", code, cancel.stderr.String())
+	}
+	out := cancel.stdout.String()
+	if !strings.Contains(out, "1 skipped") {
+		t.Errorf("the cancel's 404 was not recorded as a skip (R22, AC13):\n%s", out)
+	}
+	if !strings.Contains(out, "0 failed") {
+		t.Errorf("the cancel's 404 was counted as a failure; the requested end state holds (R22, AC13):\n%s", out)
 	}
 }
