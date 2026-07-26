@@ -108,15 +108,21 @@ func TestRepoPollFailedReachesThePaintedFrame(t *testing.T) {
 	}
 	t.Logf("failed frame:\n%s", frame)
 
-	// Recovery: advance to the next due poll, which now answers 200. Wait for the loop
-	// to be asleep on its timer first, or an advance issued before the timer is armed
-	// is simply missed and the receive below waits out its deadline. The scheduler's
-	// own harness blocks the same way for the same reason.
-	if err := clk.BlockUntilContext(t.Context(), 1); err != nil {
-		t.Fatalf("waiting for the loop to arm its timer: %v", err)
-	}
-	clk.Advance(2 * time.Minute)
-	ev = recv(t, sched.Updates())
+	// Recovery: drive virtual time forward until the next poll lands, which now answers
+	// 200.
+	//
+	// One advance is not enough, and a single BlockUntilContext does not make it enough.
+	// The event above is emitted from inside poll, whose deferred clearInFlight has not
+	// run when the test receives it, so a pollDue racing that window finds the
+	// repository still in flight and skips it (ADR-0018's single-flight rule, working as
+	// intended). The loop then re-arms and nothing further happens, because virtual time
+	// only moves when this test moves it. Blocking on the timer does not close the
+	// window either: a timer is already armed from before the failed poll, so
+	// BlockUntilContext returns at once on that one.
+	//
+	// Advancing in a loop is the fix, because the skip is transient by construction. It
+	// costs one extra iteration in the racing case and none otherwise.
+	ev = advanceUntilEvent(t, clk, sched.Updates())
 	if _, ok := ev.(scheduler.Update); !ok {
 		t.Fatalf("the engine emitted %T for a 200, want scheduler.Update", ev)
 	}
@@ -130,6 +136,35 @@ func TestRepoPollFailedReachesThePaintedFrame(t *testing.T) {
 		t.Fatalf("the recovered repository's Run is not painted:\n%s", frame)
 	}
 	t.Logf("recovered frame:\n%s", frame)
+}
+
+// advanceUntilEvent moves the fake clock forward a tier interval at a time until the
+// engine emits, blocking on the loop being asleep before each advance so no advance is
+// issued into a loop that has not armed its timer.
+//
+// It exists because a scheduler test outside package scheduler cannot reach that
+// package's settled and polled seams, which are unexported, so it cannot barrier on a
+// poll goroutine having fully unwound. Advancing repeatedly gets the same determinism
+// from the outside: the loop is asleep at every advance, and a repository skipped for
+// being in flight is picked up by the next one.
+func advanceUntilEvent(t *testing.T, clk *clockwork.FakeClock, ch <-chan scheduler.Event) scheduler.Event {
+	t.Helper()
+	for i := 0; i < 20; i++ {
+		if err := clk.BlockUntilContext(t.Context(), 1); err != nil {
+			t.Fatalf("waiting for the loop to arm its timer: %v", err)
+		}
+		clk.Advance(30 * time.Second) // slowTarget, the widest interval a poll set of one takes
+		select {
+		case e, ok := <-ch:
+			if !ok {
+				t.Fatal("the engine closed its channel before emitting")
+			}
+			return e
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	t.Fatal("the engine emitted nothing across 20 tier intervals of virtual time")
+	return nil
 }
 
 func recv(t *testing.T, ch <-chan scheduler.Event) scheduler.Event {
