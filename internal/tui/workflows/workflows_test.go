@@ -12,6 +12,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
 )
 
@@ -358,5 +359,83 @@ func TestStateVocabularyNeverSaysStatus(t *testing.T) {
 	})
 	if got := m.View(); strings.Contains(got, "Status") || strings.Contains(got, "status") {
 		t.Errorf("the Workflows view used Run/Job vocabulary; a Workflow has a State, never a Status (R4, AC6):\n%s", got)
+	}
+}
+
+// dispatchFetchSpy is the dispatch pane's read seam, counting each call so a test can assert a read
+// was never made. It answers from held values, so no network and no live dispatch is involved.
+type dispatchFetchSpy struct {
+	defaultBranchCalls int
+	yaml               []byte
+}
+
+func (d *dispatchFetchSpy) DefaultBranch(domain.RepoID) (string, error) {
+	d.defaultBranchCalls++
+	return "resolved-by-request", nil
+}
+
+func (d *dispatchFetchSpy) WorkflowYAML(domain.RepoID, string, string) ([]byte, error) {
+	return d.yaml, nil
+}
+
+func (d *dispatchFetchSpy) Environments(domain.RepoID) ([]string, error) { return nil, nil }
+
+func (d *dispatchFetchSpy) Refs(domain.RepoID) ([]dispatch.Ref, error) { return nil, nil }
+
+// dispatchTab builds a Workflows tab holding one active Workflow in repo, with the dispatch pane's
+// read seam wired to spy and the gate populated from the discovered repository.
+func dispatchTab(t *testing.T, repo domain.Repo, spy *dispatchFetchSpy) workflows.Model {
+	t.Helper()
+	m := workflows.New(workflows.Options{
+		Profile:       keys.Standard,
+		Repos:         func() []domain.Repo { return []domain.Repo{repo} },
+		DispatchFetch: spy,
+	})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	m = fetched(m, workflows.RepoWorkflows{
+		Repo:      repo.ID,
+		Complete:  true,
+		Workflows: []domain.Workflow{workflow(1, "CI", ".github/workflows/ci.yml", domain.StateActive, repo.ID)},
+	})
+	return send(m, "r") // populate the gate from the discovered repositories
+}
+
+// dispatchableYAML is a minimal workflow_dispatch declaration, enough for the form to render.
+const dispatchableYAML = "on:\n  workflow_dispatch:\n    inputs:\n      tag:\n        type: string\n"
+
+// TestDispatchOpensAtTheDiscoveredDefaultBranch pins workflow-dispatch R23 and AC8 at this seam: the
+// form opens pre-selected on the repository's default branch, and it reaches it the way the push
+// gate above it does, from the discovered repository, so opening the form costs no request to learn
+// the branch. The spy is what carries that claim: a populated field proves nothing about what was
+// spent to populate it, and a call count proves the request was never made.
+func TestDispatchOpensAtTheDiscoveredDefaultBranch(t *testing.T) {
+	repo := domain.Repo{ID: rid("o", "r"), Permissions: domain.Permissions{Push: true}, DefaultBranch: "trunk"}
+	spy := &dispatchFetchSpy{yaml: []byte(dispatchableYAML)}
+	m := dispatchTab(t, repo, spy)
+
+	m = act(t, m, "x") // open the dispatch form over the Workflow under the cursor
+	if spy.defaultBranchCalls != 0 {
+		t.Errorf("opening the form made %d default-branch reads; the discovered repository already carries it (R23)", spy.defaultBranchCalls)
+	}
+	if !strings.Contains(m.View(), "Ref: trunk") {
+		t.Errorf("the form did not pre-select the discovered default branch (R23, AC8):\n%s", m.View())
+	}
+}
+
+// TestDispatchResolvesTheDefaultBranchWhenDiscoveryHasNone pins the fallback R23 keeps. A record
+// persisted before discovery carried default_branch reloads without one, and the form resolves it
+// rather than guessing, because R4 requires the ref that will run to be unambiguous. One request in
+// that session is the right price; the ordinary open above still pays none.
+func TestDispatchResolvesTheDefaultBranchWhenDiscoveryHasNone(t *testing.T) {
+	repo := domain.Repo{ID: rid("o", "r"), Permissions: domain.Permissions{Push: true}}
+	spy := &dispatchFetchSpy{yaml: []byte(dispatchableYAML)}
+	m := dispatchTab(t, repo, spy)
+
+	m = act(t, m, "x")
+	if spy.defaultBranchCalls != 1 {
+		t.Errorf("the form made %d default-branch reads, want 1 where discovery carries none (R23)", spy.defaultBranchCalls)
+	}
+	if !strings.Contains(m.View(), "Ref: resolved-by-request") {
+		t.Errorf("the form did not adopt the resolved default branch (R23):\n%s", m.View())
 	}
 }

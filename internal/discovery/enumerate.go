@@ -13,8 +13,9 @@ import (
 )
 
 // apiRepo is the fragment of a /user/repos entry discovery reads. The permissions
-// object, archived and disabled all arrive here at no extra request (R7, AC7), so
-// gating costs nothing. No field of this object says whether the repository has
+// object, archived, disabled and default_branch all arrive here at no extra request
+// (R7, AC7), so gating costs nothing and so does the dispatch form's default ref
+// (workflow-dispatch R23). No field of this object says whether the repository has
 // Runs (R2): has_issues and its siblings describe other features, and Actions has
 // no such flag, which is the whole reason a probe exists.
 type apiRepo struct {
@@ -23,9 +24,10 @@ type apiRepo struct {
 	Owner    struct {
 		Login string `json:"login"`
 	} `json:"owner"`
-	Permissions domain.Permissions `json:"permissions"`
-	Archived    bool               `json:"archived"`
-	Disabled    bool               `json:"disabled"`
+	Permissions   domain.Permissions `json:"permissions"`
+	Archived      bool               `json:"archived"`
+	Disabled      bool               `json:"disabled"`
+	DefaultBranch string             `json:"default_branch"`
 }
 
 // enumerated pairs a host-qualified identity with the capability data that rode

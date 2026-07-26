@@ -9,7 +9,7 @@ interactions:
       response:
         status: 200 OK
         code: 200
-        body: '[{"name":"withetag","full_name":"jv-k/withetag","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"noetag","full_name":"jv-k/noetag","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false}]'
+        body: '[{"name":"withetag","full_name":"jv-k/withetag","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false,"default_branch":"main"},{"name":"noetag","full_name":"jv-k/noetag","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false,"default_branch":"main"}]'
         headers:
             Content-Type:
                 - application/json; charset=utf-8

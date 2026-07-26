@@ -112,6 +112,58 @@ func TestPassClassifiesAndGatesFromOneProbeEach(t *testing.T) {
 	}
 }
 
+// TestDefaultBranchRidesEnumerationAtNoExtraRequest pins the free ride workflow-dispatch R23 needs:
+// default_branch arrives on the same /user/repos payload the permissions and archived flags arrive
+// on (R7), so a consumer that needs a repository's default branch spends nothing to learn it.
+//
+// It is proved at the wire rather than by reading a populated field. A struct field can be filled
+// by an extra request just as easily as by a free one, and the claim here is about a request that
+// was never made: after a full pass, the counter has seen the two enumeration pages and one probe
+// each, and not one GET /repos/{owner}/{repo}, which is the request the dispatch form used to spend
+// per form open.
+func TestDefaultBranchRidesEnumerationAtNoExtraRequest(t *testing.T) {
+	h := newHarness(t, "pass_basic", "")
+
+	if err := h.disc.Pass(context.Background(), nil); err != nil {
+		t.Fatalf("Pass: %v", err)
+	}
+
+	// The value is read per repository from the payload, not defaulted: alpha's is trunk and the
+	// rest are main, so a constant would fail here.
+	want := map[string]string{
+		"github.com/jv-k/alpha":   "trunk",
+		"github.com/jv-k/beta":    "main",
+		"github.com/jv-k/gamma":   "main",
+		"github.com/jv-k/delta":   "main",
+		"github.com/jv-k/epsilon": "main",
+	}
+	for key, rec := range recordsByID(h.disc) {
+		if got := rec.Repo().DefaultBranch; got != want[key] {
+			t.Errorf("%s default branch = %q, want %q (R23 rides the enumeration)", key, got, want[key])
+		}
+	}
+
+	// The cost is unchanged: two enumeration requests and one probe each, exactly what the pass cost
+	// before default_branch was carried. Learning it added nothing to the wire.
+	if n := h.counting.count(); n != 7 {
+		t.Errorf("wire requests = %d, want 7 (2 enumeration + 5 probes); default_branch must add none", n)
+	}
+	// And no repository read was issued for any of them. GET /repos/{owner}/{repo} is the request
+	// the dispatch form used to spend on every form open, and its absence here is what makes the
+	// free ride a Budget win rather than a tidier struct.
+	for key := range want {
+		name := strings.TrimPrefix(key, "github.com/")
+		if n := h.counting.countExact("https://api.github.com/repos/" + name); n != 0 {
+			t.Errorf("GET /repos/%s was issued %d times; the default branch must cost no request (R23)", name, n)
+		}
+	}
+	for _, u := range h.counting.urls {
+		if strings.HasPrefix(u, "https://api.github.com/repos/") && !strings.HasSuffix(u, "/actions/runs") {
+			t.Errorf("an unexpected repository request left the process: %s", u)
+		}
+	}
+}
+
 // recordsByID indexes a discovery's records by host-qualified key.
 func recordsByID(d *discovery.Discovery) map[string]discovery.Record {
 	out := make(map[string]discovery.Record)

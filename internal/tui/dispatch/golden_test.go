@@ -8,6 +8,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
 )
 
@@ -54,4 +55,55 @@ func TestGoldenChoiceNumberForm(t *testing.T) {
 func TestGoldenUnrecognizedForm(t *testing.T) {
 	m := goldenForm(t, 6001, "Custom", ".github/workflows/custom.yml", "unrecognized.yml")
 	goldie.New(t).Assert(t, "unrecognized_form", []byte(m.View()))
+}
+
+// TestGoldenRefPickerList fixes what AC8 asks the picker to show: both branches and tags, grouped so
+// the two are told apart, with the selected ref marked. R21's argument applies here exactly as it
+// does to the input controls. A claim that the picker lists two kinds of ref is a claim about paint,
+// and only a rendering test can check it.
+func TestGoldenRefPickerList(t *testing.T) {
+	m := dispatch.New(dispatch.Options{Profile: keys.Standard})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m, _ = m.Open(dispatch.Target{
+		Repo:     rid("o", "r"),
+		Workflow: domain.Workflow{ID: 9001, Name: "Deployment", Path: ".github/workflows/deploy.yml", State: domain.StateActive},
+		Eligible: true,
+		Ref:      "main",
+		Refs: []dispatch.Ref{
+			{Name: "main"}, {Name: "release/1.2"}, {Name: "v2.0.0", IsTag: true},
+		},
+	})
+	m, _ = m.Update(dispatch.YAMLLoaded{Ref: "main", Path: ".github/workflows/deploy.yml", Data: fixture(t, "deployment.yml")})
+	goldie.New(t).Assert(t, "ref_picker_form", []byte(m.View()))
+}
+
+// TestGoldenRefListingPending fixes the picker's lazy enumeration mid-flight (R24). It paints on the
+// ref row rather than on the status line, which is what keeps a Dispatch outcome and a picker
+// pending from overwriting one another.
+func TestGoldenRefListingPending(t *testing.T) {
+	fetch := &fakeFetcher{yaml: map[string][]byte{"main": fixture(t, "deployment.yml")}}
+	m := dispatch.New(dispatch.Options{Profile: keys.Standard, Fetch: fetch})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m, _ = m.Open(dispatch.Target{
+		Repo:     rid("o", "r"),
+		Workflow: domain.Workflow{ID: 9001, Name: "Deployment", Path: ".github/workflows/deploy.yml", State: domain.StateActive},
+		Eligible: true,
+		Ref:      "main",
+	})
+	m, _ = m.Update(dispatch.YAMLLoaded{Ref: "main", Path: ".github/workflows/deploy.yml", Data: fixture(t, "deployment.yml")})
+	m, _ = m.Update(press("space")) // the picker's first use, with the enumeration still in flight
+	goldie.New(t).Assert(t, "ref_listing_pending_form", []byte(m.View()))
+}
+
+// TestGoldenAlreadyDispatched fixes the re-submit guard's refusal. It is the line standing between a
+// stray keypress and a duplicate Run, so what it says and whether it names the Run it is protecting
+// are worth pinning rather than leaving to a substring assertion.
+func TestGoldenAlreadyDispatched(t *testing.T) {
+	disp := &fakeDispatcher{result: ops.DispatchResult{RunID: 29803635501}}
+	m := openLoaded(t, dispatch.Options{Profile: keys.Standard, Ops: disp}, wf(9001, ".github/workflows/deploy.yml"), "deployment.yml")
+	m = fillRequired(m, "v9.9.9")
+	m, cmd := m.Update(press("x"))
+	m = runCmd(m, cmd)
+	m, _ = m.Update(press("x")) // the stray second press the guard refuses
+	goldie.New(t).Assert(t, "already_dispatched_form", []byte(m.View()))
 }

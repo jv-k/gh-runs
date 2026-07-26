@@ -207,6 +207,20 @@ type Record struct {
 	Disabled    bool               `json:"disabled"`
 	HasRuns     bool               `json:"has_runs"`
 
+	// DefaultBranch rides the enumeration payload alongside the permissions above, so
+	// the dispatch form's ref picker defaults to it without spending a request of its
+	// own (workflow-dispatch R23, AC8). A record persisted before this field existed
+	// reloads with it empty, which reads as "not known here" rather than as a wrong
+	// branch: the dispatch pane resolves the default branch itself there, and lands on
+	// the right ref at the cost of one request per form open.
+	//
+	// Nothing repairs such a record in place. A warm start skips the pass, and Reprobe
+	// carries the previous record forward and updates only HasRuns, so the field stays
+	// empty until a full pass rewrites it or the local-store is deleted (local-store
+	// R11, and issue #100 for the carry-forward). The degradation is cost, not
+	// correctness.
+	DefaultBranch string `json:"default_branch"`
+
 	// Known is true once enumeration or adoption has recorded this repository's
 	// capability. A repository painted by the fast path (R14) before enumeration
 	// returns is Known: false, so its Capability reads not-yet-known and its
@@ -240,10 +254,11 @@ func (r Record) ID() domain.RepoID {
 // consumer reads permissions, archived and disabled through one type (R7).
 func (r Record) Repo() domain.Repo {
 	return domain.Repo{
-		ID:          r.ID(),
-		Permissions: r.Permissions,
-		Archived:    r.Archived,
-		Disabled:    r.Disabled,
+		ID:            r.ID(),
+		Permissions:   r.Permissions,
+		Archived:      r.Archived,
+		Disabled:      r.Disabled,
+		DefaultBranch: r.DefaultBranch,
 	}
 }
 
@@ -274,14 +289,15 @@ func (r Record) Permanent() bool {
 // AC7), so this allocates nothing on the wire.
 func recordFrom(id domain.RepoID, repo apiRepo, hasRuns bool) Record {
 	return Record{
-		Host:        id.Host,
-		Owner:       id.Owner,
-		Name:        id.Name,
-		Permissions: repo.Permissions,
-		Archived:    repo.Archived,
-		Disabled:    repo.Disabled,
-		HasRuns:     hasRuns,
-		Known:       true, // enumeration carries the capability, so it is known (R7)
+		Host:          id.Host,
+		Owner:         id.Owner,
+		Name:          id.Name,
+		Permissions:   repo.Permissions,
+		Archived:      repo.Archived,
+		Disabled:      repo.Disabled,
+		DefaultBranch: repo.DefaultBranch,
+		HasRuns:       hasRuns,
+		Known:         true, // enumeration carries the capability, so it is known (R7)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/ghlink"
 )
 
 // Requester issues a request through the transport chain and returns the response for the caller to
@@ -36,6 +37,14 @@ func NewClientFetch(client Requester) ClientFetch {
 // DefaultBranch fetches the repository's default branch, which the form defaults the ref picker to
 // (R23). It is the only ref where a workflow_dispatch is guaranteed present, and it matches gh
 // workflow run. An error yields an empty string, which the pane falls back on.
+//
+// This is the fallback path, not the ordinary one. default_branch rides the /user/repos payload
+// discovery already reads, so the Workflows tab hands the pane the branch it discovered and R23
+// costs no request (repo-discovery R7a, AC7). This call remains for the case discovery cannot
+// answer: a record persisted before discovery carried the field. Nothing refreshes such a record on
+// a warm start, so that session keeps paying this request per form open until the local-store is
+// rebuilt (issue #100). Answering with a guess instead would put the form on the wrong ref, which R4
+// says must never be ambiguous, so one request is the right price.
 func (c ClientFetch) DefaultBranch(repo domain.RepoID) (string, error) {
 	resp, err := c.client.Request(http.MethodGet, "repos/"+repo.Owner+"/"+repo.Name, nil)
 	if err != nil {
@@ -115,6 +124,104 @@ func (c ClientFetch) Environments(repo domain.RepoID) ([]string, error) {
 	return names, nil
 }
 
+// Refs lists the repository's branches and then its tags, which is the picker set R24 requires:
+// gh's --ref accepts either, so a picker offering branches alone would make the interactive surface
+// a strict subset of the CLI. The pane calls it lazily, on the picker's first use and at most once
+// per picker session, so a Dispatch at the default branch never pays for it.
+//
+// A tags read that fails or returns nothing yields the branches alone, which is R24's
+// no-tags case and is also the right answer when a token can list branches but not tags: withholding
+// the branches too would make a repository undispatchable at any ref but the default over a list the
+// form only needed for convenience. A branches failure is an error, because a picker with no
+// branches is not a picker.
+//
+// Both listings follow the Link header's rel="next" to exhaustion, the same walk discovery's
+// enumeration takes. A single page would silently truncate a large repository's branches, and the
+// truncation is not harmless: the ref the picker opened on could be absent from the set it lists.
+func (c ClientFetch) Refs(repo domain.RepoID) ([]Ref, error) {
+	branches, err := c.refNames(refsPath(repo, "branches"))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Ref, 0, len(branches))
+	for _, name := range branches {
+		out = append(out, Ref{Name: name})
+	}
+	tags, err := c.refNames(refsPath(repo, "tags"))
+	if err != nil {
+		return out, nil
+	}
+	for _, name := range tags {
+		out = append(out, Ref{Name: name, IsTag: true})
+	}
+	return out, nil
+}
+
+// maxRefPages bounds each ref walk. At the API's page ceiling it admits 2,000 branches and 2,000
+// tags, past which a picker cycled one ref at a time has long stopped being usable, so the cap costs
+// nothing real. It is also the worst case a single keypress can spend: two listings, so forty
+// requests, which is a bound worth keeping small because the operator did not ask to pay it.
+const maxRefPages = 20
+
+// refNames reads a branch or tag listing to exhaustion, both of which are arrays of objects carrying
+// a name. The two endpoints differ in what else they carry and in nothing this reads. It trusts
+// rel="next" rather than a count, exactly as discovery's enumeration does (ADR-0005), and stops when
+// the server stops offering a next page.
+//
+// It also stops when the server never does. Every iteration is a real request through the governor,
+// so a walk that does not terminate quietly drains the primary rate limit this tool exists to
+// protect (PRD risk R4), while the picker sits on a pending line forever. discovery's enumeration
+// bounds the same walk with a per-iteration context check, which this cannot borrow: the Fetcher seam
+// carries no context, so the walk has to bound itself. Two bounds, because one page cap is fooled by
+// a chain that never repeats and one visited set is fooled by a chain that never cycles.
+//
+// A bounded walk keeps the pages it did read. They are a smaller picker set, not a failure, and R23's
+// ref is reachable regardless because the pane holds it before the picker is ever opened.
+func (c ClientFetch) refNames(path string) ([]string, error) {
+	var names []string
+	seen := make(map[string]bool)
+	for i := 0; path != "" && i < maxRefPages; i++ {
+		if seen[path] {
+			break // a cycling rel="next": well-formed, and endless
+		}
+		seen[path] = true
+		page, next, err := c.refPage(path)
+		if err != nil {
+			return nil, err
+		}
+		names = append(names, page...)
+		path = next
+	}
+	return names, nil
+}
+
+// refPage reads one page of a branch or tag listing and returns its names and the next page's URL,
+// empty when the listing is exhausted. The caller owns the loop and this owns the body.
+func (c ClientFetch) refPage(path string) ([]string, string, error) {
+	resp, err := c.client.Request(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	var payload []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, "", err
+	}
+	names := make([]string, 0, len(payload))
+	for _, p := range payload {
+		if p.Name != "" {
+			names = append(names, p.Name)
+		}
+	}
+	return names, ghlink.Next(resp.Header.Get("Link")), nil
+}
+
 // contentsPath is the Contents API endpoint for a file at a ref (R5). The ref is query-escaped so a
 // branch or tag carrying a slash resolves as one parameter.
 func contentsPath(repo domain.RepoID, path, ref string) string {
@@ -124,4 +231,9 @@ func contentsPath(repo domain.RepoID, path, ref string) string {
 // environmentsPath is the repository environments endpoint (R7).
 func environmentsPath(repo domain.RepoID) string {
 	return "repos/" + repo.Owner + "/" + repo.Name + "/environments"
+}
+
+// refsPath is the branches or tags listing endpoint for the picker (R24), at the API's page ceiling.
+func refsPath(repo domain.RepoID, kind string) string {
+	return "repos/" + repo.Owner + "/" + repo.Name + "/" + kind + "?per_page=100"
 }

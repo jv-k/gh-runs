@@ -19,7 +19,7 @@ interactions:
         proto: HTTP/1.1
         proto_major: 1
         proto_minor: 1
-        body: '[{"name":"alpha","full_name":"jv-k/alpha","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"beta","full_name":"jv-k/beta","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false},{"name":"gamma","full_name":"jv-k/gamma","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false}]'
+        body: '[{"name":"alpha","full_name":"jv-k/alpha","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false,"default_branch":"main"},{"name":"beta","full_name":"jv-k/beta","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false,"default_branch":"main"},{"name":"gamma","full_name":"jv-k/gamma","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false,"default_branch":"main"}]'
         headers:
             Content-Type:
                 - application/json; charset=utf-8
