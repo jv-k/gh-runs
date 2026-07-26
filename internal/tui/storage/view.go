@@ -105,10 +105,41 @@ func (m Model) summaryLine() string {
 		parts = append(parts, styleTombstone.Render(plural(tombstones, "tombstone")))
 	}
 	line := strings.Join(parts, styleDim.Render("   "))
-	if label := m.incompleteLabel(); label != "" {
-		line += "\n" + styleWarn.Render(label)
+	for _, note := range m.notes() {
+		line += "\n" + note
 	}
 	return line
+}
+
+// notes are the qualifying lines under the summary: what scope the fan-out ran under where
+// that is not the default, and where the enumeration is not the whole story. They are
+// counted by summaryChrome, so the frame and the row budget agree on how many lines the
+// chrome took. They arrive styled, because the two say different kinds of thing: a scope is
+// a statement of fact and an incomplete enumeration is a warning about the figures.
+func (m Model) notes() []string {
+	var out []string
+	if scope := m.scopeLabel(); scope != "" {
+		out = append(out, styleDim.Render(scope))
+	}
+	if label := m.incompleteLabel(); label != "" {
+		out = append(out, styleWarn.Render(label))
+	}
+	return out
+}
+
+// scopeLabel states the scope the fan-out ran under, and is empty under all-repos: the
+// default nobody chose says nothing, so an all-repos frame is unchanged (R0). Under
+// this-repo it names the repository the working directory resolved to, and where it resolved
+// to none it states the fallback to all-repos, which [settings] R19 requires be said rather
+// than answered with an empty view or a picker.
+func (m Model) scopeLabel() string {
+	if m.scope != ScopeThisRepo {
+		return ""
+	}
+	if id, ok := m.thisRepo(); ok {
+		return "scope this-repo: " + textsan.Sanitize(id.Owner+"/"+id.Name)
+	}
+	return "scope this-repo found no repository in this working directory, showing all-repos"
 }
 
 // totals is the grand rollup: R1's Cache figures summed across the in-scope repositories,
@@ -378,14 +409,10 @@ func (m Model) chromeLines() int {
 	return chrome + m.statusChrome()
 }
 
-// summaryChrome is the line count of the summary block: its one line of totals, plus the
-// incomplete label when the enumeration did not account for R1's figures (R2, R3).
-func (m Model) summaryChrome() int {
-	if m.incompleteLabel() != "" {
-		return 2
-	}
-	return 1
-}
+// summaryChrome is the line count of the summary block: its one line of totals, plus each
+// qualifying note under it, the scope where it is not the default (R0) and the incomplete
+// label where the enumeration did not account for R1's figures (R2, R3).
+func (m Model) summaryChrome() int { return 1 + len(m.notes()) }
 
 // statusChrome is the line the download status occupies, zero while there is none (R13).
 func (m Model) statusChrome() int {

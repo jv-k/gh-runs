@@ -48,6 +48,23 @@ type Planner interface {
 	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error)
 }
 
+// Scope is the set of repositories this view operates over (R0). It is one of two values
+// and no others: all-repos, the whole discovered set, and this-repo, the repository of the
+// working directory ([settings] R19). The zero value reads as all-repos and New resolves it
+// to the constant, so a caller that states no scope gets the default R0 fixes, which is what
+// a view whose leading question is "which of my repositories is hoarding Caches?" opens with.
+type Scope string
+
+const (
+	// ScopeAllRepos fans one cache-usage request out over every discovered repository, over
+	// ADR-0003's existing client-side fan-out, and leads with the per-repository rollup. It
+	// is the default (R0).
+	ScopeAllRepos Scope = "all-repos"
+	// ScopeThisRepo presents the working directory's repository alone, the case where you are
+	// cleaning one repository deliberately (R0, [settings] R19).
+	ScopeThisRepo Scope = "this-repo"
+)
+
 // RepoStorage is one repository's storage as the reclamation view holds it: the
 // cache-usage endpoint's two exact figures (R1), the enumerated Cache and Artifact lists,
 // and whether each enumeration completed (R2, R3). Err records a fetch that failed, which
@@ -154,6 +171,20 @@ type Options struct {
 	Repos    func() []domain.Repo
 	Ops      Planner
 	Download Downloader
+
+	// Scope is the set of repositories the fan-out covers (R0). The zero value is all-repos,
+	// the default R0 fixes. The setting that selects the other is [settings] R19's, which is
+	// not built: until it is, main.go states no scope and the tab runs all-repos. The scope is
+	// chosen at construction and does not change while running, because changing it also means
+	// dropping the held storage: applyFetched accumulates each repository as it arrives, so
+	// narrowing the scope would leave the wider one's rows and its rollup on screen.
+	Scope Scope
+	// CurrentRepo resolves the working directory's repository, which is what this-repo means
+	// ([settings] R19). main.go wires it to ghclient.CurrentRepo, the same resolver discovery's
+	// fast path takes. It reports false where there is no such repository, and the tab then
+	// falls back to all-repos and says so rather than painting an empty view. It is nil in a
+	// golden test, which is the same fallback.
+	CurrentRepo func() (domain.RepoID, bool)
 }
 
 // downloadDoneMsg carries a download's result: the Artifact's name, the path written, or the
@@ -179,6 +210,11 @@ type Model struct {
 	repos    func() []domain.Repo
 	planner  Planner
 	download Downloader
+
+	// scope is R0's two code paths, resolved at construction, and currentRepo is what
+	// this-repo resolves to ([settings] R19).
+	scope       Scope
+	currentRepo func() (domain.RepoID, bool)
 
 	storage map[string]RepoStorage
 	order   []domain.RepoID
@@ -220,16 +256,27 @@ type Model struct {
 // arrives, and paints an empty view until then.
 func New(opts Options) Model {
 	return Model{
-		profile:    opts.Profile,
-		fetch:      opts.Fetch,
-		repos:      opts.Repos,
-		planner:    opts.Ops,
-		download:   opts.Download,
-		storage:    make(map[string]RepoStorage),
-		capability: make(map[string]domain.Repo),
-		selected:   make(map[selKey]bool),
-		confirm:    confirm.New(opts.Profile),
+		profile:     opts.Profile,
+		fetch:       opts.Fetch,
+		repos:       opts.Repos,
+		planner:     opts.Ops,
+		download:    opts.Download,
+		scope:       orAllRepos(opts.Scope),
+		currentRepo: opts.CurrentRepo,
+		storage:     make(map[string]RepoStorage),
+		capability:  make(map[string]domain.Repo),
+		selected:    make(map[selKey]bool),
+		confirm:     confirm.New(opts.Profile),
 	}
+}
+
+// orAllRepos resolves the zero Scope to the all-repos default (R0), so the field holds one of
+// the two constants and every reader compares against those rather than against "".
+func orAllRepos(s Scope) Scope {
+	if s == ScopeThisRepo {
+		return ScopeThisRepo
+	}
+	return ScopeAllRepos
 }
 
 // SetActive records whether this tab is focused. The reclamation view is opened and
@@ -416,17 +463,38 @@ func (m Model) startDownload() (Model, tea.Cmd) {
 	}
 }
 
-// scopeRepos is the set the fan-out covers: the discovered repositories under all-repos
-// (R0). It reads the capability map the refresh populated, so the fan-out and the gate
-// cover the same set. this-repo resolves to one repository via [settings] R19, which owns
-// the scope setting; until that lands the tab covers the discovered set, the R0 default.
+// scopeRepos is the set the fan-out covers, and R0's two code paths are here. Under
+// all-repos it is every discovered repository, read from the capability map the refresh
+// populated so the fan-out and the gate cover the same set. Under this-repo it is the
+// working directory's repository alone, whether or not discovery has reported it:
+// this-repo is the repository the operator is standing in, not the intersection of that
+// with the enumeration. A repository discovery has not reported keeps its capability
+// unknown, so the reclamation gate goes on failing closed over it (R20,
+// [repo-discovery] R8).
+//
+// Where this-repo resolves to nothing it falls back to all-repos, which scopeLabel states
+// in the frame rather than leaving silent ([settings] R19).
 func (m Model) scopeRepos() []domain.RepoID {
+	if id, ok := m.thisRepo(); ok {
+		return []domain.RepoID{id}
+	}
 	out := make([]domain.RepoID, 0, len(m.capability))
 	for _, r := range m.capability {
 		out = append(out, r.ID)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out
+}
+
+// thisRepo resolves the this-repo scope, and reports false under all-repos and wherever the
+// working directory has no repository (which includes no resolver being wired, the golden
+// and headless case). Both the fan-out and the frame read it, so the set fetched and the
+// scope stated cannot disagree.
+func (m Model) thisRepo() (domain.RepoID, bool) {
+	if m.scope != ScopeThisRepo || m.currentRepo == nil {
+		return domain.RepoID{}, false
+	}
+	return m.currentRepo()
 }
 
 // handleConfirmKey drives the confirmation modal while it is open, routing every key to
