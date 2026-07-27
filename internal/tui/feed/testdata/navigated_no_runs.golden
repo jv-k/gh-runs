@@ -1,4 +1,4 @@
-[38;2;138;138;138mfilter workflow:9004  (/ edit, then esc clears)                                                     [m
+[38;2;158;158;158mfilter workflow:9004  (/ edit, then esc clears)                                                     [m
 [1m  REPOSITORY           WORKFLOW         STATUS      CONCLUSION      RUN ID      STARTED             [m
-[38;2;138;138;138m  No Runs match the active filter.[m
-[38;2;138;138;138m↓/↑ move  space select  / filter  r refresh  ? help  q quit[m  [38;2;138;138;138mStandard[m
+[38;2;158;158;158m  No Runs match the active filter.[m
+[38;2;158;158;158m↓/↑ move  space select  / filter  r refresh  ? help  q quit[m  [38;2;158;158;158mStandard[m

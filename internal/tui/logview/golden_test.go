@@ -61,3 +61,19 @@ func TestGoldenStyledMarkers(t *testing.T) {
 func TestGoldenSanitized(t *testing.T) {
 	goldie.New(t).Assert(t, "sanitized", []byte(goldenPane(hostileLog()).View()))
 }
+
+// TestGoldenSearchHighlight is the search highlight's only coverage, and it exists because it
+// had none. Zero goldens rendered a search match before this one, so the palette's
+// worst-contrast case was the least tested thing in the tree: a Muted line under the dark
+// search background painted at 1.95:1, and nothing in the suite would have moved if it got
+// worse (settings R22, ADR-0024).
+//
+// The frame holds all three highlight states at once. The first match sits under the cursor,
+// so it renders the Cursor highlight; the later matches render the Match highlight, one of
+// them on a debug line the pane would otherwise paint Muted. A Highlight applies its own
+// foreground with its background, so those bytes carry white on the highlight rather than
+// whatever severity colour the line arrived with, which is the fix this golden pins.
+func TestGoldenSearchHighlight(t *testing.T) {
+	m := goldenPane(searchableLog()).key("/").typeText("cache").key("enter")
+	goldie.New(t).Assert(t, "search_highlight", []byte(m.View()))
+}
