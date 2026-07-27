@@ -1,0 +1,9 @@
+[1mcli/cli · CI[m   [38;2;158;158;158mRun #4821[m
+[38;2;158;158;158mcompleted[m  [38;2;95;175;95msuccess[m
+
+  [1mJOB / STEP                                                   STATUS      CONCLUSION      ELAPSED  [m
+> build                                                        [38;2;158;158;158mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;158;158;158m1m4s     [m
+  [38;2;158;158;158m    1 Set up job                                            [m [38;2;158;158;158mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;158;158;158m2s       [m
+  test                                                         [38;2;158;158;158mcompleted  [m [38;2;255;95;95mfailure        [m [38;2;158;158;158m58s      [m
+
+[38;2;158;158;158mSelect a Job and press enter to view its log.[m

@@ -335,3 +335,69 @@ func TestLifecycleConfirmedIsSingleUse(t *testing.T) {
 		t.Errorf("the second Execute issued %d further POSTs; a spent Confirmed issues nothing", after-before)
 	}
 }
+
+// jobItems freezes one Job per id, all in one repository and each in its own Run, which is
+// the only shape a per-Job re-run set may take (run-lifecycle R14a, AC14b).
+func jobItems(owner, name string, ids ...int64) []ops.Item {
+	out := make([]ops.Item, len(ids))
+	for i, id := range ids {
+		out[i] = ops.JobItem(domain.Job{
+			ID:    id,
+			RunID: 9000 + id, // a Run of its own per Job
+			Repo:  repoID(owner, name),
+			Name:  "build",
+		})
+	}
+	return out
+}
+
+// TestRerunJobActsOnTheJobEndpointAndTakesDebug pins the fifth lifecycle operation (R14a). The
+// path addresses a Job id and never a Run id, which is why it cannot ride the shared Run
+// endpoint the other four build, and R14's enable_debug_logging extends to it unchanged.
+//
+// It writes no deletion log, for the reason the other re-runs do not: it adds an Attempt and
+// deletes nothing (R24).
+func TestRerunJobActsOnTheJobEndpointAndTakesDebug(t *testing.T) {
+	h := newHarness(t, "rerun_job", 50, 50)
+
+	def := h.confirmed(t, ops.OpRerunJob, jobItems("o", "r", 101), snapshot(writableRepo("o", "r")))
+	if sum := runPurge(t, h, def); sum.Acted != 1 || sum.FailedCount() != 0 {
+		t.Errorf("default per-Job re-run = acted %d, failed %d; want 1/0 (R14a)", sum.Acted, sum.FailedCount())
+	}
+	if body, ok := h.counting.postBody("/actions/jobs/101/rerun"); !ok || strings.Contains(body, "enable_debug_logging") {
+		t.Errorf("default per-Job re-run body = %q, want no enable_debug_logging (AC14)", body)
+	}
+
+	p, err := h.ops.Plan(ops.OpRerunJob, jobItems("o", "r", 102), snapshot(writableRepo("o", "r")))
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	dbg, err := h.ops.Confirm(p.WithDebugLogging(), ops.NonInteractiveYes())
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if sum := runPurge(t, h, dbg); sum.Acted != 1 {
+		t.Errorf("debug per-Job re-run = acted %d, want 1", sum.Acted)
+	}
+	if body, ok := h.counting.postBody("/actions/jobs/102/rerun"); !ok || !strings.Contains(body, `"enable_debug_logging":true`) {
+		t.Errorf("debug per-Job re-run body = %q, want enable_debug_logging true (R14, AC14)", body)
+	}
+	if h.logExists() {
+		t.Errorf("a per-Job re-run wrote a deletion log; R24 forbids it (it adds an Attempt, it deletes nothing)")
+	}
+}
+
+// TestRerunJob404IsAFailure pins R22's re-run reading for the fifth operation: a Job that
+// cannot be found cannot gain an Attempt, so the 404 is a failure. The identical status is a
+// skip for a cancel, which lifecycle_404.yaml pins one endpoint over. This is a third case in
+// that branch rather than a new contract.
+func TestRerunJob404IsAFailure(t *testing.T) {
+	h := newHarness(t, "rerun_job", 50, 50)
+
+	c := h.confirmed(t, ops.OpRerunJob, jobItems("o", "r", 404), snapshot(writableRepo("o", "r")))
+	sum := runPurge(t, h, c)
+
+	if sum.FailedCount() != 1 || sum.Acted != 0 {
+		t.Errorf("a 404 per-Job re-run = acted %d, failed %d; want 0/1 (R22, AC13)", sum.Acted, sum.FailedCount())
+	}
+}

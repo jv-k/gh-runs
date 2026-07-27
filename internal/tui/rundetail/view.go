@@ -1,10 +1,12 @@
 package rundetail
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
@@ -186,10 +188,30 @@ func (m Model) jobLines() []string {
 	}
 	if m.active {
 		out = append(out, "")
-		out = append(out, styleDim.Render("Select a Job and press enter to view its log."))
+		if m.offersJobRerun() {
+			out = append(out, styleDim.Render(fmt.Sprintf(
+				"Select a Job and press enter to view its log, or %s to re-run it.", hint(m.profile.Rerun))))
+			// The note run-lifecycle R14b requires, gated with the key it describes, which is
+			// R18b's "whenever R18a's operation is offered" read literally: a frame where the
+			// gate withholds the operation holds no note (run-detail AC16).
+			//
+			// It states both of R14b's clauses. The other Jobs of the Attempt lose their Steps
+			// and their logs, and the Jobs declared downstream of this one re-run with it. The
+			// second is not a restatement of the first: it is work that will be spent, where
+			// the first is work that will be lost. Non-blocking means it renders. It does not
+			// gate and it does not confirm.
+			out = append(out, styleDim.Render(
+				"Re-running one Job supersedes the Attempt: the other Jobs lose their Steps and logs, "+
+					"and the Jobs declared after it re-run too."))
+		} else {
+			out = append(out, styleDim.Render("Select a Job and press enter to view its log."))
+		}
 	}
 	return out
 }
+
+// hint renders a binding's key for a help line, the same one-liner every pane uses (R7a).
+func hint(b key.Binding) string { return b.Help().Key }
 
 // gutterWidth is the width the Job cursor gutter takes, two columns in job-focus and none
 // otherwise, so the stage-8 view is unchanged when the operator has not descended.

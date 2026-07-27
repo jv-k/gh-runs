@@ -50,3 +50,15 @@ interactions:
         headers:
             X-Ratelimit-Remaining: ["4987"]
             X-Ratelimit-Reset: ["1789000000"]
+    # -j names the Job endpoint directly, with no Run endpoint touched at all (AC22, R28a).
+    - id: 4
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/r/actions/jobs/4242/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4896"]
+            X-Ratelimit-Reset: ["1789000000"]

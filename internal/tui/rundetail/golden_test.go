@@ -10,6 +10,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
+	"github.com/jv-k/gh-runs/v2/internal/keys"
 )
 
 // The goldens render the pane's frame from held state alone, at 100 columns, with no
@@ -126,4 +127,60 @@ func TestGoldenPaused(t *testing.T) {
 	m := goldenPane(r, jobs)
 	m, _ = m.Update(governor.Readout{Exhausted: true, Reset: time.Date(2026, 7, 15, 17, 9, 0, 0, time.UTC)})
 	goldie.New(t).Assert(t, "paused", []byte(m.View()))
+}
+
+// goldenFocusedPane is goldenPane descended into job-focus, with a resolved keybinding set so
+// the hints render their real keys (R7a). The plain goldenPane leaves Profile at its zero
+// value, which is right for the frames that carry no hint and wrong for these.
+func goldenFocusedPane(r domain.Run, jobs []domain.Job, repo domain.Repo, known bool) Model {
+	m := New(Options{Clock: clockwork.NewFakeClockAt(t0), Profile: keys.Standard})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100})
+	m, _ = m.Open(r)
+	m = m.SetRepoCapability(repo, known)
+	m, _ = m.Update(jobsMsg{runID: r.ID, jobs: jobs})
+	return m.Focus()
+}
+
+// gWritable is a repository the token can push and that is not archived, which is what
+// run-detail R18's gate asks for.
+func gWritable(id domain.RepoID) domain.Repo {
+	return domain.Repo{ID: id, Permissions: domain.Permissions{Push: true}}
+}
+
+// TestGoldenJobFocusStatesTheRerunNote is the frame run-lifecycle R14b mandates, and it had no
+// golden at all before this one: no test rendered job-focus, so neither the cursor gutter nor
+// its hints were pinned by any frame.
+//
+// Two things are asserted by these bytes. The hint names the key that re-runs the Job under
+// the cursor, and the note states what the superseded Attempt takes with it. R16 requires that
+// note here where open question 7 only permitted it for the other two re-runs, because the
+// operator named one Job and the rest of the Attempt's Steps and logs go anyway. It is
+// non-blocking: it renders, it does not gate, and it does not confirm.
+func TestGoldenJobFocusStatesTheRerunNote(t *testing.T) {
+	r := gRun(29516338954, "cli", "cli", "CI", 4821, 1, completed, success)
+	jobs := []domain.Job{
+		gJob("build", completed, success, sec(-64), sec(0),
+			gStep(1, "Set up job", completed, success, sec(-64), sec(-62)),
+		),
+		gJob("test", completed, failure, sec(-60), sec(-2)),
+	}
+
+	goldie.New(t).Assert(t, "job_focus_rerun_note", []byte(goldenFocusedPane(r, jobs, gWritable(r.Repo), true).View()))
+}
+
+// TestGoldenJobFocusWithheldHoldsNoNote is AC16's other half: "a frame where R18's gate
+// withholds the operation holds no note". A read-only repository is the ordinary way that
+// happens, and the frame must still be the useful one, offering the log the operator can
+// still read rather than an empty sub-mode.
+func TestGoldenJobFocusWithheldHoldsNoNote(t *testing.T) {
+	r := gRun(29516338954, "cli", "cli", "CI", 4821, 1, completed, success)
+	jobs := []domain.Job{
+		gJob("build", completed, success, sec(-64), sec(0),
+			gStep(1, "Set up job", completed, success, sec(-64), sec(-62)),
+		),
+		gJob("test", completed, failure, sec(-60), sec(-2)),
+	}
+	readOnly := domain.Repo{ID: r.Repo, Permissions: domain.Permissions{Push: false}}
+
+	goldie.New(t).Assert(t, "job_focus_withheld", []byte(goldenFocusedPane(r, jobs, readOnly, true).View()))
 }

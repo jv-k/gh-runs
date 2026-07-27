@@ -255,3 +255,53 @@ func TestRerun404IsAFailureAndCancel404IsASkip(t *testing.T) {
 		t.Errorf("the cancel's 404 was counted as a failure; the requested end state holds (R22, AC13):\n%s", out)
 	}
 }
+
+// TestRerunJobFlagAddressesTheJobEndpoint pins cli-surface R28a and AC22: "-j <id> addresses
+// the Job endpoint with that id and no Run endpoint at all". It needs no Run lookup, so it
+// issues no request before the write, and it prices at FrictionNone like any single re-run,
+// so it needs no --yes.
+func TestRerunJobFlagAddressesTheJobEndpoint(t *testing.T) {
+	h := newHarness(t, "lifecycle_byid").withCurrent(gh("o", "r"))
+
+	code := h.runDriven("rerun", "-j", "4242")
+
+	if code != 0 {
+		t.Fatalf("rerun -j 4242 exited %d, want 0. stderr: %s", code, h.stderr.String())
+	}
+	if !h.postedTo("/actions/jobs/4242/rerun") {
+		t.Errorf("-j did not POST the Job endpoint (R28a, AC22). urls: %v", h.counting.urls)
+	}
+	for _, u := range h.counting.urls {
+		if strings.Contains(u, "/actions/runs/") {
+			t.Errorf("-j touched a Run endpoint %q; AC22 requires none at all", u)
+		}
+	}
+}
+
+// TestRerunJobFlagIsRefusedWhereItNamesNothing pins the two refusals R28a and R28c fix. A Job
+// id names one Job of one Run and so names no repository, which puts it under the rule a bare
+// Run ID takes: refused under a fan-out. And -j selects a different operation from --failed,
+// so the pair is refused rather than one of them silently winning.
+//
+// Both must issue zero requests, which the offline transport proves by failing any wire call.
+func TestRerunJobFlagIsRefusedWhereItNamesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"under a fan-out there is no repository to address", []string{"rerun", "-j", "4242", "--all-repos"}},
+		{"beside --failed it selects two operations", []string{"rerun", "-j", "4242", "--failed"}},
+		{"beside a Run ID it names the target twice", []string{"rerun", "9", "-j", "4242"}},
+		{"beside a filter it names the target twice", []string{"rerun", "-j", "4242", "-s", "failure"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessOffline(t).withCurrent(gh("o", "r"))
+			if code := h.run(tc.args...); code == 0 {
+				t.Errorf("%v exited 0, want a usage refusal (R28a, R28c)", tc.args)
+			}
+			if h.counting.count() != 0 {
+				t.Errorf("the refusal issued %d requests; it must issue zero", h.counting.count())
+			}
+		})
+	}
+}

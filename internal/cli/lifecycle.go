@@ -20,12 +20,13 @@ import (
 // and --debug to rerun (R13, R14), so neither offers a flag the other's endpoints ignore.
 type lifecycleFlags struct {
 	lf       listFlags
-	matchAll bool // --all: act on every Run in scope, the zero filter asked for by name
-	dryRun   bool // --dry-run: resolve and report, write nothing, exit 0
-	yes      bool // --yes: the non-interactive confirmation
-	force    bool // cancel only: force-cancel, a distinct operation (R6)
-	failed   bool // rerun only: re-run failed Jobs, a distinct operation (R13)
-	debug    bool // rerun only: enable_debug_logging, off by default (R14, AC14)
+	matchAll bool  // --all: act on every Run in scope, the zero filter asked for by name
+	dryRun   bool  // --dry-run: resolve and report, write nothing, exit 0
+	yes      bool  // --yes: the non-interactive confirmation
+	force    bool  // cancel only: force-cancel, a distinct operation (R6)
+	failed   bool  // rerun only: re-run failed Jobs, a distinct operation (R13)
+	debug    bool  // rerun only: enable_debug_logging, off by default (R14, AC14)
+	job      int64 // rerun only: -j/--job, re-run the Job this id names (R28a)
 }
 
 // newCancelCmd builds the cancel command, the non-interactive form of run-lifecycle's
@@ -74,7 +75,14 @@ func newRerunCmd(deps Deps) *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(_ *cobra.Command, args []string) error {
 			op := ops.OpRerun
-			if f.failed {
+			switch {
+			case f.job != 0 && f.failed:
+				// Two distinct operations against two distinct endpoints. Neither reading of
+				// the pair is what the operator asked for (R28, ADR-0008).
+				return fmt.Errorf("--failed and -j select different operations: pass one")
+			case f.job != 0:
+				op = ops.OpRerunJob // R28a, run-lifecycle R14a
+			case f.failed:
 				op = ops.OpRerunFailed // R13: distinct, and offered only where Jobs failed
 			}
 			return runLifecycle(deps, f, op, args)
@@ -82,7 +90,8 @@ func newRerunCmd(deps Deps) *cobra.Command {
 	}
 	bindLifecycleFlags(cmd, f, "Re-run")
 	cmd.Flags().BoolVar(&f.failed, "failed", false, "Re-run only the jobs that failed")
-	cmd.Flags().BoolVar(&f.debug, "debug", false, "Enable debug logging for the new attempt")
+	cmd.Flags().BoolVarP(&f.debug, "debug", "d", false, "Enable debug logging for the new attempt")
+	cmd.Flags().Int64VarP(&f.job, "job", "j", 0, "Re-run the job this ID names, and the jobs declared after it")
 	return cmd
 }
 
@@ -185,6 +194,21 @@ func runLifecycle(deps Deps, f *lifecycleFlags, op ops.Operation, args []string)
 // A filter resolves through the same crawl the delete command uses, so the set a --dry-run
 // reports and the set the operation walks are produced by one code path (cli-surface R10).
 func resolveLifecycleSet(ctx context.Context, deps Deps, f *lifecycleFlags, sc scope, args []string) ([]ops.Item, error) {
+	if f.job != 0 {
+		// A Job id names one Job of one Run and so names no repository, which puts -j under
+		// the rule a bare Run ID takes: refused under a fan-out, where there is no repository
+		// to address the Job endpoint against (R28a, R29).
+		if len(sc.repos) != 1 {
+			return nil, fmt.Errorf("a Job ID names a Job in one repository: pass -R OWNER/REPO, or run inside the repository")
+		}
+		if len(args) > 0 || f.hasFilter() || f.matchAll {
+			return nil, fmt.Errorf("refusing to guess: -j names one Job, so it takes no Run IDs and no filter")
+		}
+		// No Run lookup, and no request before the Plan. AC22 fixes this: "-j <id> addresses
+		// the Job endpoint with that id and no Run endpoint at all", so the Item needs the
+		// repository and the id and nothing the API would have to be asked for.
+		return []ops.Item{ops.JobItem(domain.Job{Repo: sc.repos[0], ID: f.job})}, nil
+	}
 	if len(args) > 0 {
 		// A bare Run ID is meaningful against one repository only. Under a fan-out it names
 		// nothing, and picking one of the discovered repositories, or broadcasting the write

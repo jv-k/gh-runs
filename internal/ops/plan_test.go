@@ -1,6 +1,7 @@
 package ops_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jv-k/gh-runs/v2/internal/config"
@@ -63,6 +64,13 @@ func TestFrictionTable(t *testing.T) {
 		{"delete of one is never None", ops.OpDelete, runItems("o", "a", 1, 1), 50, oneRepo, ops.FrictionYN},
 		{"single re-run is None", ops.OpRerun, runItems("o", "a", 1, 1), 50, oneRepo, ops.FrictionNone},
 		{"single-repo 500 at a clamped-500 threshold types the count", ops.OpDelete, runItems("o", "a", 500, 1), 500, oneRepo, ops.FrictionTypedCount},
+		// The fifth operation takes the same row the other two re-runs do: None on a
+		// single-Item set, the existing rules otherwise (run-lifecycle R17, R18). R18 names this
+		// operation outright: a single-Job re-run takes no confirmation, on the same reasoning
+		// that exempts a single Run, and R14b's note is what it carries instead.
+		{"single per-Job re-run is None", ops.OpRerunJob, []ops.Item{jobIn("o", "a", 101, 555)}, 50, oneRepo, ops.FrictionNone},
+		{"two per-Job re-runs below the threshold is y/N", ops.OpRerunJob, []ops.Item{jobIn("o", "a", 101, 555), jobIn("o", "a", 102, 556)}, 50, oneRepo, ops.FrictionYN},
+		{"cross-repo per-Job re-run types the count at any size", ops.OpRerunJob, []ops.Item{jobIn("o", "a", 101, 555), jobIn("o", "b", 102, 556)}, 50, twoRepos, ops.FrictionTypedCount},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -229,5 +237,69 @@ func TestDeleteDoesNotSkipAnOrphanedRun(t *testing.T) {
 	}
 	if got := plan.Skipped(); got != 0 {
 		t.Errorf("Skipped() = %d, want 0; a deleted Workflow's Runs stay deletable (workflow-management R14)", got)
+	}
+}
+
+// jobIn freezes a Job of the named Run, for the per-Run uniqueness rule.
+func jobIn(owner, name string, jobID, runID int64) ops.Item {
+	return ops.JobItem(domain.Job{ID: jobID, RunID: runID, Repo: repoID(owner, name), Name: "build"})
+}
+
+// TestPlanRefusesTwoJobsOfOneRun pins run-lifecycle R14a's one-Job-per-Run bound at the write path (AC14b). A per-Job re-run
+// supersedes the whole Attempt, so re-running two Jobs of one Run is not a thing the API can
+// be asked for, and R28 bars the live write that would establish what it does instead.
+//
+// It is an error rather than a skip because the operator's set came from a name that matched
+// twice and no member of the pair is the one they meant. The message names the Run, because
+// that is where they would go to look.
+func TestPlanRefusesTwoJobsOfOneRun(t *testing.T) {
+	o := newPlanOps(50)
+	repos := snapshot(writableRepo("o", "r"))
+
+	t.Run("two Jobs of one Run is an error naming the Run", func(t *testing.T) {
+		_, err := o.Plan(ops.OpRerunJob, []ops.Item{
+			jobIn("o", "r", 101, 555),
+			jobIn("o", "r", 102, 555),
+		}, repos)
+		if err == nil {
+			t.Fatal("Plan accepted two Jobs of one Run (R12)")
+		}
+		if !strings.Contains(err.Error(), "555") {
+			t.Errorf("the error does not name the Run: %v", err)
+		}
+	})
+
+	t.Run("two Jobs of two Runs is fine", func(t *testing.T) {
+		if _, err := o.Plan(ops.OpRerunJob, []ops.Item{
+			jobIn("o", "r", 101, 555),
+			jobIn("o", "r", 102, 556),
+		}, repos); err != nil {
+			t.Errorf("Plan refused two Jobs of distinct Runs: %v", err)
+		}
+	})
+
+	t.Run("the rule binds only the per-Job re-run", func(t *testing.T) {
+		// Two whole-Run re-runs of the same Run are a different question, and not this
+		// rule's. Plan must not start refusing sets it accepted before.
+		if _, err := o.Plan(ops.OpRerun, items("o", "r", 1, 1), repos); err != nil {
+			t.Errorf("the uniqueness rule leaked onto a whole-Run re-run: %v", err)
+		}
+	})
+}
+
+// TestPlanRefusesANonJobItemUnderTheJobRerun pins run-lifecycle R14a's "MUST NOT be silently
+// widened to the whole Run". lifecycleRequest builds the Job endpoint from the Item's id
+// without consulting its Kind, so a RunItem planned under this operation would POST
+// /actions/jobs/{runID}/rerun: a write against whatever Job happens to carry that number.
+// That is the widest possible widening, and it is refused before the wire.
+func TestPlanRefusesANonJobItemUnderTheJobRerun(t *testing.T) {
+	_, err := newPlanOps(50).Plan(ops.OpRerunJob,
+		[]ops.Item{ops.RunItem(completedRun(1, "o", "r"))},
+		snapshot(writableRepo("o", "r")))
+	if err == nil {
+		t.Fatal("Plan accepted a Run Item under a per-Job re-run (R14a)")
+	}
+	if !strings.Contains(err.Error(), "run") {
+		t.Errorf("the error does not name the offending Kind: %v", err)
 	}
 }
