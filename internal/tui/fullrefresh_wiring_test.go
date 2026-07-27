@@ -66,3 +66,33 @@ func TestFullRefreshWithNoSeamIsInert(t *testing.T) {
 		t.Error("a nil full-refresh seam produced a Cmd, want none")
 	}
 }
+
+// TestFullRefreshDoesNotFireWhileATabCapturesInput is the capture rule applied to this key.
+// u is an ordinary letter, so it is filter text while the Feed's filter input is focused,
+// exactly as q, a digit and a comma are (R7, R23). Firing a ~163-request pass because
+// somebody typed a repository name containing u would be the worst instance of the bug that
+// rule exists to prevent, because nothing on screen would explain the spend.
+func TestFullRefreshDoesNotFireWhileATabCapturesInput(t *testing.T) {
+	called := 0
+	tab := &recordingTab{title: "Runs", captures: true}
+	m := New(Options{Profile: keys.Standard, FullRefresh: func() { called++ }})
+	m.tabs[0] = tab
+	m.active = 0
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
+	if cmd != nil {
+		cmd()
+	}
+	if called != 0 {
+		t.Error("the full refresh fired from a key typed into a focused text input")
+	}
+	var reached bool
+	for _, k := range tab.keys {
+		if k == "u" {
+			reached = true
+		}
+	}
+	if !reached {
+		t.Error("u was swallowed by the root instead of reaching the capturing tab as text")
+	}
+}
