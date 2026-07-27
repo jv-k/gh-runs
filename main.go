@@ -650,9 +650,14 @@ type tuiDeps struct {
 func (c clients) tuiOptions(d tuiDeps) tui.Options {
 	client := c.shared
 	return tui.Options{
-		Updates:     d.Scheduler.Updates(),
-		Readout:     d.Governor.Readout,
-		Repos:       func() []domain.Repo { return knownRepos(d.Discovery) },
+		Updates: d.Scheduler.Updates(),
+		Readout: d.Governor.Readout,
+		Repos:   func() []domain.Repo { return knownRepos(d.Discovery) },
+		// The membership set, beside the capability snapshot above and pulled on the same
+		// tick (live-run-feed R37). Discovery already projects it, so this is the seam and
+		// not the policy: knownRepos filters to Known and this one deliberately does not,
+		// which is the whole distinction the Feed's prunes rest on.
+		Membership:  d.Discovery.Membership,
 		Revalidated: func() time.Time { return newestRevalidated(d.Store, d.Discovery.PollSet()) },
 		SetViewport: d.Scheduler.SetViewport,
 		SetFilter:   d.Scheduler.SetFilter,

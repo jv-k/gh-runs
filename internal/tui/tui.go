@@ -113,9 +113,20 @@ type tab interface {
 // scheduler's medium-tier control, SetFilter hands it the Feed's active filter to push
 // server-side (R22), and the profile is the resolved keybinding set.
 type Options struct {
-	Updates     <-chan scheduler.Event
-	Readout     func() governor.Readout
-	Repos       func() []domain.Repo
+	Updates <-chan scheduler.Event
+	Readout func() governor.Readout
+	Repos   func() []domain.Repo
+	// Membership is every repository discovery still holds, whether or not its capability
+	// is known (live-run-feed R37). It is pulled beside Repos on the same tick and
+	// broadcast as its own message class, because the two answer different questions and
+	// the Feed's prunes may only read this one. A repository awaiting enumeration is a
+	// member with no recorded capability, so it is here and not in Repos.
+	//
+	// A second pulled set rather than an event naming what was retired: retirement is an
+	// event and the root is a pull-based tick, so an event would need a queue between
+	// pulls and a delivery guarantee the tick offers nobody. A full set is idempotent and
+	// matches every other pull on this tick (ADR-0020).
+	Membership  func() []domain.RepoID
 	Revalidated func() time.Time
 	SetViewport func([]domain.RepoID)
 	SetFilter   func(filter.Filter)
@@ -219,6 +230,7 @@ type Model struct {
 	updates     <-chan scheduler.Event
 	readout     func() governor.Readout
 	repos       func() []domain.Repo
+	membership  func() []domain.RepoID
 	revalidated func() time.Time
 
 	lastReadout governor.Readout
@@ -321,6 +333,7 @@ func New(opts Options) Model {
 		updates:      opts.Updates,
 		readout:      opts.Readout,
 		repos:        opts.Repos,
+		membership:   opts.Membership,
 		revalidated:  opts.Revalidated,
 		settings:     set,
 		running:      running.New(opts.Profile).WithRetrier(opts.Retrier),
@@ -726,6 +739,16 @@ func (m Model) onTick() (tea.Model, tea.Cmd) {
 		if repos := m.repos(); len(repos) > 0 {
 			var c tea.Cmd
 			m, c = m.broadcast(feed.ReposDiscovered(repos))
+			cmds = append(cmds, c)
+		}
+	}
+	// The membership set, on the same tick and as its own class (R37). The empty guard is
+	// the same one the capability pull carries and for the same reason: an empty set is a
+	// cold start, and the Feed's prunes would read it as every repository having departed.
+	if m.membership != nil {
+		if members := m.membership(); len(members) > 0 {
+			var c tea.Cmd
+			m, c = m.broadcast(feed.RepoMembership(members))
 			cmds = append(cmds, c)
 		}
 	}

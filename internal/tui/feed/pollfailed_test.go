@@ -121,18 +121,22 @@ func TestFailureReasonIsSanitised(t *testing.T) {
 // no Update can ever arrive to clear it. Without this the indicator would assert a
 // live condition nothing is testing anymore, undismissable for the rest of the session.
 //
-// The first discovery is what makes this the real sequence rather than a vacuous one: a
-// repository can only leave the poll set if it was in it, and a prune read against the
-// accumulated union of every discovery would report it as still known and drop nothing.
+// The first membership set is what makes this the real sequence rather than a vacuous one:
+// a repository can only leave the set if it was in it, and a prune read against the
+// accumulated union of every snapshot would report it as still known and drop nothing.
+//
+// It reads RepoMembership rather than ReposDiscovered, which is R37: the capability
+// snapshot legitimately omits a repository awaiting enumeration, so absence there is not a
+// departure. discovery.Membership is what shrinks, once repo-discovery R23 retires.
 func TestFailureClearsWhenTheRepositoryLeavesDiscovery(t *testing.T) {
 	m := newFeed(100, 24)
 	gone, stays := repoID("acme", "gone"), repoID("acme", "stays")
-	m, _ = m.Update(ReposDiscovered{{ID: gone}, {ID: stays}})
+	m, _ = m.Update(RepoMembership{gone, stays})
 	m = feedFailure(m, gone, errors.New("poll returned HTTP 404 Not Found"))
 	m = feedFailure(m, stays, errors.New("poll returned HTTP 502 Bad Gateway"))
 
-	// Discovery re-probes and reports only the repository that is still there.
-	m, _ = m.Update(ReposDiscovered{{ID: stays}})
+	// Discovery retires the first, so the next membership set omits it.
+	m, _ = m.Update(RepoMembership{stays})
 
 	got := m.View()
 	if strings.Contains(got, "acme/gone") {
@@ -144,16 +148,16 @@ func TestFailureClearsWhenTheRepositoryLeavesDiscovery(t *testing.T) {
 }
 
 // TestEmptyDiscoveryClearsNothing is the guard on the prune above. At cold start
-// nothing is discovered yet, and an empty set is not evidence that a repository has
+// discovery holds nothing, and an empty set is not evidence that a repository has
 // gone.
 func TestEmptyDiscoveryClearsNothing(t *testing.T) {
 	m := newFeed(100, 24)
 	m = feedFailure(m, repoID("acme", "api"), errors.New("poll returned HTTP 502 Bad Gateway"))
 
-	m, _ = m.Update(ReposDiscovered{})
+	m, _ = m.Update(RepoMembership{})
 
 	if got := m.View(); !strings.Contains(got, "acme/api") {
-		t.Errorf("an empty discovery batch cleared a live failure:\n%s", got)
+		t.Errorf("an empty membership set cleared a live failure:\n%s", got)
 	}
 }
 

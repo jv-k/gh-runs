@@ -198,8 +198,9 @@ func TestCancelRequestedSurvivesAPollThatShowsNoTransitionYet(t *testing.T) {
 // legend would then report a request outstanding for the rest of the session, against a
 // repository the tool is no longer even asking about.
 //
-// The prune is against the discovered set, which arrives as a full set, so absence is
-// meaningful. The empty case is not: at cold start nothing is discovered yet.
+// The prune is against the membership set, which arrives as a full set, so absence is
+// meaningful. The empty case is not: at cold start discovery holds nothing. The capability
+// snapshot below is what permits the cancel; it prunes nothing, which is R37.
 func TestCancelRequestedClearsWhenTheRepositoryLeavesThePollSet(t *testing.T) {
 	gone := repoID("o", "gone")
 	m := newFeed(100, 24)
@@ -207,6 +208,7 @@ func TestCancelRequestedClearsWhenTheRepositoryLeavesThePollSet(t *testing.T) {
 		{ID: repoID("o", "r"), Permissions: domain.Permissions{Push: true}},
 		{ID: gone, Permissions: domain.Permissions{Push: true}},
 	})
+	m, _ = m.Update(RepoMembership{repoID("o", "r"), gone})
 	r := mkRun(1, "o", "gone", "CI", domain.StatusInProgress, "", t0)
 	m = feedRuns(m, gone, r)
 	m = m.Update2(cancelFrame(ops.OpCancel, true, r))
@@ -214,8 +216,8 @@ func TestCancelRequestedClearsWhenTheRepositoryLeavesThePollSet(t *testing.T) {
 		t.Fatalf("precondition: the Run was not marked")
 	}
 
-	// The next discovery no longer carries the repository.
-	m, _ = m.Update(ReposDiscovered{{ID: repoID("o", "r"), Permissions: domain.Permissions{Push: true}}})
+	// The next membership set no longer carries the repository.
+	m, _ = m.Update(RepoMembership{repoID("o", "r")})
 
 	if _, marked := m.cancelRequested[1]; marked {
 		t.Errorf("the mark survived its repository leaving the poll set; nothing can ever clear it (R4)")
@@ -236,10 +238,10 @@ func TestCancelRequestedSurvivesAnEmptyDiscovery(t *testing.T) {
 	m = feedRuns(m, id, r)
 	m = m.Update2(cancelFrame(ops.OpCancel, true, r))
 
-	m, _ = m.Update(ReposDiscovered{})
+	m, _ = m.Update(RepoMembership{})
 
 	if _, marked := m.cancelRequested[1]; !marked {
-		t.Errorf("an empty discovery cleared the mark; absence is only meaningful in a full set")
+		t.Errorf("an empty membership set cleared the mark; absence is only meaningful in a full set")
 	}
 }
 
