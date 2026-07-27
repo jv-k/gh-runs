@@ -51,18 +51,9 @@ const (
 	rowBudget row = iota
 	rowProfile
 	rowTheme
-	// The timestamp format sits with the theme because it is the other purely presentational
-	// choice: neither changes what the tool does, both change how a frame reads, and both
-	// therefore apply from the next frame. What they do not share is a mechanism. The palette
-	// is ambient, so a theme change reaches every view without travelling; the timestamp is a
-	// field on one tab, and the root pushes it there. Both are read off this pane by the root
-	// after every key it routes here, and this pane pushes neither.
 	rowTimestamp
 	rowWorkflowsScope
 	rowStorageScope
-	// The launch filter sits with the two tab scopes because it is the third of the same
-	// question: which Runs a tab opens on. R19's note says so outright, calling a launch
-	// filter pinned to one repository the Runs tab's this-repo scope by another name.
 	rowLaunchFilter
 	rowExclude
 	rowPin
@@ -72,27 +63,240 @@ const (
 	rowCount
 )
 
+// Each row's facts, including why it sits where it does, are in the rows table below.
+
+// rowKind is how a row is edited, which decides every gesture the pane offers it: a
+// selector cycles on space, and the other three open an editor on enter over a different
+// vocabulary each. kindNone is the zero value and belongs to no row, so a row index outside
+// the table reports none of the four rather than defaulting into the first.
+type rowKind int
+
+const (
+	kindNone rowKind = iota
+	kindSelector
+	kindNumber
+	kindList
+	kindFilter
+)
+
+// rowSpec is everything the pane knows about one row, in one place. Before this, a row's
+// facts lived in seven parallel switches that had to stay in the same order with nothing
+// enforcing that they did, and adding one setting meant an arm in each.
+//
+// The table is indexed by the row constant rather than written in order, so a row added in
+// the middle of the enum cannot silently take another row's label.
+type rowSpec struct {
+	kind rowKind
+	// key is the config.yml key, the same spelling config.Save writes and Load reads. It is
+	// what CursorKey returns.
+	key string
+	// label is the human name, at the level of intent (Purpose): a person deciding this
+	// answers from their own context, without the mechanism behind it.
+	label string
+	// desc is the one-line help, intent-level and free of the mechanism R13 keeps out of the
+	// view. None names a poll interval, a delete rate, a cache TTL, a concurrency level, or a
+	// way to skip confirmation.
+	desc string
+	// options lists the members a selector cycles through, nil for every other kind. It is a
+	// function rather than a string so the hint is drawn from the exported set config
+	// validates against on each render, which is what keeps the view offering exactly what
+	// the loader accepts (R5, R8, R19).
+	options func() string
+	// bound states a numeric setting's range, so a focused number row shows what a commit
+	// will clamp to (R12, R20, R21). Empty for every other kind.
+	bound string
+	// value renders the row's current value as plain text, before styling.
+	value func(m Model) string
+	// cycle advances a selector to the next member of its set, nil for every other kind.
+	// It takes and returns the Model rather than the value alone because the keybinding row
+	// re-seeds the pane's own motion as it cycles.
+	cycle func(m Model) Model
+	// commit adopts a parsed integer for a number row, clamped to the setting's own bound so
+	// the running view holds a value the file would accept (R12, R20, R21). Nil for every
+	// other kind. The clamp is config's, so the view and the loader agree on the range by
+	// calling one function rather than by two constants matching.
+	commit func(m Model, v int) Model
+}
+
+// rows is the one table. Adding a setting means an entry here and a registry in config, and
+// no switch anywhere.
+var rows = [rowCount]rowSpec{
+	rowBudget: {
+		kind:    kindSelector,
+		key:     "budget",
+		label:   "Budget",
+		desc:    "Share of your API allowance the background refresh may spend.",
+		options: func() string { return config.ListSet(config.Tiers(), " / ") },
+		value:   func(m Model) string { return string(m.cfg.Budget) },
+		cycle: func(m Model) Model {
+			m.cfg.Budget = next(m.cfg.Budget, config.Tiers())
+			return m
+		},
+	},
+	rowProfile: {
+		kind:    kindSelector,
+		key:     "keybinding_profile",
+		label:   "Keybinding profile",
+		desc:    "Motion keys: Vim (k/j) or Standard (arrows).",
+		options: func() string { return config.ListSet(config.KeybindingProfiles(), " / ") },
+		value:   func(m Model) string { return string(m.cfg.KeybindingProfile) },
+		// This is the one cycle that touches more than its own config field. Re-seeding the
+		// pane's motion here is what makes Vim's j and Standard's arrows take effect for the
+		// pane's very next keystroke. That is this pane applying the change to itself and
+		// nothing more: the root reads the profile back off the pane after the key and pushes
+		// it to every tab, the running surface and its own global keys (#127).
+		cycle: func(m Model) Model {
+			m.cfg.KeybindingProfile = next(m.cfg.KeybindingProfile, config.KeybindingProfiles())
+			if p, ok := keys.ForName(string(m.cfg.KeybindingProfile)); ok {
+				m.profile = p
+			}
+			return m
+		},
+	},
+	rowTheme: {
+		kind:    kindSelector,
+		key:     "theme",
+		label:   "Theme",
+		desc:    "Palette: auto follows your terminal background. NO_COLOR overrides all three.",
+		options: func() string { return config.ListSet(config.Themes(), " / ") },
+		value:   func(m Model) string { return string(m.cfg.Theme) },
+		cycle: func(m Model) Model {
+			m.cfg.Theme = next(m.cfg.Theme, config.Themes())
+			return m
+		},
+	},
+	// The timestamp format sits with the theme because it is the other purely presentational
+	// choice: neither changes what the tool does, both change how a frame reads, and both
+	// therefore apply from the next frame. What they do not share is a mechanism. The palette
+	// is ambient, so a theme change reaches every view without travelling; the timestamp is a
+	// field on one tab, and the root pushes it there. Both are read off this pane by the root
+	// after every key it routes here, and this pane pushes neither.
+	rowTimestamp: {
+		kind:    kindSelector,
+		key:     "timestamp",
+		label:   "Timestamps",
+		desc:    "When a run started: the instant itself, or how long ago it was.",
+		options: func() string { return config.ListSet(config.TimestampFormats(), " / ") },
+		value:   func(m Model) string { return string(m.cfg.Timestamp) },
+		cycle: func(m Model) Model {
+			m.cfg.Timestamp = next(m.cfg.Timestamp, config.TimestampFormats())
+			return m
+		},
+	},
+	// Both scope rows say "starts" for the reason R9's launch filter does, and it is the
+	// requirement rather than a hedge: each tab chooses its scope at construction, because
+	// narrowing it also means dropping the held state, so a toggle takes effect at the next
+	// launch. The present tense would state something a person would test by pressing refresh.
+	rowWorkflowsScope: {
+		kind:    kindSelector,
+		key:     "workflows_scope",
+		label:   "Workflows scope",
+		desc:    "The Workflows tab starts covering these repositories.",
+		options: func() string { return config.ListSet(config.Scopes(), " / ") },
+		value:   func(m Model) string { return string(m.cfg.WorkflowsScope) },
+		cycle: func(m Model) Model {
+			m.cfg.WorkflowsScope = next(m.cfg.WorkflowsScope, config.Scopes())
+			return m
+		},
+	},
+	rowStorageScope: {
+		kind:    kindSelector,
+		key:     "storage_scope",
+		label:   "Storage scope",
+		desc:    "The Storage tab starts covering these repositories.",
+		options: func() string { return config.ListSet(config.Scopes(), " / ") },
+		value:   func(m Model) string { return string(m.cfg.StorageScope) },
+		cycle: func(m Model) Model {
+			m.cfg.StorageScope = next(m.cfg.StorageScope, config.Scopes())
+			return m
+		},
+	},
+	// The launch filter sits with the two tab scopes because it is the third of the same
+	// question: which Runs a tab opens on. R19's note says so outright, calling a launch
+	// filter pinned to one repository the Runs tab's this-repo scope by another name.
+	//
+	// Its description says "starts" rather than "now" for the same reason theirs do: R9
+	// settles the filter the Feed opens with, and a running Feed keeps whatever filter it is
+	// showing until its own / input changes it.
+	rowLaunchFilter: {
+		kind:  kindFilter,
+		key:   "launch_filter",
+		label: "Launch filter",
+		desc:  "The Runs feed starts filtered by this. Same syntax as its / filter.",
+		value: func(m Model) string { return filterLine(m.cfg.LaunchFilter) },
+	},
+	rowExclude: {
+		kind:  kindList,
+		key:   "exclude",
+		label: "Excluded repositories",
+		desc:  "Kept out of discovery and never polled. Naming one with -R still works.",
+		value: func(m Model) string { return repoList(m.cfg.Exclude, m.valueRoom()) },
+	},
+	rowPin: {
+		kind:  kindList,
+		key:   "pin",
+		label: "Pinned repositories",
+		// The description states what the code does and no more (#97): the promotion is to
+		// the medium tier, which is the cadence an on-screen repository already gets, and
+		// exclusion wins because it applies at discovery before any tier is chosen.
+		desc:  "Polled as often as an on-screen one, even when scrolled away. Excluding wins.",
+		value: func(m Model) string { return repoList(m.cfg.Pin, m.valueRoom()) },
+	},
+	rowConfirmThreshold: {
+		kind:  kindNumber,
+		key:   "confirm_threshold",
+		label: "Confirmation threshold",
+		desc:  "Deletions at or above this many make you type the count.",
+		bound: "up to 500, type the count above it",
+		value: func(m Model) string { return strconv.Itoa(m.cfg.ConfirmThreshold) },
+		commit: func(m Model, v int) Model {
+			m.cfg.ConfirmThreshold = config.ClampConfirmThreshold(v)
+			return m
+		},
+	},
+	rowBreakerFailures: {
+		kind:  kindNumber,
+		key:   "purge_breaker_failures",
+		label: "Purge breaker threshold",
+		desc:  "Consecutive failures before a Purge stops itself.",
+		bound: "1 to 500",
+		value: func(m Model) string { return strconv.Itoa(m.cfg.BreakerFailures) },
+		commit: func(m Model, v int) Model {
+			m.cfg.BreakerFailures = config.ClampBreakerFailures(v)
+			return m
+		},
+	},
+	rowDiscoveryRefresh: {
+		kind:  kindNumber,
+		key:   "discovery_refresh_minutes",
+		label: "Discovery refresh",
+		desc:  "How quickly a newly active repository shows up, in minutes.",
+		bound: "1 or more minutes",
+		value: func(m Model) string { return strconv.Itoa(m.cfg.DiscoveryRefreshMinutes) + " min" },
+		commit: func(m Model, v int) Model {
+			m.cfg.DiscoveryRefreshMinutes = config.ClampDiscoveryRefresh(v)
+			return m
+		},
+	},
+}
+
+// spec returns the row's entry, or a zero spec for an index outside the table. The zero
+// spec's kind is kindNone and its strings are empty, which is what the switches this
+// replaced returned from their default arms.
+func (r row) spec() rowSpec {
+	if r < 0 || r >= rowCount {
+		return rowSpec{}
+	}
+	return rows[r]
+}
+
 // isSelector reports whether the row cycles through a small fixed set (space changes it),
 // as opposed to a row that opens an editor (enter).
-func (r row) isSelector() bool {
-	switch r {
-	case rowBudget, rowProfile, rowTheme, rowTimestamp, rowWorkflowsScope, rowStorageScope:
-		return true
-	default:
-		return false
-	}
-}
+func (r row) isSelector() bool { return r.spec().kind == kindSelector }
 
 // isNumber reports whether the row holds a bounded integer, edited by typing (R12, R20,
 // R21), the confirm-pane's typed-count pattern applied to a setting.
-func (r row) isNumber() bool {
-	switch r {
-	case rowConfirmThreshold, rowBreakerFailures, rowDiscoveryRefresh:
-		return true
-	default:
-		return false
-	}
-}
+func (r row) isNumber() bool { return r.spec().kind == kindNumber }
 
 // isList reports whether the row holds R7's repository list, edited as one line of
 // comma-separated OWNER/REPO entries. It is a third edit shape rather than a stretched
@@ -102,7 +306,7 @@ func (r row) isNumber() bool {
 // The editor opens pre-filled with the list as it stands, which is what lets one gesture
 // both add and remove. A gesture that could only append would be a one-way ratchet, and
 // a person who excluded the wrong repository would have to reach for the file anyway.
-func (r row) isList() bool { return r == rowExclude || r == rowPin }
+func (r row) isList() bool { return r.spec().kind == kindList }
 
 // isFilter reports whether the row holds R9's launch filter, edited as one line of the
 // filter input's own grammar. It is the same gesture the list row takes, over a different
@@ -112,7 +316,7 @@ func (r row) isList() bool { return r == rowExclude || r == rowPin }
 // The grammar is filter's, not this pane's (ParseQuery and QueryString). A second spelling
 // here would mean a person who learned the Feed's / filter had to learn another one to
 // persist it, and the two would drift the first time an axis was added to either.
-func (r row) isFilter() bool { return r == rowLaunchFilter }
+func (r row) isFilter() bool { return r.spec().kind == kindFilter }
 
 // isEditable reports whether enter opens an editor on the row, which is true of the
 // numeric rows, the list row and the filter row, and of nothing else.
@@ -120,36 +324,7 @@ func (r row) isEditable() bool { return r.isNumber() || r.isList() || r.isFilter
 
 // configKey is the config.yml key the row maps to, the same spelling config.Save writes
 // and Load reads. It is what CursorKey returns.
-func (r row) configKey() string {
-	switch r {
-	case rowBudget:
-		return "budget"
-	case rowProfile:
-		return "keybinding_profile"
-	case rowTheme:
-		return "theme"
-	case rowTimestamp:
-		return "timestamp"
-	case rowWorkflowsScope:
-		return "workflows_scope"
-	case rowStorageScope:
-		return "storage_scope"
-	case rowLaunchFilter:
-		return "launch_filter"
-	case rowExclude:
-		return "exclude"
-	case rowPin:
-		return "pin"
-	case rowConfirmThreshold:
-		return "confirm_threshold"
-	case rowBreakerFailures:
-		return "purge_breaker_failures"
-	case rowDiscoveryRefresh:
-		return "discovery_refresh_minutes"
-	default:
-		return ""
-	}
-}
+func (r row) configKey() string { return r.spec().key }
 
 // Model is the pane's state: the keybinding profile it navigates by, the Config it edits,
 // the baseline it diffs a save against, the persister, and the transient cursor and edit
@@ -429,31 +604,16 @@ func (m Model) commitFilter() Model {
 }
 
 // applyCycle advances the selector under the cursor to the next value in its set, wrapping
-// at the end (settings R5, R8, R19). Cycling the keybinding profile re-seeds the pane's own
-// motion at once, so Vim's j and Standard's arrows take effect live for the very next
-// keystroke inside the pane. That is this pane applying the change to itself and nothing
-// more: the root reads the profile back off this pane after the key and pushes it to every
-// tab, the running surface and its own global keys, which is what makes the change live
-// everywhere rather than here alone (#127).
+// at the end (settings R5, R8, R19). The advance itself is the row's own, from the rows
+// table, so a row with no cycle function is a row space does nothing on and this needs no
+// arm per selector. The keybinding row's cycle is the one that reaches past its config
+// field, and the table says why there.
 func (m Model) applyCycle() Model {
-	switch m.cursor {
-	case rowBudget:
-		m.cfg.Budget = next(m.cfg.Budget, config.Tiers())
-	case rowProfile:
-		m.cfg.KeybindingProfile = next(m.cfg.KeybindingProfile, config.KeybindingProfiles())
-		if p, ok := keys.ForName(string(m.cfg.KeybindingProfile)); ok {
-			m.profile = p
-		}
-	case rowTheme:
-		m.cfg.Theme = next(m.cfg.Theme, config.Themes())
-	case rowTimestamp:
-		m.cfg.Timestamp = next(m.cfg.Timestamp, config.TimestampFormats())
-	case rowWorkflowsScope:
-		m.cfg.WorkflowsScope = next(m.cfg.WorkflowsScope, config.Scopes())
-	case rowStorageScope:
-		m.cfg.StorageScope = next(m.cfg.StorageScope, config.Scopes())
+	cycle := m.cursor.spec().cycle
+	if cycle == nil {
+		return m
 	}
-	return m
+	return cycle(m)
 }
 
 // commitNumber adopts the typed buffer for the numeric row under the cursor, clamped to the
@@ -467,15 +627,11 @@ func (m Model) commitNumber() Model {
 	if err != nil {
 		return m
 	}
-	switch m.cursor {
-	case rowConfirmThreshold:
-		m.cfg.ConfirmThreshold = config.ClampConfirmThreshold(v)
-	case rowBreakerFailures:
-		m.cfg.BreakerFailures = config.ClampBreakerFailures(v)
-	case rowDiscoveryRefresh:
-		m.cfg.DiscoveryRefreshMinutes = config.ClampDiscoveryRefresh(v)
+	commit := m.cursor.spec().commit
+	if commit == nil {
+		return m
 	}
-	return m.persist()
+	return commit(m, v).persist()
 }
 
 // persist writes the changed keys back through config.Save (R17, AC11). The baseline
