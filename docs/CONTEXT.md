@@ -110,7 +110,7 @@ The first observation of a repository's Runs in a session. It fires no notificat
 _Avoid_: Initial state, snapshot (Baseline is specifically the silent first read).
 
 **Appearance**:
-Which of the two colour sets is painted, dark or light. Resolved from the Theme and the terminal's background, and read again every time a style renders.
+Which of the two colour sets is painted, dark or light. Resolved from the Theme and the terminal's background whenever either first becomes known or changes, then held as one ambient value that every style reads as it renders. The terminal's background is asked for once, not per frame.
 _Avoid_: Theme (the Theme is the setting a person chooses, and it has three values. The Appearance is what that resolves to, and it has two.), mode, scheme.
 
 **Theme**:
