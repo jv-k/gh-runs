@@ -93,8 +93,11 @@ type ShowRuns filter.Filter
 // value reads as absolute and renderRow resolves it, so a caller that states no format gets
 // the default R10 fixes, which is also the rendering live-run-feed R4a sizes the column to.
 //
-// It is the Feed's own vocabulary rather than the config type, because a tab may not import
-// config: the root converts, exactly as it does for the two tab scopes (ADR-0011).
+// It is the Feed's own vocabulary rather than the config type, and the root converts. That
+// follows the precedent workflows.Scope and storage.Scope already set, where each tab mirrors
+// [settings] R19's two members as its own type: a tab carries the words its own surface uses,
+// and a setting reaching it is the root's to translate. ADR-0011 permits a tab to import
+// config, so this is a choice about vocabulary rather than a rule about direction.
 type TimestampFormat string
 
 const (
