@@ -105,7 +105,7 @@ var tiers = []Tier{TierBackground, TierNormal, TierGreedy}
 func (t Tier) valid() bool { return inSet(t, tiers) }
 
 // tierList renders the valid tiers for a diagnostic (R14).
-func tierList() string { return listSet(tiers, ", ") }
+func tierList() string { return ListSet(tiers, ", ") }
 
 // KeybindingProfile selects the motion set. There are exactly two, and a third
 // is never added on the grounds of platform, because a terminal erases the
@@ -126,7 +126,7 @@ var profiles = []KeybindingProfile{KeybindingStandard, KeybindingVim}
 func (p KeybindingProfile) valid() bool { return inSet(p, profiles) }
 
 // profileList renders the valid profiles for a diagnostic (AC4).
-func profileList() string { return listSet(profiles, ", ") }
+func profileList() string { return ListSet(profiles, ", ") }
 
 // Scope is the per-tab repository scope: the Workflows and Storage tabs each carry
 // one independently, settable to all-repos or this-repo and defaulting to all-repos
@@ -148,7 +148,7 @@ var scopes = []Scope{ScopeAllRepos, ScopeThisRepo}
 func (s Scope) valid() bool { return inSet(s, scopes) }
 
 // scopeList renders the valid scopes for a diagnostic (R19).
-func scopeList() string { return listSet(scopes, ", ") }
+func scopeList() string { return ListSet(scopes, ", ") }
 
 // Theme selects the palette. There are exactly three: auto derives it from the terminal
 // background as gh does, and dark and light state it outright (settings R6). The set is
@@ -170,7 +170,7 @@ var themes = []Theme{ThemeAuto, ThemeDark, ThemeLight}
 func (t Theme) valid() bool { return inSet(t, themes) }
 
 // themeList renders the valid themes for a diagnostic (R14).
-func themeList() string { return listSet(themes, ", ") }
+func themeList() string { return ListSet(themes, ", ") }
 
 // TimestampFormat selects how a Run's instant is rendered. There are exactly two:
 // absolute states the instant itself, and relative states its age (settings R10). It is a
@@ -192,7 +192,7 @@ var timestampFormats = []TimestampFormat{TimestampAbsolute, TimestampRelative}
 func (f TimestampFormat) valid() bool { return inSet(f, timestampFormats) }
 
 // timestampList renders the valid formats for a diagnostic (R14).
-func timestampList() string { return listSet(timestampFormats, ", ") }
+func timestampList() string { return ListSet(timestampFormats, ", ") }
 
 // inSet reports whether v is a member of set. It is the body every selector setting's valid
 // method had a verbatim copy of, and it is a linear scan because every set here has two or
@@ -210,14 +210,19 @@ func inSet[T comparable](v T, set []T) bool {
 	return false
 }
 
-// listSet renders a set for a diagnostic, in the registry's own order, which is the order
-// R14 obliges a rejection message to list. The separator is the caller's because the
-// diagnostics join on ", " and the Settings view's options hint joins on " / ".
+// ListSet renders a set in the registry's own order, which is the order R14 obliges a
+// rejection message to list and the order the Settings view cycles. The separator is the
+// caller's because the diagnostics join on ", " and the view's options hint joins on " / ",
+// and that one difference is the whole reason this takes a parameter.
+//
+// It is exported because the view needs it for exactly the same sets, over exactly the same
+// accessors, and a private copy there would be a second implementation of five lines whose
+// only job is to agree with this one. ADR-0011 already points tui/settings at config.
 //
 // The constraint is ~string rather than fmt.Stringer: every selector setting is a defined
-// string type, and a conversion is what the five copies did. A Stringer bound would admit a
+// string type, and a conversion is what the ten copies did. A Stringer bound would admit a
 // type whose String method disagrees with what the loader compares against.
-func listSet[T ~string](set []T, sep string) string {
+func ListSet[T ~string](set []T, sep string) string {
 	names := make([]string, len(set))
 	for i, v := range set {
 		names[i] = string(v)

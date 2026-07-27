@@ -252,15 +252,15 @@ func (m Model) description(r row) string {
 func (m Model) optionsHint(r row) string {
 	switch r {
 	case rowBudget:
-		return joinTiers(config.Tiers())
+		return config.ListSet(config.Tiers(), " / ")
 	case rowProfile:
-		return joinProfiles(config.KeybindingProfiles())
+		return config.ListSet(config.KeybindingProfiles(), " / ")
 	case rowTheme:
-		return joinThemes(config.Themes())
+		return config.ListSet(config.Themes(), " / ")
 	case rowTimestamp:
-		return joinTimestampFormats(config.TimestampFormats())
+		return config.ListSet(config.TimestampFormats(), " / ")
 	case rowWorkflowsScope, rowStorageScope:
-		return joinScopes(config.Scopes())
+		return config.ListSet(config.Scopes(), " / ")
 	default:
 		return ""
 	}
@@ -387,44 +387,4 @@ func tailFor(rest int) string {
 		return ""
 	}
 	return ", and " + strconv.Itoa(rest) + " more"
-}
-
-func joinTiers(ts []config.Tier) string {
-	out := make([]string, len(ts))
-	for i, t := range ts {
-		out[i] = string(t)
-	}
-	return strings.Join(out, " / ")
-}
-
-func joinProfiles(ps []config.KeybindingProfile) string {
-	out := make([]string, len(ps))
-	for i, p := range ps {
-		out[i] = string(p)
-	}
-	return strings.Join(out, " / ")
-}
-
-func joinThemes(ts []config.Theme) string {
-	out := make([]string, len(ts))
-	for i, t := range ts {
-		out[i] = string(t)
-	}
-	return strings.Join(out, " / ")
-}
-
-func joinTimestampFormats(fs []config.TimestampFormat) string {
-	out := make([]string, len(fs))
-	for i, f := range fs {
-		out[i] = string(f)
-	}
-	return strings.Join(out, " / ")
-}
-
-func joinScopes(ss []config.Scope) string {
-	out := make([]string, len(ss))
-	for i, s := range ss {
-		out[i] = string(s)
-	}
-	return strings.Join(out, " / ")
 }
