@@ -1,6 +1,7 @@
 package ghclient
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,28 @@ import (
 // hostGitHub is the one host 2.0.0 serves (ADR-0009). The fast-path resolver
 // rejects any other explicitly.
 const hostGitHub = "github.com"
+
+// ErrRemoteHostUnrecognised is the KnownHosts trap as a condition a caller can test for,
+// rather than a message it can only print (repo-discovery R14).
+//
+// The two ways resolution fails want opposite treatment and are indistinguishable by
+// anything but this. A launch outside any git repository is no failure: there is simply no
+// fast path, the Feed reveals the account progressively, and saying anything would be
+// noise. A remote git resolves but go-gh does not recognise is a failure the operator can
+// fix in one step, by setting GH_TOKEN, and it is the case where saying nothing leaves them
+// watching every request fail with no idea why.
+//
+// It is a sentinel rather than a string match because the message exists once already, and
+// a caller re-deriving the condition from its text would be a second copy that drifts.
+//
+// **It carries the instruction, not just the condition.** R14's whole point is that the
+// operator is told what to do, and putting the instruction at the wrapping site instead
+// would make that a property of one call path: a caller that unwrapped, or wrapped
+// differently, would print a condition with no remedy. Here every caller that prints this
+// error prints the remedy with it.
+var ErrRemoteHostUnrecognised = errors.New(
+	"could not recognise this repository's git remote as GitHub; " +
+		"if gh is not installed, set GH_TOKEN so the remote's host is known")
 
 // CurrentRepo resolves the repository the tool was launched inside, host-qualified
 // (repo-discovery R14). main.go passes it to discovery as the fast-path resolver,
@@ -41,9 +64,7 @@ func CurrentRepo() (domain.RepoID, error) {
 func resolveCurrent(repo repository.Repository, err error) (domain.RepoID, error) {
 	if err != nil {
 		if strings.Contains(err.Error(), "known GitHub host") {
-			return domain.RepoID{}, fmt.Errorf(
-				"could not recognise this repository's git remote as GitHub: %w; "+
-					"if gh is not installed, set GH_TOKEN so the remote's host is known", err)
+			return domain.RepoID{}, fmt.Errorf("%w: %w", ErrRemoteHostUnrecognised, err)
 		}
 		return domain.RepoID{}, fmt.Errorf("not launched inside a github.com repository: %w", err)
 	}

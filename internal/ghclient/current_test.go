@@ -28,6 +28,28 @@ func TestResolveCurrentTranslatesTheKnownHostsTrap(t *testing.T) {
 	}
 }
 
+// TestTheKnownHostsTrapIsIdentifiableByCallers is what makes R14's instruction reachable
+// rather than merely composed. The message alone cannot be acted on: a caller has to tell
+// this condition, which the operator can fix by setting GH_TOKEN, apart from the ordinary
+// case of not being launched inside a repository, which is no failure at all and must stay
+// silent. Matching on the message text would be a second copy of a string that already
+// exists once, so the condition is a sentinel and the message is only for reading.
+func TestTheKnownHostsTrapIsIdentifiableByCallers(t *testing.T) {
+	trap := errors.New("none of the git remotes configured for this repository point to a known GitHub host")
+
+	_, err := resolveCurrent(repository.Repository{}, trap)
+	if !errors.Is(err, ErrRemoteHostUnrecognised) {
+		t.Errorf("the KnownHosts trap is not identifiable through errors.Is: %v", err)
+	}
+
+	// The ordinary case must not match it, or a session launched outside any repository
+	// would show an instruction for a problem the operator does not have.
+	_, outside := resolveCurrent(repository.Repository{}, errors.New("not a git repository"))
+	if errors.Is(outside, ErrRemoteHostUnrecognised) {
+		t.Error("a launch outside any repository reads as the KnownHosts trap; the instruction would be shown to someone who has no such problem")
+	}
+}
+
 // TestResolveCurrentRejectsNonGitHubHost pins R18 at the resolver: a repository on
 // any host but github.com is rejected explicitly, and the message names the host.
 func TestResolveCurrentRejectsNonGitHubHost(t *testing.T) {

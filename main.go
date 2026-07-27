@@ -246,10 +246,18 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 	// attributed to github.com (R35, AC17). Being outside a git repository, or an
 	// unresolvable remote, is not a rejection: there is simply no fast path, and the Feed
 	// falls back to progressive reveal across the discovered account (R34).
-	first, err := fastPathRepo(ghclient.CurrentRepo, cfg.Exclude)
+	launched, err := fastPathRepo(ghclient.CurrentRepo, cfg.Exclude)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gh-runs:", err)
 		return 1
+	}
+	first := launched.repo
+	if advice := launched.advice; advice != nil {
+		// R14's instruction, printed before the alt screen is entered and therefore still on
+		// the scrollback the operator returns to. It is not fatal: the dashboard opens and
+		// shows whatever the token can reach, which without one is nothing, and this line is
+		// the only thing on screen that says why.
+		fmt.Fprintln(os.Stderr, "gh-runs:", advice)
 	}
 
 	// The keybinding profile is the resolved setting (live-run-feed R7, settings R5).
@@ -314,7 +322,7 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 	// Run-listing probe per repository, so running it first is both the wait R32 forbids and
 	// ~163 Run listings ahead of the one AC16 counts. A warm local-store has already seeded
 	// the poll set above and spends no pass at all.
-	go discoverBehind(ctx, sched, disc, seeded)
+	go discoverBehind(ctx, sched, disc, first, seeded)
 
 	root := tui.New(cl.tuiOptions(tuiDeps{
 		Config:    cfg,
@@ -357,11 +365,13 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 // first and alone (live-run-feed R32, repo-discovery R14).
 //
 // **It must stay the only caller of the resolver on the TUI path.** The resolver shells out
-// to git, and one launch needs the answer twice: as the engine's Options.First and as R35's
-// host gate. It is resolved once here and used for both. discovery.Options.Current names the
-// same resolver, but nothing on this path calls it, because the FastPath and Discover
-// entrypoints that would are unreached (issue #100). If that changes, this becomes two git
-// subprocesses per launch unless the resolved value is passed rather than the resolver.
+// to git, and one launch needs the answer three times: as the engine's Options.First, as
+// R35's host gate, and as the identity R22's adoption admits. It is resolved once here and
+// used for all three. discovery.Options.Current names the same resolver and nothing on this
+// path calls it: adoption takes the resolved identity through AdoptLaunchRepo precisely so it
+// does not, and the FastPath and Discover entrypoints that would are for a caller holding no
+// answer of its own, which this is not. Reaching for the resolver again would be a second git
+// subprocess per launch.
 //
 // An excluded repository is never the fast path. settings R7 removes an excluded repository
 // from "discovery, the Feed and all polling", and Options.First is a polling path that
@@ -371,29 +381,62 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 // Returning the zero repository, not an error: an excluded launch repository is not a
 // failure, it is a session with no fast path, which is R34's fallback exactly.
 //
-// It reports an error only when that repository resolves to a host gh-runs does not serve,
-// so runTUI rejects it explicitly rather than attributing its Runs to the wrong host (R35,
-// AC17). Resolution routes through the same host-qualifying resolver the rest of the tool
-// uses, and only its typed UnsupportedHostError is a rejection: being outside a git
-// repository, or an unresolvable remote, yields the zero repository and no error, so there
-// is no fast path and the Feed falls back to progressive reveal across the account (R34).
-// errors.As unwraps, so a wrapped rejection is caught too, and the check reuses the one host
-// validation domain.NewRepoID and discovery already raise.
-func fastPathRepo(current func() (domain.RepoID, error), exclude []domain.RepoID) (domain.RepoID, error) {
+// **Resolution has three outcomes, and they are returned separately because they want
+// three different things from the caller.**
+//
+// reject is the one failure that stops the session: the repository resolves to a host
+// gh-runs does not serve, so runTUI refuses rather than attributing its Runs to the wrong
+// host (R35, AC17). Only the typed UnsupportedHostError is a rejection, and errors.As
+// unwraps, so a wrapped one is caught too. The check reuses the one host validation
+// domain.NewRepoID and discovery already raise.
+//
+// advice is a failure the operator can fix, reported without stopping anything
+// (repo-discovery R14). go-gh gates its answer on auth.KnownHosts, which never reads the
+// keyring, so on a machine where gh was never installed resolution fails even though git
+// works and the remote is plainly github.com. Setting GH_TOKEN clears it. Saying nothing
+// leaves that operator watching every request fail with no idea why, which is the state
+// this closes (issue #100): R14's instruction was written and unreachable.
+//
+// Everything else is neither. Being outside a git repository, or holding a remote that
+// simply does not resolve, yields the zero repository and no word to the operator: there
+// is no fast path, the Feed falls back to progressive reveal across the account (R34), and
+// an instruction here would name a problem they do not have. An excluded launch repository
+// takes the same silent path, because it is a configured choice rather than a failure.
+func fastPathRepo(current func() (domain.RepoID, error), exclude []domain.RepoID) (launch, error) {
 	id, err := current()
 	var unsupported *domain.UnsupportedHostError
 	if errors.As(err, &unsupported) {
-		return domain.RepoID{}, unsupported
+		return launch{}, unsupported
+	}
+	if errors.Is(err, ghclient.ErrRemoteHostUnrecognised) {
+		return launch{advice: err}, nil
 	}
 	if err != nil {
-		return domain.RepoID{}, nil
+		return launch{}, nil
 	}
 	for _, ex := range exclude {
 		if ex == id {
-			return domain.RepoID{}, nil
+			return launch{}, nil
 		}
 	}
-	return id, nil
+	return launch{repo: id}, nil
+}
+
+// launch is what resolving the launch repository yielded, short of a rejection. The two
+// fields travel together because they are one answer to one question, and because the
+// alternative shape returns two errors from one call, where a caller can transpose them
+// silently and still compile.
+//
+// The zero value is a complete answer: no fast path and nothing to say about it, which is
+// every session launched outside a git repository and every one whose launch repository the
+// operator excluded.
+type launch struct {
+	// repo is the repository the engine polls first and alone (R32), or the zero value when
+	// there is no fast path.
+	repo domain.RepoID
+	// advice is a resolution failure the operator can act on, to be reported without
+	// stopping anything (R14). Nil unless there is something worth their attention.
+	advice error
 }
 
 // classifiedBy is the engine's Classified seam over discovery's record set: whether
@@ -439,6 +482,15 @@ func classifiedBy(disc *discovery.Discovery) func(domain.RepoID) bool {
 // front of the engine (it issues nothing, and the poll set it seeds is what gives the gate
 // something to hold back) while only the pass, which is all network, runs behind the gate.
 //
+// first is the launch repository, already resolved by the caller, and it is what closes
+// repo-discovery R22 here (issue #100). Adoption runs after the record set is populated,
+// whether the pass filled it or the reload did, because R22's condition is that enumeration
+// does not hold the repository and that is just as true of a warm launch. It runs behind the
+// same gate for the same reason the pass does, so it can add no request in front of the one
+// AC16 counts. The identity is passed rather than the resolver deliberately: the resolver
+// shells out to git and the caller has already paid for the answer, so discovery reaching
+// for it again would be a second subprocess per launch.
+//
 // A cancelled context releases the wait, so quit is never held by a fast path that never
 // landed. A discovery failure is not fatal to the dashboard: the Feed still paints what it
 // can, which on a warm local-store is the whole persisted set.
@@ -449,7 +501,7 @@ func classifiedBy(disc *discovery.Discovery) func(domain.RepoID) bool {
 // would take the process down without giving the program a chance to restore it, leaving the
 // user's shell without an echo or a working newline. Losing discovery is a degraded Feed;
 // losing the terminal is a broken session.
-func discoverBehind(ctx context.Context, sched *scheduler.Scheduler, disc *discovery.Discovery, seeded int) {
+func discoverBehind(ctx context.Context, sched *scheduler.Scheduler, disc *discovery.Discovery, first domain.RepoID, seeded int) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintln(os.Stderr, "gh-runs: repository discovery failed:", r)
@@ -461,17 +513,33 @@ func discoverBehind(ctx context.Context, sched *scheduler.Scheduler, disc *disco
 	case <-ctx.Done():
 		return
 	}
-	if seeded > 0 {
-		// A warm local-store already holds the whole classified set (local-store R5,
-		// repo-discovery R19), so no pass is spent and there is nothing to tell the engine:
-		// the poll set was seeded before it was constructed, and opening the gate already
-		// woke it to re-read that set.
-		return
+	tellEngine := func(discovery.Record) { sched.PollSetChanged() }
+
+	// A warm local-store already holds the whole classified set (local-store R5,
+	// repo-discovery R19), so no pass is spent and there is nothing to tell the engine about
+	// it: the poll set was seeded before the engine was constructed, and opening the gate
+	// already woke it to re-read that set. A cold one spends the pass, and the engine is told
+	// per repository as each is classified (repo-discovery R15, live-run-feed R33). The wakes
+	// coalesce, so ~163 of them cost a handful of re-evaluations and no extra request.
+	if seeded == 0 {
+		if err := disc.Pass(ctx, tellEngine); err != nil {
+			// R22 adopts "when enumeration completes". A pass that failed has not completed,
+			// and its record set is partial, so a repository missing from it is not evidence
+			// that enumeration would never return it. Adopting on that evidence would mark an
+			// ordinary member Adopted, which is a session-scoped membership the next launch
+			// would not re-admit. Declining leaves the capability not-yet-known, the safe
+			// state, and the next launch tries again.
+			return
+		}
 	}
-	// A cold local-store spends the pass, and the engine is told per repository as each is
-	// classified (repo-discovery R15, live-run-feed R33). The wakes coalesce, so ~163 of them
-	// cost a handful of re-evaluations and no extra request.
-	_ = disc.Pass(ctx, func(discovery.Record) { sched.PollSetChanged() })
+
+	// R22: the launch repository is adopted for the session when enumeration did not return
+	// it, which is a clone the account does not own. Its failure is not reported: adoption is
+	// a single-request convenience, and failing it leaves the repository painted with its
+	// Runs and its capability not-yet-known, which is the safe state (R8, AC8). Both launches
+	// reach this, warm and cold, because a warm store no more contains a repository
+	// enumeration never returned than a fresh pass does.
+	_ = disc.AdoptLaunchRepo(ctx, first, tellEngine)
 }
 
 // clients is the pair of request surfaces the tool dials one assembled chain with.

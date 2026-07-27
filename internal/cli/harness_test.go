@@ -306,3 +306,10 @@ var (
 type harnessError struct{ msg string }
 
 func (e *harnessError) Error() string { return e.msg }
+
+// withCurrentErr sets a failing working-directory resolver, so a test can distinguish the
+// resolution failures that deserve a word to the operator from the ones that do not.
+func (h *harness) withCurrentErr(err error) *harness {
+	h.deps.Current = func() (domain.RepoID, error) { return domain.RepoID{}, err }
+	return h
+}

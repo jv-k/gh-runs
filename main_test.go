@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 )
 
 // TestFastPathRepo pins R35's host gate and the value it yields the engine. A resolver
@@ -45,12 +46,12 @@ func TestFastPathRepo(t *testing.T) {
 	})
 
 	t.Run("github.com repository is the fast path", func(t *testing.T) {
-		id, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, nil)
+		got, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, nil)
 		if err != nil {
 			t.Fatalf("a github.com repository was rejected: %v", err)
 		}
-		if id != local {
-			t.Fatalf("fast path = %v, want %v: this is the repository the engine polls first (R32)", id, local)
+		if got.repo != local {
+			t.Fatalf("fast path = %v, want %v: this is the repository the engine polls first (R32)", got.repo, local)
 		}
 	})
 
@@ -58,36 +59,62 @@ func TestFastPathRepo(t *testing.T) {
 		// settings R7: exclusion removes a repository from discovery, the Feed and all
 		// polling. Options.First is a polling path that bypasses discovery, so it has to
 		// honour the list too, on the same ground discovery.FastPath already refuses one.
-		id, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, []domain.RepoID{local})
+		got, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, []domain.RepoID{local})
 		if err != nil {
 			t.Fatalf("an excluded repository was treated as a rejection: %v", err)
 		}
-		if id != (domain.RepoID{}) {
-			t.Fatalf("fast path = %v, want none: an excluded repository is removed from all polling (settings R7)", id)
+		if got.repo != (domain.RepoID{}) {
+			t.Fatalf("fast path = %v, want none: an excluded repository is removed from all polling (settings R7)", got.repo)
 		}
 	})
 
 	t.Run("exclusion does not catch a different repository", func(t *testing.T) {
 		other := domain.RepoID{Host: domain.HostGitHub, Owner: "jv-k", Name: "deslopper"}
-		id, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, []domain.RepoID{other})
+		got, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, []domain.RepoID{other})
 		if err != nil {
 			t.Fatalf("unexpected rejection: %v", err)
 		}
-		if id != local {
-			t.Fatalf("fast path = %v, want %v: only the excluded identity is removed", id, local)
+		if got.repo != local {
+			t.Fatalf("fast path = %v, want %v: only the excluded identity is removed", got.repo, local)
 		}
 	})
 
 	t.Run("outside a repository there is no fast path", func(t *testing.T) {
 		// R34: an unresolvable remote is not a rejection; the Feed reveals the account.
-		id, err := fastPathRepo(func() (domain.RepoID, error) {
+		got, err := fastPathRepo(func() (domain.RepoID, error) {
 			return domain.RepoID{}, errors.New("not launched inside a github.com repository")
 		}, nil)
 		if err != nil {
 			t.Fatalf("an unresolvable remote was treated as a rejection: %v", err)
 		}
-		if id != (domain.RepoID{}) {
-			t.Fatalf("fast path = %v, want none (R34: progressive reveal across the account)", id)
+		if got.advice != nil {
+			t.Errorf("advice = %v, want none: a launch outside any repository is an ordinary session, and an instruction here would name a problem the operator does not have", got.advice)
+		}
+		if got.repo != (domain.RepoID{}) {
+			t.Fatalf("fast path = %v, want none (R34: progressive reveal across the account)", got.repo)
+		}
+	})
+
+	t.Run("an unrecognised remote yields R14's instruction, not a rejection", func(t *testing.T) {
+		// repo-discovery R14. On a machine where gh was never installed, go-gh's resolver
+		// fails on the KnownHosts trap even though git works and the remote is plainly
+		// github.com. Setting GH_TOKEN fixes it in one step, so the instruction is worth
+		// showing. It is not a rejection: the dashboard still opens and reveals whatever the
+		// token can see, which is R34's fallback.
+		got, err := fastPathRepo(func() (domain.RepoID, error) {
+			return domain.RepoID{}, fmt.Errorf("%w: probing remotes", ghclient.ErrRemoteHostUnrecognised)
+		}, nil)
+		if err != nil {
+			t.Fatalf("an unrecognised remote was treated as a rejection: %v", err)
+		}
+		if got.advice == nil {
+			t.Fatal("no advice returned: R14's GH_TOKEN instruction never reaches the user")
+		}
+		if !errors.Is(got.advice, ghclient.ErrRemoteHostUnrecognised) {
+			t.Errorf("advice = %v, want the resolver's own condition surfaced", got.advice)
+		}
+		if got.repo != (domain.RepoID{}) {
+			t.Fatalf("fast path = %v, want none: the remote did not resolve", got.repo)
 		}
 	})
 }
