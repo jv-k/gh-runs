@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
@@ -117,4 +118,48 @@ func TestFastPathRepo(t *testing.T) {
 			t.Fatalf("fast path = %v, want none: the remote did not resolve", got.repo)
 		}
 	})
+}
+
+// TestFullRefreshRunsOnePassAtATime pins the guard on repo-discovery R11's on-demand full
+// refresh. It is not politeness: fanOut spawns a goroutine per repository and relies on the
+// transport limiter for its wire bound, so two concurrent passes put double the requests in
+// flight against a limiter sized for one, and both then write the same document. A held key
+// repeats, so this is reachable by leaning on u.
+//
+// A press arriving while a pass runs is dropped rather than queued, because the pass already
+// in flight is about to produce exactly the state the second press was asking for.
+func TestFullRefreshRunsOnePassAtATime(t *testing.T) {
+	var passes atomic.Int64
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	done := make(chan struct{})
+
+	// A stand-in for the pass, holding the first caller inside until the test releases it.
+	refresh := guardOnePass(func() {
+		if passes.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+	})
+
+	go func() { refresh(); close(done) }()
+	<-entered // the first pass is inside and has not returned
+
+	// Every press while it runs is dropped. None may block, and none may start a pass.
+	for range 5 {
+		refresh()
+	}
+	if got := passes.Load(); got != 1 {
+		t.Errorf("%d passes ran concurrently, want the guard to admit one", got)
+	}
+
+	close(release)
+	<-done
+
+	// A mutual exclusion, not a sync.Once: once the first has returned, a later press
+	// still refreshes. Without this the guard would silently make u work exactly once.
+	refresh()
+	if got := passes.Load(); got != 2 {
+		t.Errorf("the guard admitted %d passes in total, want it to reopen after the first returned", got)
+	}
 }

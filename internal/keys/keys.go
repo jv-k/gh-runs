@@ -196,7 +196,23 @@ type Profile struct {
 	CancelRunning key.Binding // ctrl+x: stop the running operation, and dismiss its summary (purge R16)
 	RetryFailures key.Binding // ctrl+r: re-attempt only the recorded failures (purge R22, AC18)
 
-	Refresh     key.Binding // r: apply deferred changes, refresh (R10, R11)
+	Refresh key.Binding // r: apply deferred changes, refresh (R10)
+	// FullRefresh is repo-discovery R11's on-demand full refresh: re-enumerate the
+	// account and re-probe every repository. It is separate from Refresh because the two
+	// differ by three orders of magnitude in cost. Refresh applies rows the Feed already
+	// holds and issues no request at all, and is pressed constantly; this one spends two
+	// enumeration requests plus one probe per repository.
+	//
+	// It is a bare letter rather than a chord. ADR-0011 reserves chords for the running
+	// surface's two bindings, which stay live for hours over a tab whose bare letters
+	// delete and re-run; this is an ordinary list action. u for update, because r, R and F
+	// are all taken and f would sit one shift from RerunFailed.
+	//
+	// R23 makes it load-bearing rather than convenient: a retired repository returns only
+	// through this, because a warm start skips its pass and nothing else re-admits one. It
+	// also rewrites the stale DefaultBranch records that otherwise need the local-store
+	// deleted (R7a's note, issue #100).
+	FullRefresh key.Binding // u: re-enumerate and re-probe the account (R11, R23)
 	OpenDetail  key.Binding // enter: open Run detail (BUILD-ORDER stage 8)
 	CloseDetail key.Binding // esc: close the Run detail pane (BUILD-ORDER stage 8, run-detail)
 	Filter      key.Binding // /: filter (R22, R23)
@@ -251,6 +267,7 @@ func shared(name string) Profile {
 		RetryFailures: key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "retry failures")),
 
 		Refresh:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		FullRefresh: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "full refresh")),
 		OpenDetail:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
 		CloseDetail: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close detail")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
@@ -358,7 +375,7 @@ func (p Profile) Bindings() []key.Binding {
 		p.LogTimestamps, p.LogDelete, p.LogExport, p.LogNextMatch, p.LogPrevMatch,
 		p.Approve, p.ApprovalsFilter,
 		p.CancelRunning, p.RetryFailures,
-		p.Refresh, p.OpenDetail, p.CloseDetail, p.Filter, p.Help, p.Quit,
+		p.Refresh, p.FullRefresh, p.OpenDetail, p.CloseDetail, p.Filter, p.Help, p.Quit,
 		p.FilterAccept, p.FilterCancel,
 		p.ConfirmAccept, p.ConfirmAbort, p.ConfirmAbortDefault, p.ConfirmInspect,
 	}
