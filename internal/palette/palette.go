@@ -173,9 +173,9 @@ func highlight(darkFg, darkBg, lightFg, lightBg string) Highlight {
 // Every value here clears settings R22's floor against its appearance's reference background,
 // and a role or highlight added here MUST clear it too. The floor is 4.5:1 by WCAG 2.x for a
 // Role, and for a Highlight it is 4.5:1 between its own pair plus CIE76 ΔE 10 from the
-// reference background, so the highlight is discernible at all. TestEveryRoleClearsThe-
-// ContrastFloor and its Highlight counterpart enforce both over the whole set, and the golden
-// beside them records the measured figure for each. Aim at 5.0 rather than at 4.5 where the
+// reference background, so the highlight is discernible at all. Both are enforced over the
+// whole set by TestEveryRoleClearsTheContrastFloor and TestEveryHighlightClearsBothFloors,
+// and the golden beside them records the measured figure for each. Aim at 5.0 rather than at 4.5 where the
 // hue allows: the margin is what stops a later adjustment to a reference background dropping
 // a role below the line (ADR-0024).
 //
