@@ -10,6 +10,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
+	"github.com/jv-k/gh-runs/v2/internal/timefmt"
 )
 
 // now0 is the instant the relative tests measure from, three hours after the t0 the Runs
@@ -68,39 +69,41 @@ func startedCell(t *testing.T, m Model) string {
 	return ""
 }
 
-// TestRelativeTimestampBuckets pins the relative format's wording bucket by bucket, at the
-// boundaries where it changes unit. Every bucket truncates rather than rounds, which is why
-// 23h59m is still hours and 29d23h is still days, and a timestamp ahead of this machine's
-// clock reads as "just now" rather than as a negative age: skew against GitHub's clock is
-// real, and a Run that has not started yet has not started long ago.
-func TestRelativeTimestampBuckets(t *testing.T) {
-	const day = 24 * time.Hour
-	cases := []struct {
-		ago  time.Duration
-		want string
-	}{
-		{-time.Hour, "just now"},
-		{0, "just now"},
-		{59 * time.Second, "just now"},
-		{time.Minute, "1m"},
-		{59*time.Minute + 59*time.Second, "59m"},
-		{time.Hour, "1h"},
-		{23*time.Hour + 59*time.Minute, "23h"},
-		{day, "1d"},
-		{29*day + 23*time.Hour, "29d"},
-		{30 * day, "1mo"},
-		{364 * day, "12mo"},
-		{365 * day, "1y"},
-	}
-	for _, tc := range cases {
-		m := relativeFeed(100, 4)
-		id := repoID("cli", "cli")
-		m = discovered(m, repo("cli", "cli", true, false))
-		m = feedRuns(m, id, mkRun(31415926535, "cli", "cli", "CI", domain.StatusInProgress, "", now0.Add(-tc.ago)))
+// TestRelativeTimestampReadsTheSharedLadder pins the seam rather than the ladder: under the
+// relative format the STARTED cell carries what timefmt.Age renders for the same two
+// instants, measured from the injected clock. The buckets themselves are asserted in
+// internal/timefmt, over an injected now and no Model at all, because a bucket ladder is
+// pure logic and building a whole Feed per boundary points the golden seam the wrong way.
+// What is left here is the one thing only a Feed can prove: this cell reads that function.
+func TestRelativeTimestampReadsTheSharedLadder(t *testing.T) {
+	started := now0.Add(-3 * 24 * time.Hour)
+	m := relativeFeed(100, 4)
+	id := repoID("cli", "cli")
+	m = discovered(m, repo("cli", "cli", true, false))
+	m = feedRuns(m, id, mkRun(31415926535, "cli", "cli", "CI", domain.StatusInProgress, "", started))
 
-		if got := startedCell(t, m); got != tc.want {
-			t.Errorf("a Run started %s ago rendered %q, want %q", tc.ago, got, tc.want)
-		}
+	want := timefmt.Age(now0, started)
+	if want == "" {
+		t.Fatal("the fixture renders no age; the case proves nothing")
+	}
+	if got := startedCell(t, m); got != want {
+		t.Errorf("the STARTED cell rendered %q, want timefmt's %q (R10)", got, want)
+	}
+}
+
+// TestRelativeTimestampFallsBackWithoutAClock pins the other half of the seam: the relative
+// form measures an age from the injected clock, so a Feed built without one paints the
+// absolute instant rather than reaching for the wall clock. A renderer that covered the gap
+// with time.Now would make every golden a function of when the suite ran.
+func TestRelativeTimestampFallsBackWithoutAClock(t *testing.T) {
+	m := New(Options{Profile: keys.Standard}).SetTimestampFormat(TimestampRelative)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 4})
+	id := repoID("cli", "cli")
+	m = discovered(m, repo("cli", "cli", true, false))
+	m = feedRuns(m, id, mkRun(31415926535, "cli", "cli", "CI", domain.StatusInProgress, "", t0))
+
+	if got := startedCell(t, m); got != "2026-07-15T16:39:00Z" {
+		t.Errorf("the relative format without a clock rendered %q, want the absolute instant", got)
 	}
 }
 
