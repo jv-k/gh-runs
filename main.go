@@ -44,6 +44,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
+	"github.com/jv-k/gh-runs/v2/internal/workflowlist"
 )
 
 // responseHeaderTimeout bounds how long any single request waits for its response
@@ -608,7 +609,7 @@ func (c clients) tuiOptions(d tuiDeps) tui.Options {
 		// store revalidates and the governor accounts each request (workflow-management R1), and
 		// it enables or disables one Workflow through the same ops engine, so a toggle is paced
 		// and travels the one write path every other write does (R5).
-		WorkflowFetch: workflows.ClientFetch(client),
+		WorkflowFetch: workflowlist.ClientFetch(client),
 		WorkflowOps:   d.Ops,
 		// The tab's scope is the loaded setting, the other half of the same wire, and the two
 		// are read separately so scoping one tab leaves the other alone (settings R19).
@@ -680,28 +681,32 @@ func knownRepos(disc *discovery.Discovery) []domain.Repo {
 
 // workflowLister is the engine's Workflow-list seam (run-detail R8, ADR-0014). It reads the
 // listing over shared, the surface that enters at the store, so the read is revalidated and
-// accounted like every other. The reader is the same one the Workflows tab uses, because a
-// second decoder here would be a second place that knows the endpoint and its envelope. The
-// two consumers share the reader and not the list: the tab still fans out and holds its own
-// copy, which is what issue #95 proposes to fix by moving the reader to a neutral package,
-// where the CLI's blocked -w NAME and workflowName consumers can reach it too.
+// accounted like every other. The reader is workflowlist's, the same one the Workflows tab
+// uses, because a second decoder here would be a second place that knows the endpoint and its
+// envelope. The two consumers share the reader and not the list: the tab still fans out and
+// holds its own copy.
+//
+// The reader is a neutral package rather than the tab's (issue #95), so this line no longer
+// hands a tab's constructor to the engine, and cli can reach the same map for -w NAME and the
+// workflowName column without importing tui, which ADR-0011 forbids it.
 //
 // The engine takes a function over domain types and imports no tab, which keeps ADR-0011's
 // direction: main.go is the only place that knows both sides, exactly as it is for the store
 // and the client.
 //
-// The tab records a failed read on the value it returns rather than as a Go error, because a
-// 403 on a fine-grained PAT is an outcome its own view states. The engine has no view to
-// state it in, so the failure is raised as an error here and the engine stamps nothing.
+// The reader records a failed read on the value it returns rather than as a Go error, because
+// a 403 on a fine-grained PAT is an outcome the tab's own view states. The engine has no view
+// to state it in, so the failure is raised as an error here and the engine stamps nothing.
 //
-// An incomplete list (the tab's Complete flag, one page at the API's ceiling) is passed
+// An incomplete list (the reader's Complete flag, one page at the API's ceiling) is passed
 // through as what it is, and the engine memoises it. A Workflow past the first page resolves
 // to no State for the session, and its Runs read as not-deleted, which is the answer a join
 // that finds nothing gives anywhere else. Refusing the whole list over a missing tail would
 // lose the Workflows that are on it, and re-reading it would fetch the same first page
-// forever. Paginating it is issue #95's, with the move.
+// forever. Paginating it is its own change, split off from the move at triage, and it now has
+// one site to change rather than three.
 func (c clients) workflowLister() scheduler.WorkflowLister {
-	fetch := workflows.ClientFetch(c.shared)
+	fetch := workflowlist.ClientFetch(c.shared)
 	return func(id domain.RepoID) ([]domain.Workflow, error) {
 		rw := fetch(id)
 		if rw.Err != nil {
