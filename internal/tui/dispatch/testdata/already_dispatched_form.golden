@@ -1,16 +1,16 @@
 [1mDispatch: Deployment[m
   Ref: main
 
-> [1mtag_name *      [m  [ v9.9.9 ]  [38;2;138;138;138m(string, required)[m
-[38;2;138;138;138m    Tag name of the release to deploy[m
-  environment       ‹ production ›  [38;2;138;138;138m(environment)[m
-[38;2;138;138;138m    Target deployment environment[m
-  platforms         [ linux/amd64,linux/arm64 ]  [38;2;138;138;138m(string)[m
-[38;2;138;138;138m    Comma-separated build platforms[m
-  release           [x] true  [38;2;138;138;138m(boolean)[m
-[38;2;138;138;138m    Create a GitHub release[m
-  dry_run           [x] true  [38;2;138;138;138m(boolean)[m
-[38;2;138;138;138m    Resolve the plan without deploying[m
+> [1mtag_name *      [m  [ v9.9.9 ]  [38;2;158;158;158m(string, required)[m
+[38;2;158;158;158m    Tag name of the release to deploy[m
+  environment       ‹ production ›  [38;2;158;158;158m(environment)[m
+[38;2;158;158;158m    Target deployment environment[m
+  platforms         [ linux/amd64,linux/arm64 ]  [38;2;158;158;158m(string)[m
+[38;2;158;158;158m    Comma-separated build platforms[m
+  release           [x] true  [38;2;158;158;158m(boolean)[m
+[38;2;158;158;158m    Create a GitHub release[m
+  dry_run           [x] true  [38;2;158;158;158m(boolean)[m
+[38;2;158;158;158m    Resolve the plan without deploying[m
 
 [1;38;2;255;95;95m  already dispatched as Run 29803635501. Change the ref or an input to dispatch again[m
-[38;2;138;138;138m  enter edit  space toggle/cycle  x dispatch  esc close[m
+[38;2;158;158;158m  enter edit  space toggle/cycle  x dispatch  esc close[m

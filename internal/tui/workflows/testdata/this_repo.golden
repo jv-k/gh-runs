@@ -1,8 +1,8 @@
-[1mWorkflows[m [38;2;138;138;138macme/infra[m[38;2;138;138;138m   [m[38;2;135;215;135m1[m[38;2;138;138;138m active[m[38;2;138;138;138m   [m[38;2;255;175;0m0[m[38;2;138;138;138m disabled[m[38;2;138;138;138m   [m[38;2;255;95;95m1[m[38;2;138;138;138m deleted, Runs orphaned[m
-[38;2;138;138;138m  scope this-repo: acme/infra[m
+[1mWorkflows[m [38;2;158;158;158macme/infra[m[38;2;158;158;158m   [m[38;2;135;215;135m1[m[38;2;158;158;158m active[m[38;2;158;158;158m   [m[38;2;255;175;0m0[m[38;2;158;158;158m disabled[m[38;2;158;158;158m   [m[38;2;255;95;95m1[m[38;2;158;158;158m deleted, Runs orphaned[m
+[38;2;158;158;158m  scope this-repo: acme/infra[m
 
 [1m  REPOSITORY          NAME              PATH                        STATE                 ACTION[m
 [38;2;95;175;255m> [macme/infra          Lint              .github/workflows/lint.yml  [38;2;135;215;135mactive              [m  [38;2;95;175;215mDisable[m
   acme/infra          Old Nightly       .github/workflows/nightly…  [38;2;255;95;95mdeleted             [m  [38;2;255;95;95morphaned Runs[m
 
-[38;2;138;138;138m  s enable/disable   x dispatch   enter view Runs   r refresh[m
+[38;2;158;158;158m  s enable/disable   x dispatch   enter view Runs   r refresh[m
