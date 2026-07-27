@@ -52,7 +52,7 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 
 **R18.** The detail pane must gate re-run and every other mutating action on `permissions.push && !archived` for the owning repository, consistently with the Feed, and must not offer re-run when the Workflow is `deleted` (an Orphaned Run), because a deleted Workflow can produce no further Run. The mechanics of the operations themselves belong to [run-lifecycle](../run-lifecycle/requirements.md).
 
-**R18a.** The pane's job-focus sub-mode must offer [run-lifecycle](../run-lifecycle/requirements.md) R14a's re-run of the single Job under the Job cursor. This pane is where that operation belongs, because it is the only surface that shows Jobs at all. The key must be inert outside job-focus, so it cannot acquire a second meaning against a Run, which is the rule R6a applies to the force-cancel escalation key. The operation takes no confirmation (R18 of run-lifecycle).
+**R18a.** The pane's job-focus sub-mode must offer [run-lifecycle](../run-lifecycle/requirements.md) R14a's re-run of the single Job under the Job cursor. This pane is where that operation belongs, because it is the only surface that shows Jobs at all. The key must be inert outside job-focus, so it cannot acquire a second meaning against a Run, which is the rule [run-lifecycle](../run-lifecycle/requirements.md) R6a applies to the force-cancel escalation key. The operation takes no confirmation (R18 of run-lifecycle).
 
 **R18b.** Whenever R18a's operation is offered, the pane must render run-lifecycle R14b's one-line note stating that the other Jobs of the current Attempt lose their Steps and their logs. It must not block and must not confirm. This pane's own resolved open question 9 treats both existing re-run variants identically for display, and this is the one re-run where the display owes an extra line: the Jobs on screen are the thing being spent, and all but one of them were not asked for.
 
@@ -91,6 +91,8 @@ The detail pane shows the Jobs and Steps of the Run selected in the [Feed](../li
 **AC14: A not-started Run shows a uniform empty state.** Selecting a Run at Status `queued` or `waiting` renders an explicit "no Jobs yet" state, whether the Jobs endpoint returns an empty list, a partial list, or an error. A `queued` Run's Jobs then appear within ~3s of the API serving them, with no user interaction (R13).
 
 **AC15: No re-run for an Orphaned Run.** For a Run whose Workflow is `deleted`, the pane marks the Workflow deleted (AC11) and offers no re-run, even where `permissions.push` is true.
+
+**AC16: The Job re-run key is job-focus only, and its note is painted.** Given the pane in job-focus with the cursor on a Job, the key of R18a issues one request against that Job's id, and no confirmation appears. Given the same pane outside job-focus, the key issues nothing and changes nothing. A golden of the job-focus frame holds R18b's note (R19), and a frame where R18's gate withholds the operation holds no note.
 
 ## Constraints
 
