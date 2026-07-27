@@ -15,6 +15,11 @@ The canon says what to build and never says where the code goes. Sixteen feature
     ├── filter/              The filter engine. Predicates over Runs, see below.
     ├── config/              settings, as a file and as precedence. Not the view.
     ├── palette/             The two colour sets the theme chooses between, and the colour profile. See below.
+    ├── timefmt/             The terse relative age, rendered from an injected now. Two surfaces, see below.
+    ├── textsan/             Strips terminal control bytes from untrusted text before it is painted.
+    ├── approvals/           Classifies a Run blocked on a human decision.
+    ├── ghlink/              Parses GitHub's Link header for the rel="next" URL.
+    ├── limiter/             Bounds the requests in flight on the wire.
     ├── ghclient/            go-gh construction, host qualification, the GH_TOKEN contract.
     ├── store/               local-store. The RoundTripper, ETags, payloads.
     ├── governor/            rate-governor. Paces writes, publishes the Budget Readout.
@@ -23,16 +28,20 @@ The canon says what to build and never says where the code goes. Sixteen feature
     ├── ops/                 Every write in the product, see below.
     ├── notify/              notifications, a 2.1 package. Three platform backends, if the feature ships. See below.
     ├── cli/                 cli-surface. Flags, and the non-interactive paths.
-    └── tui/                 Bubble Tea. The root model, three tabs, five panes.
+    └── tui/                 Bubble Tea. The root model, three tabs, seven panes.
         ├── feed/            Tab: Runs.
         ├── workflows/       Tab: Workflows.
         ├── storage/         Tab: Storage.
         ├── rundetail/       Pane, opened by feed over its selection.
         ├── logview/         Pane, opened by rundetail over a Job.
+        ├── approval/        Pane, opened by feed over a Run awaiting a decision.
+        ├── dispatch/        Pane, opened by workflows. The workflow_dispatch form.
         ├── settings/        Pane, owned by the root. Reachable from every tab.
         ├── confirm/         Pane. The graduated-friction confirmation. Shared, see below.
         └── running/         Pane, owned by the root. A launched write's progress, cancel and summary.
 ```
+
+**The tree above is the built tree, and it was not when this was written.** Seven packages had landed without reaching it: `timefmt`, `textsan`, `approvals`, `ghlink` and `limiter` below, and the `approval` and `dispatch` panes under `tui`. None of them needed an ADR of its own, which is this ADR's own rule, and none of them changed a direction. The list is what drifted, so the list is what moved. The pane count in the `tui` line moved with it, from five to seven.
 
 **[ADR-0012](./0012-transport-chain-and-the-client-surface.md) owns the transport chain.** What `ghclient` exposes, where `store`'s RoundTripper sits, and where `governor` nests inside it are that ADR's decisions, not this one's. This ADR fixes the tree. That one fixes the wiring through it.
 
@@ -56,6 +65,7 @@ Expanded, the edges that matter:
 | `config` | `domain`, `filter` | everything but `domain` and `filter` |
 | `filter` | `domain` | everything but `domain` |
 | `palette` | `config` | everything but `config` |
+| `timefmt` | nothing internal | anything |
 | `notify` | `domain` | everything but `domain` |
 | `ghclient` | `domain` | `store`, `governor` |
 | `store` | `domain`, `clock` | `ghclient`, `governor`, `scheduler` |
@@ -71,6 +81,8 @@ Expanded, the edges that matter:
 **`clock` imports nothing, and anything may import it.** The injected clock is needed by `store` (local-store R17), `governor` (rate-governor R21), `scheduler` (polling-scheduler R20), `discovery` (repo-discovery R21) and `ops` (purge R27, run-lifecycle R26). `domain` is the only other package that imports nothing, and it is the wrong home: this ADR declares `domain` free of I/O, and reading the wall clock is I/O wearing a very small hat. A package of its own costs one directory and keeps that declaration true.
 
 **`keys` is a package for the same reason `clock` is one, and it is a package rather than a tab's private code for the same reason `filter` is.** [live-run-feed](../features/live-run-feed/requirements.md) R7a declares both profiles as one registry, and its AC18 asserts a property over the whole of it ("no binding in either uses Cmd"). That assertion is over a data table and needs no terminal, so filing it under `tui` would put a pure enumeration in the one subtree whose tests exist to paint frames. It imports nothing of ours and everything above it may read it, which is `clock`'s shape exactly. `key.Binding` comes from `charm.land/bubbles/v2/key`, so the package depends on bubbles and on nothing else.
+
+**`timefmt` is a package because one age is rendered on two surfaces, and neither may import the other.** The CLI table's age column and the Feed's relative timestamp format ([settings](../features/settings/requirements.md) R10) are the same rendering. `cli` may never import `tui`, and a tab may never be imported by anything, so a shared renderer has nowhere to live but its own package. It imports nothing of ours and takes `now` as an argument rather than reading the wall clock, which is `clock`'s and `keys`'s shape exactly: reading a clock inside a formatting package would be I/O in a formatter, and it would put a second clock behind two surfaces with an injected one already, so a golden over either would stop being deterministic ([ADR-0013](./0013-dependency-pins.md)). [ADR-0023](./0023-the-template-function-subset.md) carries what moved and what did not.
 
 **`palette` is a package for the reason `config` is not the Settings view.** [settings](../features/settings/requirements.md) R6's theme picks a colour set and R15a's resolver picks a colour profile, and both are presentation rather than file, precedence or defaults. Putting them in `config` would work and would put a colour library in the import path of `governor`, `scheduler`, `ops` and `cli`, every one of which merely reads a setting. So `palette` holds the two colour sets and the profile ladder, it imports `config` for the Theme and the Env and nothing else of ours, and `main.go` and every `tui` package read it. The arrow runs one way, exactly as `filter`'s does.
 
@@ -147,7 +159,9 @@ So `tui.Model` is the only `tea.Model` in this tree, and those eleven fields are
 
 **[live-run-feed](../features/live-run-feed/requirements.md) R2 mandates exactly three tabs.** The tree listed six directories on a line labelled tabs, so three of them were miscategorised, and one of those three is contradicted by R2 in the same sentence: "Settings must be reachable from any tab and must not appear as a fourth peer tab."
 
-> **The tabs are `feed`, `workflows` and `storage`. The panes are `rundetail`, `logview`, `settings`, `confirm` and `running`.**
+> **The tabs are `feed`, `workflows` and `storage`. The panes are `rundetail`, `logview`, `approval`, `dispatch`, `settings`, `confirm` and `running`.**
+
+The pane list has grown twice since this section was written, by `approval` and by `dispatch`, and the heading above still counts five because it records what that amendment addressed rather than the set as it stands. **R2's three tabs is the load-bearing half and it has not moved.** The pane count is not fixed by any requirement: a pane is whatever a tab or the root opens over itself, so the set grows with the capabilities and the import rule below is what governs it.
 
 **The import rule named tabs and said nothing about panes**, which left the one import an implementer actually reaches for ("may `feed` import `rundetail`?") unaddressed. Stated:
 

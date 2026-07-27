@@ -9,7 +9,9 @@
 //
 // It is deliberately not gh's timeago wording, which the CLI's -t templates carry
 // separately. The two renderings answer the same question at different densities, and
-// ADR-0023 keeps them apart on purpose: one clock, and a renderer per surface that needs one.
+// ADR-0023 keeps them apart on purpose: one clock, and a renderer per density. This is the
+// terse one, and it is shared, because a column has a width to fit. The prose one is -t's
+// alone, because R7 obliges it to match gh's wording exactly.
 package timefmt
 
 import (

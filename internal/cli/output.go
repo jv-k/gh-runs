@@ -65,8 +65,10 @@ func renderTable(deps Deps, sc scope, runs []domain.Run) error {
 			strconv.FormatInt(r.ID, 10),
 			// The age column reads from the injected clock, so the table reads like gh's and a
 			// golden stays deterministic under a fake one. The buckets and the wording live in
-			// timefmt, which the Feed's relative timestamp format reads too ([settings] R10):
-			// the two surfaces render one age the same way, and a boundary is corrected once.
+			// timefmt, which the Feed's relative timestamp format reads too ([settings] R10),
+			// so a boundary is corrected once. This is the terse renderer, and -t's timeAgo is
+			// the prose one. ADR-0023's reading is unchanged: one clock, and a renderer per
+			// density, with the terse one shared by the two surfaces that paint a column.
 			timefmt.Age(now, r.CreatedAt),
 		)
 		_, _ = fmt.Fprintln(w, strings.Join(row, "\t"))
