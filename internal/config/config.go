@@ -102,23 +102,10 @@ const (
 var tiers = []Tier{TierBackground, TierNormal, TierGreedy}
 
 // valid reports whether t is one of the recognised tiers.
-func (t Tier) valid() bool {
-	for _, v := range tiers {
-		if t == v {
-			return true
-		}
-	}
-	return false
-}
+func (t Tier) valid() bool { return inSet(t, tiers) }
 
 // tierList renders the valid tiers for a diagnostic (R14).
-func tierList() string {
-	names := make([]string, len(tiers))
-	for i, t := range tiers {
-		names[i] = string(t)
-	}
-	return strings.Join(names, ", ")
-}
+func tierList() string { return listSet(tiers, ", ") }
 
 // KeybindingProfile selects the motion set. There are exactly two, and a third
 // is never added on the grounds of platform, because a terminal erases the
@@ -136,23 +123,10 @@ const (
 var profiles = []KeybindingProfile{KeybindingStandard, KeybindingVim}
 
 // valid reports whether p is one of the two recognised profiles.
-func (p KeybindingProfile) valid() bool {
-	for _, v := range profiles {
-		if p == v {
-			return true
-		}
-	}
-	return false
-}
+func (p KeybindingProfile) valid() bool { return inSet(p, profiles) }
 
 // profileList renders the valid profiles for a diagnostic (AC4).
-func profileList() string {
-	names := make([]string, len(profiles))
-	for i, p := range profiles {
-		names[i] = string(p)
-	}
-	return strings.Join(names, ", ")
-}
+func profileList() string { return listSet(profiles, ", ") }
 
 // Scope is the per-tab repository scope: the Workflows and Storage tabs each carry
 // one independently, settable to all-repos or this-repo and defaulting to all-repos
@@ -171,23 +145,10 @@ const (
 var scopes = []Scope{ScopeAllRepos, ScopeThisRepo}
 
 // valid reports whether s is one of the two recognised scopes.
-func (s Scope) valid() bool {
-	for _, v := range scopes {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
+func (s Scope) valid() bool { return inSet(s, scopes) }
 
 // scopeList renders the valid scopes for a diagnostic (R19).
-func scopeList() string {
-	names := make([]string, len(scopes))
-	for i, s := range scopes {
-		names[i] = string(s)
-	}
-	return strings.Join(names, ", ")
-}
+func scopeList() string { return listSet(scopes, ", ") }
 
 // Theme selects the palette. There are exactly three: auto derives it from the terminal
 // background as gh does, and dark and light state it outright (settings R6). The set is
@@ -206,23 +167,10 @@ const (
 var themes = []Theme{ThemeAuto, ThemeDark, ThemeLight}
 
 // valid reports whether t is one of the three recognised themes.
-func (t Theme) valid() bool {
-	for _, v := range themes {
-		if t == v {
-			return true
-		}
-	}
-	return false
-}
+func (t Theme) valid() bool { return inSet(t, themes) }
 
 // themeList renders the valid themes for a diagnostic (R14).
-func themeList() string {
-	names := make([]string, len(themes))
-	for i, t := range themes {
-		names[i] = string(t)
-	}
-	return strings.Join(names, ", ")
-}
+func themeList() string { return listSet(themes, ", ") }
 
 // TimestampFormat selects how a Run's instant is rendered. There are exactly two:
 // absolute states the instant itself, and relative states its age (settings R10). It is a
@@ -241,22 +189,40 @@ const (
 var timestampFormats = []TimestampFormat{TimestampAbsolute, TimestampRelative}
 
 // valid reports whether f is one of the two recognised formats.
-func (f TimestampFormat) valid() bool {
-	for _, v := range timestampFormats {
-		if f == v {
+func (f TimestampFormat) valid() bool { return inSet(f, timestampFormats) }
+
+// timestampList renders the valid formats for a diagnostic (R14).
+func timestampList() string { return listSet(timestampFormats, ", ") }
+
+// inSet reports whether v is a member of set. It is the body every selector setting's valid
+// method had a verbatim copy of, and it is a linear scan because every set here has two or
+// three members: a map would cost an allocation per call to save nothing at that size.
+//
+// The registries stay per type. This collapses how a set is searched, not what the sets are,
+// so the loader still validates each setting against its own declared members and a member
+// added to one cannot leak into another.
+func inSet[T comparable](v T, set []T) bool {
+	for _, m := range set {
+		if v == m {
 			return true
 		}
 	}
 	return false
 }
 
-// timestampList renders the valid formats for a diagnostic (R14).
-func timestampList() string {
-	names := make([]string, len(timestampFormats))
-	for i, f := range timestampFormats {
-		names[i] = string(f)
+// listSet renders a set for a diagnostic, in the registry's own order, which is the order
+// R14 obliges a rejection message to list. The separator is the caller's because the
+// diagnostics join on ", " and the Settings view's options hint joins on " / ".
+//
+// The constraint is ~string rather than fmt.Stringer: every selector setting is a defined
+// string type, and a conversion is what the five copies did. A Stringer bound would admit a
+// type whose String method disagrees with what the loader compares against.
+func listSet[T ~string](set []T, sep string) string {
+	names := make([]string, len(set))
+	for i, v := range set {
+		names[i] = string(v)
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(names, sep)
 }
 
 // Tiers, KeybindingProfiles, Scopes, Themes and TimestampFormats return the valid values of
