@@ -149,18 +149,13 @@ func referenceHex(a palette.Appearance) string {
 	return palette.ReferenceBackgroundDark
 }
 
-func sortedRoles() []string { return sortedKeys(palette.Roles()) }
-func sortedHighlights() []string {
-	names := make([]string, 0, len(palette.Highlights()))
-	for name := range palette.Highlights() {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
+func sortedRoles() []string      { return sortedKeys(palette.Roles()) }
+func sortedHighlights() []string { return sortedKeys(palette.Highlights()) }
 
-// sortedKeys orders a role map, so a failure names them predictably and the golden is stable.
-func sortedKeys(m map[string]palette.Colour) []string {
+// sortedKeys orders a palette map by name, so a failure names its subjects predictably and the
+// golden is stable across runs. It is generic over the value because Roles and Highlights are
+// different types for a reason R22 cares about, and this ordering is not one of them.
+func sortedKeys[V any](m map[string]V) []string {
 	names := make([]string, 0, len(m))
 	for name := range m {
 		names = append(names, name)
@@ -193,6 +188,10 @@ func rgb8(c color.Color) (float64, float64, float64) {
 // precisely because a reader can check it against any contrast tool they already have.
 func relativeLuminance(c color.Color) float64 {
 	r, g, b := rgb8(c)
+	// WCAG 2.x specifies the knee at 0.03928, where the sRGB standard itself puts it at
+	// 0.04045 (toLab below uses that one). The two disagree only over a span narrower than one
+	// 8-bit channel step, so no colour here can land between them, and each formula is quoted
+	// as its own standard writes it rather than reconciled into a third thing.
 	lin := func(v float64) float64 {
 		v /= 255
 		if v <= 0.03928 {

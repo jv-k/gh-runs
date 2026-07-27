@@ -34,8 +34,9 @@ type Appearance int32
 
 const (
 	// Dark is the set for a dark terminal background, and the default. It is what gh
-	// falls back to, and every colour in it is the value the views carried before the
-	// theme setting existed, so a golden taken under it is unchanged by this package.
+	// falls back to. Every colour in it but Muted is the value the views carried before
+	// the theme setting existed; Muted moved to clear the contrast floor, which is why
+	// most goldens in the tree were regenerated once (settings R22, ADR-0024).
 	Dark Appearance = iota
 	// Light is the set for a light terminal background.
 	Light
@@ -219,7 +220,8 @@ var (
 // The highlights. Each is a foreground and a background painted together, so the contrast a
 // highlighted line paints at is exactly these two values rather than whatever severity colour
 // the line already carried. The paired foregrounds are #ffffff on both dark backgrounds and
-// #1c1c1c on both light ones, and all four clear 5.0.
+// #1c1c1c on both light ones. Their measured figures live in the golden beside the property
+// test, never in this comment, because a figure typed beside a value drifts from it (AC15).
 var (
 	// Cursor is the log viewer's current line. Its dark background moved from #303030, which
 	// is CIE76 ΔE 3.9 from the dark reference background and therefore invisible on the very

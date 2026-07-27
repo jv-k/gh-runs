@@ -151,7 +151,7 @@ func (m Model) body() string {
 }
 
 // renderVisLine wraps one visible line to the content width and paints each physical row in
-// the line's style (R22). NO_COLOR drops the style to plain, leaving R9's text labels to
+// the line's style (log-viewer R22). NO_COLOR drops the style to plain, leaving R9's text labels to
 // carry the meaning (R10). The cursor line and a search match get a highlight, so the
 // fold-toggle target and the matches are visible without shifting the layout.
 //
