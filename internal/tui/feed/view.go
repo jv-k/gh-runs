@@ -319,7 +319,14 @@ func (m Model) emptyLine() string {
 // approvals saved filter behind the badge (approvals R9). Both are client-side predicates
 // over the held Runs, so either can empty the list while the Feed holds plenty.
 func (m Model) narrowed() bool {
-	return m.filter.QueryString() != "" || m.approvalsFilter
+	// An unresolved this-repo marker hides nothing, so it must not count here. Otherwise an
+	// empty Feed would claim on one line that a filter is hiding Runs while the next line says
+	// the pin fell back and everything is showing (ADR-0016).
+	f := m.filter
+	if _, ok := m.thisRepo(); !ok {
+		f.ThisRepo = false
+	}
+	return f.QueryString() != "" || m.approvalsFilter
 }
 
 // filterLine states the active filter, so a narrowing the operator did not type is visible

@@ -784,3 +784,23 @@ func TestThisRepoTokenCannotBeARepositoryReference(t *testing.T) {
 			"reference, and the whole spelling has to be reconsidered (ADR-0016)", filter.ThisRepoToken)
 	}
 }
+
+// TestMarkerOnlyLaunchFilterIsNotEmpty is TestRepositoryOnlyLaunchFilterIsNotEmpty for the
+// marker, and the same trap. Load tells "no filter was set" from one that was by asking
+// whether QueryString is non-empty, so a launch filter carrying only this-repo would narrow
+// the Feed to the working directory while every predicate above called it absent.
+func TestMarkerOnlyLaunchFilterIsNotEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "launch_filter:\n  repos:\n    - this-repo\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, _ := config.Load(env, config.Flags{})
+
+	if !cfg.LaunchFilter.ThisRepo {
+		t.Fatal("the marker did not load, so this test would prove nothing")
+	}
+	if got := cfg.LaunchFilter.QueryString(); got == "" {
+		t.Error("a launch filter carrying only the this-repo marker rendered as empty: it narrows " +
+			"the Feed, so every surface that asks whether a filter is active must see one")
+	}
+}

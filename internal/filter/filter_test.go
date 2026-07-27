@@ -293,15 +293,33 @@ func TestResolveAddsTheWorkingDirectoryRepository(t *testing.T) {
 		}
 	})
 
-	t.Run("it does not write through to the caller's filter", func(t *testing.T) {
-		f, err := filter.ParseQuery("repo:this-repo repo:cli/cli")
-		if err != nil {
-			t.Fatalf("ParseQuery: %v", err)
+	t.Run("it does not write through the caller's backing array", func(t *testing.T) {
+		// Resolve has a value receiver, so the caller's len can never change and asserting on
+		// it proves nothing. The hazard is append writing into a backing array the caller
+		// shares: with spare capacity, appending at index len clobbers whatever another slice
+		// of the same array holds there. That is the failure this reproduces.
+		//
+		// It matters because the Feed holds the stated filter and re-resolves it on every
+		// view, so an in-place append would accumulate the working directory's repository into
+		// the operator's own Repos, once per frame.
+		backing := make([]domain.RepoID, 1, 4)
+		backing[0] = domain.RepoID{Host: domain.HostGitHub, Owner: "cli", Name: "cli"}
+		neighbour := backing[:2]
+		sentinel := domain.RepoID{Host: domain.HostGitHub, Owner: "golang", Name: "go"}
+		neighbour[1] = sentinel
+
+		f := filter.Filter{ThisRepo: true, Repos: backing}
+		got := f.Resolve(here, true)
+
+		if neighbour[1] != sentinel {
+			t.Errorf("Resolve wrote %v into the caller's backing array, overwriting %v: it must "+
+				"copy before appending, because the receiver's slice is not its own", neighbour[1], sentinel)
 		}
-		before := len(f.Repos)
-		_ = f.Resolve(here, true)
-		if len(f.Repos) != before {
-			t.Errorf("Resolve grew the receiver's Repos from %d to %d: it must be pure, because the Feed holds the stated filter and re-resolves it", before, len(f.Repos))
+		if len(f.Repos) != 1 {
+			t.Errorf("Resolve grew the receiver's Repos to %d, want 1", len(f.Repos))
+		}
+		if len(got.Repos) != 2 || got.Repos[1] != here {
+			t.Errorf("the returned Repos = %v, want cli/cli then %v", got.Repos, here)
 		}
 	})
 

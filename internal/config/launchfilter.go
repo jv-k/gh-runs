@@ -266,7 +266,11 @@ func launchFilterValue(f filter.Filter, axis string) any {
 		// written back as the bare this-repo entry it was read as, first, so a Save
 		// round-trips it rather than resolving it into whatever directory the operator
 		// happened to be in (ADR-0016, R17).
-		return listOrNil(append(thisRepoEntry(f.ThisRepo), repoRefs(f.Repos)...))
+		refs := repoRefs(f.Repos)
+		if f.ThisRepo {
+			refs = append([]string{filter.ThisRepoToken}, refs...)
+		}
+		return listOrNil(refs)
 	default:
 		return nil
 	}
@@ -298,15 +302,6 @@ func liftThisRepo(node yaml.Node) (yaml.Node, bool) {
 	}
 	node.Content = kept
 	return node, found
-}
-
-// thisRepoEntry renders the marker back into the file's list form, or nothing when it is not
-// set. It is a slice rather than a string so the caller appends it without a branch.
-func thisRepoEntry(set bool) []string {
-	if !set {
-		return nil
-	}
-	return []string{filter.ThisRepoToken}
 }
 
 // scalarOrNil and listOrNil map an empty axis to the nil that removes its key.
