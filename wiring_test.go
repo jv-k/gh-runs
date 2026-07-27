@@ -17,6 +17,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/limiter"
 	"github.com/jv-k/gh-runs/v2/internal/scheduler"
 	"github.com/jv-k/gh-runs/v2/internal/store"
+	"github.com/jv-k/gh-runs/v2/internal/tui"
 	"github.com/jv-k/gh-runs/v2/internal/tui/logview"
 	storagetab "github.com/jv-k/gh-runs/v2/internal/tui/storage"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
@@ -95,20 +96,12 @@ func artifact() domain.Artifact {
 func TestArtifactDownloadDoesNotFeedTheLocalStore(t *testing.T) {
 	t.Run("the seam the root receives leaves the store empty", func(t *testing.T) {
 		dir := t.TempDir()
-		cl, gov := wiredClients(t, dir)
 
 		// The assertion is over the value the root is handed, not over the function that
 		// produces it. Pinning the producer alone left the deciding line uncovered: the
 		// pre-fix expression could be pasted back into the options literal and the whole
 		// suite stayed green. Reading opts.StorageDownload is what closes that.
-		opts := cl.tuiOptions(tuiDeps{
-			Config:    config.Config{},
-			Profile:   keys.Standard,
-			Clock:     clockwork.NewFakeClock(),
-			Scheduler: scheduler.New(scheduler.Options{}),
-			Governor:  gov,
-			Downloads: t.TempDir(),
-		})
+		opts := wiredOptions(t, dir)
 
 		path, err := opts.StorageDownload(artifact())
 		if err != nil {
@@ -144,13 +137,13 @@ func exportedRun() (domain.RepoID, int64) {
 // (log-viewer R11). It is the Artifact download's pair: the same defect, one endpoint over.
 //
 // The archive is an arbitrarily large one-shot zip served from a signed URL that lives about
-// a minute (log-viewer R13). Routed through the store, persist reads the whole body into
-// memory before ClientExport streams a byte of it, and then writes it base64-in-JSON to disk,
-// so a caller asking for an N-byte archive pays N resident plus about 1.33N in the store on
-// top of the N-byte file they wanted. The entry buys nothing back: the signed URL is
-// single-use, and it carries no /repos/ path, so repoOf yields "" and no repository
-// invalidation can ever reclaim it. It sits there until LRU evicts something useful to make
-// room.
+// a minute (log-viewer R13). Routed through the store, persist buffers the body before
+// ClientExport streams a byte of it and then writes it base64-in-JSON to disk, so a caller
+// asking for an archive pays for it twice over. Since local-store R25 that buffer is bounded
+// at 8 MiB, which caps the cost of the mistake without changing that it is one. The entry buys
+// nothing back: the signed URL is single-use, and it carries no /repos/ path, so repoOf yields
+// "" and no repository invalidation can ever reclaim it. It sits there until LRU evicts
+// something useful to make room.
 //
 // So the export dials the blob client, which shares the governor and the limiter (an export
 // costs rate-limit points and must be paced and bounded like anything else) and stops short
@@ -159,19 +152,11 @@ func exportedRun() (domain.RepoID, int64) {
 func TestLogExportDoesNotFeedTheLocalStore(t *testing.T) {
 	t.Run("the seam the root receives leaves the store empty", func(t *testing.T) {
 		dir := t.TempDir()
-		cl, gov := wiredClients(t, dir)
 
 		// The assertion is over the value the root is handed, not over the function that
 		// produces it, for the reason the Artifact case records: pinning a producer leaves
 		// the options literal free to name the wrong client and the suite stays green.
-		opts := cl.tuiOptions(tuiDeps{
-			Config:    config.Config{},
-			Profile:   keys.Standard,
-			Clock:     clockwork.NewFakeClock(),
-			Scheduler: scheduler.New(scheduler.Options{}),
-			Governor:  gov,
-			Downloads: t.TempDir(),
-		})
+		opts := wiredOptions(t, dir)
 
 		repo, runID := exportedRun()
 		path, err := opts.LogExport(repo, runID)
@@ -197,6 +182,87 @@ func TestLogExportDoesNotFeedTheLocalStore(t *testing.T) {
 		if n := storeEntries(t, dir); n == 0 {
 			t.Fatal("the shared client persisted nothing, so the assertion above proves nothing; the control has stopped controlling")
 		}
+	})
+}
+
+// fetchedJob is the Job whose plain-text log the cassette serves.
+func fetchedJob() (domain.RepoID, int64) {
+	return domain.RepoID{Host: domain.HostGitHub, Owner: "o", Name: "r"}, 123456789
+}
+
+// TestJobLogFetchDoesNotFeedTheLocalStore pins the wiring the per-Job log fetch depends on
+// (log-viewer R13). It is the third of the same defect, after the Artifact download and the
+// whole-Run export, and it is the one that survived both fixes because it does not look like
+// the other two: a Job log is plain text, not a zip, and main.go's comment called it "one
+// small text resource" that the store would revalidate.
+//
+// Neither half of that was true. The endpoint answers a 302 to a signed blob URL, and
+// http.Client follows a redirect through the same Transport, so the blob GET reaches the
+// store like any other request. persist runs only on a 200, so it never sees the 302 and
+// always sees the blob, and store.key hashes the request URL, so the entry it writes is
+// addressed by a single-use URL no future request will ever carry. repoOf returns "" for that
+// path, so no repository invalidation can reclaim it either. It sits until LRU evicts
+// something useful to make room for it.
+//
+// The size claim fails the same way. maxLogBytes is applied by the consumer, downstream of the
+// store, so it bounds what the pane renders rather than what the store keeps. The store's own
+// 8 MiB ceiling (local-store R25) bounds the cost and not the fact: a log under it still writes
+// an entry nothing can reach. A Job log has no upper bound (R21).
+//
+// So the fetch dials the blob client, which shares the governor and the limiter (a fetch
+// costs rate-limit points and must be paced and bounded like anything else) and stops short
+// of the store. The control half asserts the shared client does persist, which is what stops
+// the first assertion passing vacuously.
+func TestJobLogFetchDoesNotFeedTheLocalStore(t *testing.T) {
+	t.Run("the seam the root receives leaves the store empty", func(t *testing.T) {
+		dir := t.TempDir()
+
+		// The assertion is over the value the root is handed, not over the function that
+		// produces it, for the reason the Artifact case records: pinning a producer leaves
+		// the options literal free to name the wrong client and the suite stays green.
+		opts := wiredOptions(t, dir)
+
+		repo, jobID := fetchedJob()
+		body, err := opts.LogFetch(repo, jobID)
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if len(body) == 0 {
+			t.Fatal("the fetch returned no log, so the assertion below would hold for the wrong reason")
+		}
+		if n := storeEntries(t, dir); n != 0 {
+			t.Errorf("a per-Job log fetch left %d local-store entries, want none: the body arrives from a single-use signed URL the store can never revalidate or address again (R13)", n)
+		}
+	})
+
+	t.Run("the shared client would persist it", func(t *testing.T) {
+		dir := t.TempDir()
+		cl, _ := wiredClients(t, dir)
+
+		repo, jobID := fetchedJob()
+		if _, err := logview.ClientFetch(cl.shared)(repo, jobID); err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if n := storeEntries(t, dir); n == 0 {
+			t.Fatal("the shared client persisted nothing, so the assertion above proves nothing; the control has stopped controlling")
+		}
+	})
+}
+
+// wiredOptions builds the dependency set the root is actually handed, over a chain rooted at
+// dir. Each of the three transfer tests asserts against a field of this value rather than
+// against the function that produces it: pinning a producer alone left the options literal
+// free to name the wrong client, which is how the same defect reached main three times.
+func wiredOptions(t *testing.T, dir string) tui.Options {
+	t.Helper()
+	cl, gov := wiredClients(t, dir)
+	return cl.tuiOptions(tuiDeps{
+		Config:    config.Config{},
+		Profile:   keys.Standard,
+		Clock:     clockwork.NewFakeClock(),
+		Scheduler: scheduler.New(scheduler.Options{}),
+		Governor:  gov,
+		Downloads: t.TempDir(),
 	})
 }
 

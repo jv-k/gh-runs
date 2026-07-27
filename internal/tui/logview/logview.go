@@ -45,8 +45,9 @@ type Planner interface {
 }
 
 // Options carries the pane's construction seams, filled by main.go through rundetail. Fetch
-// reads one Job's log over the shared client, Exporter downloads the whole-Run archive to
-// disk (R11), Planner freezes the log-deletion set (R17), and Profile is the resolved
+// reads one Job's log and Exporter downloads the whole-Run archive to disk (R11), both over
+// the blob client, because both arrive from a signed URL behind a redirect and neither may
+// reach the local-store (R13, ADR-0012). Planner freezes the log-deletion set (R17), and Profile is the resolved
 // keybinding set (R7a). A golden test leaves the seams nil, where the pane renders held
 // content and the delete and export keys are inert.
 type Options struct {

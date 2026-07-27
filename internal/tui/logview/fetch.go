@@ -41,11 +41,20 @@ type Fetch func(repo domain.RepoID, jobID int64) ([]byte, error)
 // (R2, AC5). A nil Exporter leaves the export key inert.
 type Exporter func(repo domain.RepoID, runID int64) (path string, err error)
 
-// ClientFetch is the production Fetch, wired in main.go over the shared ghclient (ADR-0015).
+// ClientFetch is the production Fetch, wired in main.go over the blob ghclient (ADR-0012).
 // It issues one GET for a Job's log, follows the 302 to the signed blob, and returns the
 // bytes up to maxLogBytes. It re-requests the endpoint every call and reuses no signed URL:
 // the URL expires in about a minute, so each fetch follows the redirect afresh and nothing
-// persists, caches or logs it (R13). A non-200 (a 404 for deleted or in-progress logs, or a
+// persists, caches or logs it (R13).
+//
+// The blob client is load-bearing to that last claim rather than an implementation detail of
+// main.go, exactly as it is for ClientExport below. http.Client follows the 302 through the
+// same Transport, so on the shared client the blob GET reaches the local-store, which persists
+// any 200 GET carrying an ETag (local-store R19). The entry would be keyed by a URL that has
+// already expired, so nothing could revalidate or even address it, and R13 exists to say
+// nothing should persist per signed fetch at all. The store's 8 MiB ceiling (R25) bounds how
+// much that costs but not whether it happens, and maxLogBytes below bounds only what the pane
+// renders. A non-200 (a 404 for deleted or in-progress logs, or a
 // 5xx), and an error the RESTClient raises for a non-2xx, both yield an empty result and no
 // surfaced failure, which the pane renders as R18's empty state (AC7).
 func ClientFetch(client Requester) Fetch {
