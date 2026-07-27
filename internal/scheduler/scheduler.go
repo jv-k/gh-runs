@@ -173,9 +173,8 @@ type Options struct {
 	// will ever record it, and dropping it on the pass completing would blank the Feed for the
 	// repository the operator is sitting in. repo-discovery R22 answers that case by adopting
 	// it for the session, at which point a record exists and this branch stops carrying it.
-	// That adoption is written and unreached (issue #100), so today the branch is what holds
-	// such a repository in the schedule, and it is load-bearing for a reason it should not
-	// have to be.
+	// The composition root now runs that adoption behind the fast path's gate, so the branch
+	// bridges the window before it lands rather than standing in for it indefinitely.
 	//
 	// A nil Classified is "discovery has classified nothing", which keeps First in the
 	// schedule. That is the honest reading for a caller that wired no discovery at all.

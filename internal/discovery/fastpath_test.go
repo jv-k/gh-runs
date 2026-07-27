@@ -100,6 +100,106 @@ func TestAdoptsFastPathRepoNotEnumerated(t *testing.T) {
 	}
 }
 
+// TestAdoptLaunchAdmitsARepositoryEnumerationDidNotReturn is R22 reached the way the
+// composition root reaches it, from an identity that is already resolved.
+//
+// main.go resolves the launch repository once, before the engine exists, because the
+// resolver shells out to git and one launch needs the answer twice (as the scheduler's
+// Options.First and as R35's host gate). Driving adoption through Discover would resolve
+// it a second time and re-probe its Run listing, so the entrypoint the root calls takes
+// the identity rather than the resolver.
+//
+// No resolver is configured here for exactly that reason: the seam under test must work
+// with none, or the root is obliged to hand discovery a resolver it should never call.
+func TestAdoptLaunchAdmitsARepositoryEnumerationDidNotReturn(t *testing.T) {
+	local := gh("jv-k", "local")
+	h := newHarness(t, "fastpath", "")
+
+	if err := h.disc.Pass(context.Background(), nil); err != nil {
+		t.Fatalf("Pass: %v", err)
+	}
+	// The precondition is the defect this closes: enumeration does not return the
+	// repository the operator is sitting in, so its capability is not-yet-known and every
+	// destructive action stays disabled for the session (R8, AC8).
+	if got := h.disc.Capability(local); got != domain.CapabilityUnknown {
+		t.Fatalf("precondition: capability = %v, want not-yet-known", got)
+	}
+
+	if err := h.disc.AdoptLaunch(context.Background(), local, nil); err != nil {
+		t.Fatalf("AdoptLaunch: %v", err)
+	}
+
+	if got := h.disc.Capability(local); got != domain.CapabilityPermitted {
+		t.Errorf("capability after adoption = %v, want permitted (R22)", got)
+	}
+	// R22 admits it "to the poll set if it has Runs", so the classification has to be
+	// established as well as the capability. A record carrying capability alone would read
+	// as having no Runs, and the launch repository would leave the poll set at the moment
+	// the scheduler stopped treating it as a special case: the Feed would go quiet for the
+	// one repository the operator is certainly watching.
+	got := pollSetKeys(h.disc)
+	want := []string{"github.com/acme/owned-a", "github.com/jv-k/local"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("poll set after adoption = %v, want %v", got, want)
+	}
+}
+
+// TestAdoptLaunchSpendsNothingOnAnEnumeratedMember pins R22's condition, not just its
+// effect. Adoption is for a repository enumeration did not return. A member it did return
+// is already Known from its enumeration payload, so adoption must cost no request at all,
+// or every launch inside an ordinary repository pays for a capability it already has.
+func TestAdoptLaunchSpendsNothingOnAnEnumeratedMember(t *testing.T) {
+	member := gh("acme", "owned-a")
+	h := newHarness(t, "fastpath", "")
+
+	if err := h.disc.Pass(context.Background(), nil); err != nil {
+		t.Fatalf("Pass: %v", err)
+	}
+	before := h.counting.count()
+
+	if err := h.disc.AdoptLaunch(context.Background(), member, nil); err != nil {
+		t.Fatalf("AdoptLaunch: %v", err)
+	}
+
+	if got := h.counting.count() - before; got != 0 {
+		t.Errorf("adoption of an enumerated member issued %d requests, want 0 (R22 adopts only what enumeration did not return)", got)
+	}
+}
+
+// TestAdoptLaunchIsANoOpOutsideAnyRepository pins the zero identity. A launch outside a
+// git repository, or one whose remote did not resolve, has no launch repository, and the
+// root passes the zero value rather than branching. Spending a request on it would ask
+// the API for a repository named "/".
+func TestAdoptLaunchIsANoOpOutsideAnyRepository(t *testing.T) {
+	h := newHarness(t, "fastpath", "")
+
+	if err := h.disc.AdoptLaunch(context.Background(), domain.RepoID{}, nil); err != nil {
+		t.Fatalf("AdoptLaunch for the zero repository: %v", err)
+	}
+	if got := h.counting.count(); got != 0 {
+		t.Errorf("adoption outside any repository issued %d requests, want 0", got)
+	}
+}
+
+// TestAdoptLaunchRefusesAnExcludedRepository is settings R7 and AC5 at the new entrypoint.
+// An excluded repository receives zero requests, and the terminal happening to sit inside
+// it is not an exception. FastPath already refuses one, so this keeps the two entrypoints
+// agreeing rather than leaving the rule true of only the path Discover drives.
+func TestAdoptLaunchRefusesAnExcludedRepository(t *testing.T) {
+	local := gh("jv-k", "local")
+	h := newHarness(t, "fastpath", "", withExclude(local))
+
+	if err := h.disc.AdoptLaunch(context.Background(), local, nil); err != nil {
+		t.Fatalf("AdoptLaunch for an excluded repository: %v", err)
+	}
+	if got := h.counting.count(); got != 0 {
+		t.Errorf("adoption of an excluded repository issued %d requests, want 0 (settings R7, AC5)", got)
+	}
+	if got := h.disc.Capability(local); got != domain.CapabilityUnknown {
+		t.Errorf("excluded repository capability = %v, want not-yet-known: it must be in no record at all", got)
+	}
+}
+
 // TestDiscoverSurfacesFastPathError pins the orchestration path's contract: Discover
 // records the fast-path resolver's error (R14's actionable GH_TOKEN instruction)
 // through FastPathErr rather than discarding it, and still completes the enumerate

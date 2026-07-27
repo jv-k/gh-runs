@@ -48,9 +48,21 @@ func (d *Discovery) FastPath(ctx context.Context, emit func(Record)) (id domain.
 	if d.excluded(id) {
 		return domain.RepoID{}, false, nil
 	}
+	if err := d.classifyOne(ctx, id, emit); err != nil {
+		return id, false, err
+	}
+	return id, true, nil
+}
+
+// classifyOne spends one Run listing to record whether a repository has Runs, with its
+// capability left not-yet-known (R8, AC8). It is the half of the fast path that follows
+// resolution, factored out because adoption needs the same classification for a
+// repository the caller resolved elsewhere: R22 admits the launch repository "to the poll
+// set if it has Runs", and the poll set is read from that flag.
+func (d *Discovery) classifyOne(ctx context.Context, id domain.RepoID, emit func(Record)) error {
 	res := d.probe(ctx, id)
 	if res.err != nil {
-		return id, false, res.err
+		return res.err
 	}
 	rec := Record{
 		Host:    id.Host,
@@ -63,7 +75,7 @@ func (d *Discovery) FastPath(ctx context.Context, emit func(Record)) (id domain.
 	if emit != nil {
 		emit(rec)
 	}
-	return id, true, nil
+	return nil
 }
 
 // Discover runs a full launch: the fast path first (R14), then the enumerate and
@@ -86,19 +98,68 @@ func (d *Discovery) Discover(ctx context.Context, emit func(Record)) error {
 		return err
 	}
 
-	// R22: the fast-path repository is adopted for the session only when
-	// enumeration did not return it. A repository that enumeration returned is a
-	// normal member, already Known from its enumeration payload; the placeholder
-	// FastPath admitted has by now been replaced by the enumerated record.
-	if resolved && !d.isKnownMember(fastID) {
-		if err := d.adopt(ctx, fastID, emit); err != nil {
-			// Adoption is a single-request convenience (R22). Its failure leaves the
-			// repository painted with its Runs and its capability not-yet-known, which
-			// is the safe state: destructive actions stay disabled.
-			return nil
-		}
+	if resolved {
+		// Adoption is a single-request convenience (R22). Its failure leaves the
+		// repository painted with its Runs and its capability not-yet-known, which is
+		// the safe state: destructive actions stay disabled.
+		_ = d.AdoptLaunch(ctx, fastID, emit)
 	}
 	return nil
+}
+
+// AdoptLaunch is R22's session adoption for a launch repository the caller has already
+// resolved. When enumeration did not return it, discovery spends one
+// GET /repos/{owner}/{repo} to learn its permissions, archived and disabled, and admits
+// it for the session.
+//
+// **It takes the identity, not the resolver, because the composition root already holds
+// the answer.** main.go resolves the launch repository once before the engine exists: the
+// resolver shells out to git, and one launch needs the answer twice, as the scheduler's
+// Options.First and as the host gate. Driving adoption through Discover instead would
+// resolve it a second time and re-probe its Run listing, and the root would have to spend
+// a whole enumeration pass it may already have loaded from the local-store.
+//
+// It classifies the repository first when it holds no record for it, which is the case
+// whenever the caller is not Discover. R22 admits the repository "to the poll set if it
+// has Runs", and that flag comes from a Run listing, not from the capability request. A
+// record carrying capability alone would read as having no Runs, and the launch
+// repository would drop out of the poll set at the moment the scheduler stopped treating
+// it as a special case, which is the opposite of what adoption is for.
+//
+// The zero identity is a launch outside any git repository, or one whose remote did not
+// resolve, and is a no-op rather than an error: there is no repository to adopt, which is
+// an ordinary session rather than a failure.
+func (d *Discovery) AdoptLaunch(ctx context.Context, id domain.RepoID, emit func(Record)) error {
+	if id == (domain.RepoID{}) {
+		return nil
+	}
+	// settings R7, AC5: an excluded repository receives zero requests, and adopt enforces
+	// this too. Checking here as well keeps the classification request below from being
+	// the hole in that rule.
+	if d.excluded(id) {
+		return nil
+	}
+	// A repository enumeration returned is already Known from its payload, so adoption is
+	// neither needed nor paid for.
+	if d.isKnownMember(id) {
+		return nil
+	}
+	if !d.hasRecord(id) {
+		if err := d.classifyOne(ctx, id, emit); err != nil {
+			return err
+		}
+	}
+	return d.adopt(ctx, id, emit)
+}
+
+// hasRecord reports whether the set holds any record for id, whatever its capability. It
+// is the test for "has this repository been classified", distinct from isKnownMember,
+// which additionally requires enumeration to have supplied the capability.
+func (d *Discovery) hasRecord(id domain.RepoID) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, ok := d.records[id.String()]
+	return ok
 }
 
 // FastPathErr returns the non-fatal error the most recent Discover's fast path

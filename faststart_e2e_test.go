@@ -217,7 +217,7 @@ func TestColdStartPaintsTheCurrentRepositoryFromOneRunListing(t *testing.T) {
 	discovered := make(chan struct{})
 	go func() {
 		defer close(discovered)
-		discoverBehind(ctx, sched, disc, seeded)
+		discoverBehind(ctx, sched, disc, current, seeded)
 	}()
 
 	<-base.reached // the launch repository's Run listing is on the wire, held there
@@ -393,7 +393,7 @@ func TestWarmLaunchHoldsTheSeededPollSetBehindTheFastPath(t *testing.T) {
 	discovered := make(chan struct{})
 	go func() {
 		defer close(discovered)
-		discoverBehind(ctx, sched, disc, seeded)
+		discoverBehind(ctx, sched, disc, current, seeded)
 	}()
 
 	<-base.reached
