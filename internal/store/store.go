@@ -49,6 +49,33 @@ const schemaVersion = 1
 // before eviction is ever involved.
 var maxStoreBytes int64 = 50 << 20
 
+// maxEntryBytes is the largest response body the store will hold (local-store R25,
+// ADR-0017). It is the store's own contract about what it is for, replacing a
+// composition-root convention that was invisible from in here and was got wrong
+// three times: name the client `blob` rather than `shared` for anything large.
+//
+// It keys on size and on nothing else. A host or path rule looks tempting and is
+// not safe as stated: repoOf returns "" for any path whose first segment is not
+// `repos`, and discovery's own enumeration is /user/repos, so a path rule would
+// decline the one response the store most wants to keep. Size needs nothing the
+// store is not already holding.
+//
+// 8 MiB is roughly 3.6x the largest legitimate response measured: a Runs listing at
+// per_page=100, the scheduler's own poll shape, is ~2.2 MiB against cli/cli, and a
+// single Run object is ~24 KB. The headroom is so that a repository busier than the
+// reference one, or a Run object that grows a field, does not silently stop caching
+// the Feed's own poll. The figure is over the BODY, which is what persist can
+// measure before deciding; the entry is written base64-in-JSON, so the ceiling
+// admits an entry of about 10.7 MiB, ~21% of maxStoreBytes.
+//
+// It is independent of maxStoreBytes because the two answer different questions:
+// this one asks whether a response is a resource or a payload, R15's asks how much
+// is kept. It is not a knob, by R9's argument transferred exactly as R15's bound
+// inherits it: no value a user can pick improves on "above the largest legitimate
+// response". It is a var rather than a const only so the ceiling tests can lower it
+// without building an 8 MiB payload; nothing in the product writes to it.
+var maxEntryBytes int64 = 8 << 20
+
 // readFile indirects os.ReadFile so a test can count how many entries the store
 // reads. It guards local-store R15's efficiency property: eviction sums sizes by
 // stat and reads an entry only when the store is over its bound, so a free 304 (the
@@ -296,8 +323,34 @@ func drainBody(req *http.Request) []byte {
 
 // persist saves a 200's ETag, entity headers and payload, then hands the caller a
 // fresh body because the original is consumed.
+//
+// It reads at most maxEntryBytes+1 bytes before deciding (local-store R25). The one
+// byte past the ceiling is how it learns the ceiling was crossed, and reading no
+// further is the point: an unconditional io.ReadAll here held a response whole
+// before the ETag was ever looked at, so declining to SAVE reclaimed nothing.
+// Over the ceiling, the prefix is stitched back in front of the untouched remainder
+// and the caller reads the complete body from a stream. Declining to cache must
+// never cost the caller its response.
+//
+// The size is measured rather than read off Content-Length, which is absent for
+// exactly the responses worth keeping: go-gh sets no Accept-Encoding, so net/http
+// adds gzip itself, decodes transparently, and deletes Content-Length. A header
+// rule would be reliable for blobs and blind to API resources.
 func (t *Transport) persist(req *http.Request, resp *http.Response, key string) (*http.Response, error) {
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxEntryBytes+1))
+	if err == nil && int64(len(body)) > maxEntryBytes {
+		// Over the ceiling. Nothing is saved and nothing further is buffered. A
+		// pre-existing entry for this key is deliberately left alone: it can never
+		// serve stale data, because reconstitute runs only on a 304 and a 304 is the
+		// server asserting that body is current, and if the resource shrinks back
+		// under the ceiling the entry is useful again. Its last-revalidated time
+		// stops advancing, so LRU reclaims it when the space is needed (R15).
+		resp.Body = &multiReadCloser{
+			Reader: io.MultiReader(bytes.NewReader(body), resp.Body),
+			closer: resp.Body,
+		}
+		return resp, nil
+	}
 	if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
@@ -318,6 +371,19 @@ func (t *Transport) persist(req *http.Request, resp *http.Response, key string) 
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	return resp, nil
 }
+
+// multiReadCloser re-serves a body's bounded prefix ahead of its untouched
+// remainder while closing the original stream. It is what lets persist decline a
+// response without truncating it or buffering the rest. The governor has its own
+// copy for its 403-classification prefix (classify.go); the two packages must not
+// import each other (ADR-0011), and a five-line adapter is the right thing to spell
+// twice rather than to reach across the seam for.
+type multiReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (m *multiReadCloser) Close() error { return m.closer.Close() }
 
 // reconstitute builds the synthetic 200 that never leaves as a 304. Entity
 // headers (body, ETag, Content-Type, Link, and every other) come from the store.
