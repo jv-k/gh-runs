@@ -84,8 +84,20 @@ The measurement found a defect nobody had reported. `Cursor` dark at `#303030` i
 
 **Darkening compresses the palette, and the orange band takes it.** `Warn` and `Failing` fall from ΔE 19 apart to 12. That is still looser than the ΔE 10 the set already ships between `Attention` and `Queued`, and R16 means no meaning rides on the difference.
 
-**The floor is stated per role and reference background rather than per appearance**, so the named themes issue [#93](https://github.com/jv-k/gh-runs/issues/93) raised in passing can add reference backgrounds later without reopening R22. Named themes are not decided here. R6 fixes the theme set at auto, dark and light and calls it "small and fixed rather than a gallery", so admitting more is an amendment to R6 and a decision of its own.
+**The floor is stated per role and reference background rather than per appearance**, so the named themes issue [#93](https://github.com/jv-k/gh-runs/issues/93) raised in passing can add reference backgrounds later without reopening R22. Named themes are not decided here. R6 fixed the theme set at auto, dark and light and called it "small and fixed rather than a gallery", so admitting more is an amendment to R6 and a decision of its own. That decision has since been taken, and the Amendment below is where this ADR absorbs it.
 
 **The reference backgrounds become exported constants in `palette`**, so R22's numbers exist in code rather than only in prose, and the property test reads the same values the canon names.
 
 **The measured ratios are generated, never typed.** AC15's golden holds the ratio for every role and every pair. A comment beside a value can drift from it, and the recorded numbers are the thing a future contributor is asked to beat.
+
+## Amendment: the reference backgrounds bind `auto` alone
+
+The named-themes decision the consequence above anticipated was taken in [ADR-0025](./0025-named-themes-and-who-owns-the-background.md) (issue [#152](https://github.com/jv-k/gh-runs/issues/152)). A named theme carries its own background and the tool paints it, by SGR cell fill, and `auto` is the only member of the theme set that does not paint.
+
+**So the assumption narrows to one member rather than being multiplied across four.** For `auto` the two reference backgrounds above stand exactly as written, and every word of the reasoning that named them holds: the tool reads the terminal's background, keeps only `IsDark()`, and commits to a worst case it does not control. For every painted member the floor stops being an assumption at all. Both colours are the tool's, so a role's ratio against its member's background is exact arithmetic of the kind this ADR already reserved for a Highlight's pair.
+
+**`dark` and `light` paint these two values, which is what keeps every figure above valid.** ADR-0025 makes every member but `auto` paint, and the two members this ADR was written against take the reference backgrounds themselves: `#2d2a2e` and `#faf4f2`. So the six values that moved, and every ratio recorded here, are unchanged in meaning. What was an assumption for `dark` and `light` becomes a fact about a background the tool sets, and `auto` inherits the assumption alone.
+
+**Nothing in the floor itself moves.** The standard is still WCAG 2.x at 4.5:1, a Highlight is still a pair with its own internal ratio and its own CIE76 ΔE 10 against the background, and the figures are still generated rather than typed. What changes is which background the arithmetic runs against, which R22 was deliberately worded per role and reference background so that it could absorb.
+
+**The grandfather clause this ADR refused is refused again at class scale.** ADR-0025 declined to exempt named themes from the floor on exactly the reasoning above: a published floor beside a documented precedent for ignoring it is worse than no floor. Measured against their own backgrounds, three of Nord's eight roles fail and all eight of Solarized Light's do. So a member is adapted rather than borrowed byte for byte, and ADR-0025 carries the table and says so in its own voice.
