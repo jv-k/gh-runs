@@ -89,3 +89,24 @@ func hostileLog() []byte {
 	line := tsA + "Building \x1b[31mproject\x1b[0m\x1b[2J\x1b[Hcleared\rretreat\ttail\x1b"
 	return []byte(line + "\n")
 }
+
+// searchableLog builds a log whose query term appears on three lines of three different
+// severities, one of them a debug line, which the pane paints in Muted.
+//
+// The shape is the point. applySearch jumps the cursor to the first match, so the first match
+// always renders under the cursor highlight and never under the search one. A fixture with a
+// single match therefore cannot exercise Match at all, which is why no golden did: the search
+// highlight, the worst-contrast pair in the tool, had zero coverage until this fixture existed
+// (settings R22, ADR-0024). The later matches are what render it, and putting a Muted line
+// among them covers the pair that measured 1.95:1 before a Highlight carried its own
+// foreground.
+func searchableLog() []byte {
+	lines := []string{
+		tsA + "##[command]/usr/bin/go test ./...",
+		tsA + "##[error]FAIL restoring cache for key abc123",
+		tsA + "ok  \tgithub.com/example/pkg\tcache warm\t0.42s",
+		tsA + "##[debug]cache key resolved to abc123",
+		tsA + "##[notice]done",
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}

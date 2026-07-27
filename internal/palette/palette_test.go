@@ -92,3 +92,31 @@ func TestEveryRoleDiffersAcrossAppearances(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryHighlightDiffersAcrossAppearances is the companion above for the Highlights, and it
+// exists because splitting them out of Roles() would otherwise have dropped them from that
+// test's coverage silently. Both halves are checked: a Highlight that forgot its light
+// background would paint a dark band on a white terminal, and one that forgot its light
+// foreground would paint white text on a light band.
+func TestEveryHighlightDiffersAcrossAppearances(t *testing.T) {
+	for name, h := range palette.Highlights() {
+		for half, c := range map[string]palette.Colour{
+			"foreground": h.Foreground(),
+			"background": h.Background(),
+		} {
+			style := lipgloss.NewStyle().Foreground(c)
+
+			restore := palette.Use(palette.Dark)
+			dark := style.Render("x")
+			restore()
+
+			restore = palette.Use(palette.Light)
+			light := style.Render("x")
+			restore()
+
+			if dark == light {
+				t.Errorf("highlight %q paints the same %s in both appearances", name, half)
+			}
+		}
+	}
+}

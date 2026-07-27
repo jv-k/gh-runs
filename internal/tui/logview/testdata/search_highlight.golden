@@ -1,0 +1,10 @@
+[1mcli/cli · CI · Job: build[m
+
+[38;2;95;175;95mCOMMAND /usr/bin/go test ./...[m
+[1;38;2;255;255;255;48;2;68;68;68mERROR   FAIL restoring cache for key abc123[m
+[38;2;255;255;255;48;2;95;95;0mok      github.com/example/pkg  cache warm      0.42s[m
+[38;2;255;255;255;48;2;95;95;0mDEBUG   cache key resolved to abc123[m
+[38;2;0;215;175mNOTICE  done[m
+
+[38;2;158;158;158mmatch 1 of 3 for cache  (n/N to move)[m
+[38;2;158;158;158mt timestamps · space fold · / search · D delete logs · e export · r refetch · esc close[m

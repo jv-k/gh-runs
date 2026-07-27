@@ -31,9 +31,9 @@ Values that change under this decision are picked at 5.0 or better where the hue
 
 ## The dark appearance moves, and the goldens are not the reason to refuse
 
-Exactly one dark role falls below the floor on `#2d2a2e`: `Muted` at 4.10, next closest `Danger` at 4.76. `Muted` is secondary text, so it appears in 65 of the tree's 67 goldens.
+Exactly one dark role falls below the floor on `#2d2a2e`: `Muted` at 4.10, next closest `Danger` at 4.76. `Muted` is secondary text, so it appears in most of the tree's goldens. Counted at implementation: 66 of 68 carry it, and 61 take the change as a pure substitution, the other 5 being the `logview` goldens that also carry the `Cursor` change below. The figures first written here, 65 of 67, were estimated rather than counted and did not survive it.
 
-That count was the stated reason to expect the dark set to be frozen, and it does not survive contact. A colour change never moves a cell width, so regenerating those files is a **pure byte substitution** of one SGR triple, verifiable with one `sed` and one `diff` rather than by reading 65 frames. The invariant is recorded in the `palette` package's own comment, that the dark values must not move because every golden in the tree is taken under them. It was protecting the goldens' convenience rather than any property a user could observe, and the implementation carved from this decision amends it.
+That count was the stated reason to expect the dark set to be frozen, and it does not survive contact. A colour change never moves a cell width, so regenerating those files is a **pure byte substitution** of one SGR triple, verifiable with one `sed` and one `diff` rather than by reading the frames. The invariant is recorded in the `palette` package's own comment, that the dark values must not move because every golden in the tree is taken under them. It was protecting the goldens' convenience rather than any property a user could observe, and the implementation carved from this decision amends it.
 
 **A grandfather clause was considered and rejected.** Exempting the single existing violator would have kept every golden byte-identical at the cost of publishing a floor alongside a documented precedent for ignoring it. That ambiguity is what the requirement exists to remove.
 
