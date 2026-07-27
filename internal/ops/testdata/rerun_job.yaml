@@ -1,7 +1,7 @@
 ---
 version: 2
 # The per-Job re-run endpoint under both readings R25 asks for, a success and a 404
-# (run-lifecycle R16, R22, R25).
+# (run-lifecycle R14a, R22, R25).
 #
 # The path addresses a Job id and never a Run id, which is the whole reason this
 # operation cannot ride the shared Run endpoint the other four build. The 201 is the API

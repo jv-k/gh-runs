@@ -473,6 +473,8 @@ func verb(op ops.Operation, kind ops.Kind) string {
 		return "Re-run"
 	case ops.OpRerunFailed:
 		return "Re-run failed jobs"
+	case ops.OpRerunJob:
+		return "Re-run job"
 	case ops.OpEnable:
 		return "Enable"
 	case ops.OpDisable:

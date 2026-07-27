@@ -286,6 +286,8 @@ func operationVerb(op ops.Operation) string {
 		return "Re-run"
 	case ops.OpRerunFailed:
 		return "Re-run failed jobs of"
+	case ops.OpRerunJob:
+		return "Re-run"
 	default:
 		return string(op)
 	}
@@ -314,6 +316,8 @@ func pluralNoun(p ops.Plan) string {
 		return "Artifacts"
 	case ops.KindLog:
 		return "logs"
+	case ops.KindJob:
+		return "Jobs"
 	default:
 		return "items"
 	}

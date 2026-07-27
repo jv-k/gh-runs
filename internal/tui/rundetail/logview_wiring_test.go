@@ -115,7 +115,7 @@ func TestCapturesInputPropagatesFromLog(t *testing.T) {
 	}
 }
 
-// TestRerunJobKeyIsInertOutsideJobFocus pins run-lifecycle R16's inertness rule, the same one
+// TestRerunJobKeyIsInertOutsideJobFocus pins run-detail R18a's inertness rule, the same one
 // R6a applies to the force-cancel escalation key. Outside job-focus the key means what it
 // means everywhere else, a whole-Run re-run on the Feed's selection, and the pane must not
 // steal it. Inside job-focus it names the Job under the cursor.
@@ -125,10 +125,12 @@ func TestRerunJobKeyIsInertOutsideJobFocus(t *testing.T) {
 		{ID: 101, RunID: 1, Name: "build", Repo: r.Repo},
 		{ID: 102, RunID: 1, Name: "test", Repo: r.Repo},
 	}
+	writable := domain.Repo{ID: r.Repo, Permissions: domain.Permissions{Push: true}}
 	build := func() Model {
 		m := New(Options{Profile: keys.Standard})
 		m, _ = m.Update(tea.WindowSizeMsg{Width: 100})
 		m, _ = m.Open(r)
+		m = m.SetRepoCapability(writable, true)
 		m, _ = m.Update(jobsMsg{runID: r.ID, jobs: jobs})
 		return m
 	}
@@ -136,7 +138,7 @@ func TestRerunJobKeyIsInertOutsideJobFocus(t *testing.T) {
 	t.Run("not in job-focus: the key is not consumed", func(t *testing.T) {
 		_, cmd := build().HandleKey(press("R"))
 		if cmd != nil {
-			t.Error("the pane consumed the re-run key outside job-focus; it belongs to the Feed there (R16, R6a)")
+			t.Error("the pane consumed the re-run key outside job-focus; it belongs to the Feed there (run-detail R18a, R6a)")
 		}
 	})
 
@@ -144,7 +146,7 @@ func TestRerunJobKeyIsInertOutsideJobFocus(t *testing.T) {
 		m := build().Focus()
 		_, cmd := m.HandleKey(press("R"))
 		if cmd == nil {
-			t.Fatal("the re-run key did nothing in job-focus (R16)")
+			t.Fatal("the re-run key did nothing in job-focus (run-detail R18a)")
 		}
 		msg, ok := cmd().(RerunJobMsg)
 		if !ok {
@@ -157,4 +159,47 @@ func TestRerunJobKeyIsInertOutsideJobFocus(t *testing.T) {
 			t.Errorf("the Job carries Repo %v, want %v stamped at fetch: the Feed derives the Item's tuple from it", msg.Job.Repo, r.Repo)
 		}
 	})
+}
+
+// TestJobRerunIsWithheldByTheCapabilityGate pins run-detail R18's gate on the per-Job re-run,
+// and AC16's requirement that a frame where the gate withholds the operation holds no note.
+//
+// The three refusals are one rule each: a repository the token cannot push, an archived one,
+// and an Orphaned Run whose Workflow is deleted and can produce no further Run. An unknown
+// capability fails closed, which is repo-discovery R8 applied to a write.
+func TestJobRerunIsWithheldByTheCapabilityGate(t *testing.T) {
+	repoID := domain.RepoID{Host: domain.HostGitHub, Owner: "cli", Name: "cli"}
+	jobs := []domain.Job{{ID: 101, RunID: 1, Name: "build", Repo: repoID}}
+
+	for _, tc := range []struct {
+		name  string
+		run   domain.Run
+		repo  domain.Repo
+		known bool
+	}{
+		{"read-only repository", domain.Run{ID: 1, Repo: repoID},
+			domain.Repo{ID: repoID, Permissions: domain.Permissions{Push: false}}, true},
+		{"archived repository", domain.Run{ID: 1, Repo: repoID},
+			domain.Repo{ID: repoID, Permissions: domain.Permissions{Push: true}, Archived: true}, true},
+		{"capability not yet known", domain.Run{ID: 1, Repo: repoID},
+			domain.Repo{ID: repoID, Permissions: domain.Permissions{Push: true}}, false},
+		{"Orphaned Run", domain.Run{ID: 1, Repo: repoID, WorkflowState: domain.StateDeleted},
+			domain.Repo{ID: repoID, Permissions: domain.Permissions{Push: true}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(Options{Profile: keys.Standard})
+			m, _ = m.Update(tea.WindowSizeMsg{Width: 100})
+			m, _ = m.Open(tc.run)
+			m = m.SetRepoCapability(tc.repo, tc.known)
+			m, _ = m.Update(jobsMsg{runID: tc.run.ID, jobs: jobs})
+			m = m.Focus()
+
+			if _, cmd := m.HandleKey(press("R")); cmd != nil {
+				t.Error("the gate withheld the operation but the key still acted (run-detail R18)")
+			}
+			if strings.Contains(m.View(), "supersedes the Attempt") {
+				t.Error("a frame where the gate withholds the operation still holds R14b's note (AC16)")
+			}
+		})
+	}
 }

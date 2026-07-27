@@ -686,14 +686,14 @@ func (m Model) openConfirm(op ops.Operation) (Model, tea.Cmd) {
 }
 
 // rerunJob plans and launches a per-Job re-run for the Job the detail pane named
-// (run-lifecycle R16). The pane emits rather than executing, because the Feed is the surface
+// (run-lifecycle R14a, run-detail R18a). The pane emits rather than executing, because the Feed is the surface
 // that already owns the planner and the launch, and ops's one write entry should be reached
 // from one place per tab (ADR-0011).
 //
 // It is a single-Item set, so R18 prices it at FrictionNone and it launches without a modal,
 // exactly as a single whole-Run re-run does. The pane has already rendered R16's note about
-// the superseded Attempt, which is non-blocking by design: it states the cost, it does not
-// gate on it.
+// the superseded Attempt (R14b), which is non-blocking by design: it states the cost, it does
+// not gate on it.
 //
 // It fails closed on an unknown repository, the same way every other lifecycle key does: a
 // capability discovery has not recorded keeps the destructive action disabled

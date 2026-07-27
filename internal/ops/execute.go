@@ -670,7 +670,7 @@ func workflowPath(item Item) string {
 }
 
 // jobPath is the Job's Actions endpoint, addressed by id, that the per-Job re-run POST
-// extends with its verb (run-lifecycle R16). The id is the Job's, carried on the Item the
+// extends with its verb (run-lifecycle R14a). The id is the Job's, carried on the Item the
 // JobItem constructor froze, and the repository is the one stamped onto the Job at fetch.
 func jobPath(item Item) string {
 	return fmt.Sprintf("repos/%s/%s/actions/jobs/%d", item.Repo.Owner, item.Repo.Name, item.ID)

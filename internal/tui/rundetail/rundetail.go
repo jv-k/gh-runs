@@ -113,11 +113,7 @@ type Model struct {
 	jobCursor int
 }
 
-// settleMsg fires when the debounce elapses for the Run it names (R10). It is tagged with
-// the Run ID so a settle for a row the cursor has since left issues nothing (AC1). It is
-// unexported: only this package can name it, so the root's broadcast reaches every tab and
-// only this pane can act on it (ADR-0015's type-visibility targeting).
-// RerunJobMsg asks for a per-Job re-run of the Job under the cursor (run-lifecycle R16). It
+// RerunJobMsg asks for a per-Job re-run of the Job under the cursor (run-lifecycle R14a). It
 // is exported and carries the whole Job, because the pane does not own a planner or a write
 // path: the Feed does, and it is the surface that already turns a lifecycle key into a Plan,
 // a confirmation and a launch. Emitting rather than executing keeps ops's one write entry
@@ -127,6 +123,10 @@ type Model struct {
 // which repository it came from.
 type RerunJobMsg struct{ Job domain.Job }
 
+// settleMsg fires when the debounce elapses for the Run it names (R10). It is tagged with
+// the Run ID so a settle for a row the cursor has since left issues nothing (AC1). It is
+// unexported: only this package can name it, so the root's broadcast reaches every tab and
+// only this pane can act on it (ADR-0015's type-visibility targeting).
 type settleMsg struct{ runID int64 }
 
 // refreshMsg fires on the fast tier's tick for the Run it names (R13). Tagged with the Run
@@ -244,7 +244,7 @@ func (m Model) HandleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.active = false
 	case key.Matches(k, m.profile.OpenDetail): // enter opens the selected Job's log (log-viewer R1)
 		return m.openLog()
-	case key.Matches(k, m.profile.Rerun): // R re-runs the Job under the cursor (run-lifecycle R16)
+	case key.Matches(k, m.profile.Rerun): // R re-runs the Job under the cursor (R14a, run-detail R18a)
 		return m.rerunJob()
 	case key.Matches(k, m.profile.RowUp):
 		m.moveJobCursor(-1)
@@ -263,13 +263,31 @@ func (m Model) HandleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// rerunJob asks the Feed to re-run the Job under the cursor (run-lifecycle R16). It is
+// offersJobRerun reports whether the pane offers the per-Job re-run at all, which is
+// run-detail R18's gate: the owning repository must be writable and not archived, its
+// capability must be known (an unknown one fails closed, repo-discovery R8), and the Run's
+// Workflow must not be deleted, because an Orphaned Run can produce no further Run.
+//
+// It gates the key and the note together, which is R18b's "whenever R18a's operation is
+// offered" read literally: a frame where the gate withholds the operation holds no note, and
+// AC16 asserts exactly that.
+func (m Model) offersJobRerun() bool {
+	if !m.repoKnown || !m.repo.Permissions.Push || m.repo.Archived {
+		return false
+	}
+	return m.wfState != domain.StateDeleted
+}
+
+// rerunJob asks the Feed to re-run the Job under the cursor (run-lifecycle R14a). It is
 // reachable only from job-focus, because the whole switch above is gated on m.active, which
 // is the same rule R6a applies to the force-cancel escalation key: outside the sub-mode the
 // key means what it means everywhere else, a whole-Run re-run on the Feed's selection.
 //
 // With no Job under the cursor it is a no-op, as opening a log is.
 func (m Model) rerunJob() (Model, tea.Cmd) {
+	if !m.offersJobRerun() {
+		return m, nil
+	}
 	if m.jobCursor < 0 || m.jobCursor >= len(m.jobs) {
 		return m, nil
 	}

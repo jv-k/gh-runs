@@ -175,9 +175,10 @@ func skipFor(op Operation, it Item, repo domain.Repo) SkipReason {
 	return SkipNone
 }
 
-// checkOneJobPerRun refuses a per-Job re-run set holding two Jobs of the same Run. R12
-// makes the second id's fate unverifiable, and R28 bars the write that would verify it, so
-// the set is refused rather than half-attempted.
+// checkOneJobPerRun refuses a per-Job re-run set holding two Jobs of the same Run. R14a
+// bounds the operation at one Job per Run, R12 makes the second id's fate unverifiable, and
+// R28 bars the write that would settle it, so the set is refused rather than half-attempted
+// (AC14b).
 //
 // It is an error rather than a skip because the operator's set came from a name that
 // matched twice, and no member of the pair is the one they meant. The message names the
@@ -188,13 +189,19 @@ func checkOneJobPerRun(op Operation, sel []Item) error {
 	}
 	seen := make(map[int64]bool, len(sel))
 	for _, it := range sel {
+		// A non-Job Item is refused rather than skipped past. lifecycleRequest builds the Job
+		// endpoint from item.ID unconditionally, so a RunItem planned under this operation
+		// would POST /actions/jobs/{runID}/rerun: a write against whatever Job happens to
+		// carry that id. R14a forbids this operation being silently widened, and an Item of
+		// the wrong Kind is the widest way to widen it.
 		if it.Kind != KindJob || it.Job == nil {
-			continue
+			return fmt.Errorf("ops: a per-Job re-run set holds a %q Item; this operation "+
+				"addresses the Job endpoint and can act on nothing else (run-lifecycle R14a)", it.Kind)
 		}
 		if seen[it.Job.RunID] {
 			return fmt.Errorf("ops: the selection holds more than one Job of Run %d; a per-Job "+
 				"re-run supersedes the whole Attempt, so re-running two of its Jobs is not a thing "+
-				"the API can be asked for (run-lifecycle R12)", it.Job.RunID)
+				"the API can be asked for (run-lifecycle R14a, AC14b)", it.Job.RunID)
 		}
 		seen[it.Job.RunID] = true
 	}

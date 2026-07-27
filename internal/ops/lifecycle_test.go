@@ -337,7 +337,7 @@ func TestLifecycleConfirmedIsSingleUse(t *testing.T) {
 }
 
 // jobItems freezes one Job per id, all in one repository and each in its own Run, which is
-// the only shape a per-Job re-run set may take (run-lifecycle R12).
+// the only shape a per-Job re-run set may take (run-lifecycle R14a, AC14b).
 func jobItems(owner, name string, ids ...int64) []ops.Item {
 	out := make([]ops.Item, len(ids))
 	for i, id := range ids {
@@ -351,7 +351,7 @@ func jobItems(owner, name string, ids ...int64) []ops.Item {
 	return out
 }
 
-// TestRerunJobActsOnTheJobEndpointAndTakesDebug pins the fifth lifecycle operation (R16). The
+// TestRerunJobActsOnTheJobEndpointAndTakesDebug pins the fifth lifecycle operation (R14a). The
 // path addresses a Job id and never a Run id, which is why it cannot ride the shared Run
 // endpoint the other four build, and R14's enable_debug_logging extends to it unchanged.
 //
@@ -362,7 +362,7 @@ func TestRerunJobActsOnTheJobEndpointAndTakesDebug(t *testing.T) {
 
 	def := h.confirmed(t, ops.OpRerunJob, jobItems("o", "r", 101), snapshot(writableRepo("o", "r")))
 	if sum := runPurge(t, h, def); sum.Acted != 1 || sum.FailedCount() != 0 {
-		t.Errorf("default per-Job re-run = acted %d, failed %d; want 1/0 (R16)", sum.Acted, sum.FailedCount())
+		t.Errorf("default per-Job re-run = acted %d, failed %d; want 1/0 (R14a)", sum.Acted, sum.FailedCount())
 	}
 	if body, ok := h.counting.postBody("/actions/jobs/101/rerun"); !ok || strings.Contains(body, "enable_debug_logging") {
 		t.Errorf("default per-Job re-run body = %q, want no enable_debug_logging (AC14)", body)

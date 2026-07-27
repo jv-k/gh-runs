@@ -128,7 +128,7 @@ func WorkflowItem(w domain.Workflow) Item {
 }
 
 // JobItem freezes a Job into an Item: Kind "job", carrying the Job's own id, which the
-// per-Job re-run endpoint addresses (run-lifecycle R16). The Job rides along as the
+// per-Job re-run endpoint addresses (run-lifecycle R14a). The Job rides along as the
 // display row and carries its RunID, which Plan reads to refuse two Jobs of one Run.
 // Its Repo is stamped at fetch, so the tuple is derived from the object here as it is
 // in every other constructor and the pair cannot disagree (ADR-0019).
