@@ -438,20 +438,20 @@ func (m Model) commitFilter() Model {
 func (m Model) applyCycle() Model {
 	switch m.cursor {
 	case rowBudget:
-		m.cfg.Budget = nextTier(m.cfg.Budget)
+		m.cfg.Budget = next(m.cfg.Budget, config.Tiers())
 	case rowProfile:
-		m.cfg.KeybindingProfile = nextProfile(m.cfg.KeybindingProfile)
+		m.cfg.KeybindingProfile = next(m.cfg.KeybindingProfile, config.KeybindingProfiles())
 		if p, ok := keys.ForName(string(m.cfg.KeybindingProfile)); ok {
 			m.profile = p
 		}
 	case rowTheme:
-		m.cfg.Theme = nextTheme(m.cfg.Theme)
+		m.cfg.Theme = next(m.cfg.Theme, config.Themes())
 	case rowTimestamp:
-		m.cfg.Timestamp = nextTimestampFormat(m.cfg.Timestamp)
+		m.cfg.Timestamp = next(m.cfg.Timestamp, config.TimestampFormats())
 	case rowWorkflowsScope:
-		m.cfg.WorkflowsScope = nextScope(m.cfg.WorkflowsScope)
+		m.cfg.WorkflowsScope = next(m.cfg.WorkflowsScope, config.Scopes())
 	case rowStorageScope:
-		m.cfg.StorageScope = nextScope(m.cfg.StorageScope)
+		m.cfg.StorageScope = next(m.cfg.StorageScope, config.Scopes())
 	}
 	return m
 }
@@ -506,53 +506,18 @@ func clampRow(r row) row {
 	return r
 }
 
-// nextTier, nextProfile, nextTheme, nextTimestampFormat and nextScope advance a value to
-// the next in its valid set, wrapping, over the exported set config validates against so the
-// view offers exactly what the loader accepts (R5, R6, R8, R10, R19).
-func nextTier(t config.Tier) config.Tier {
-	set := config.Tiers()
-	for i, v := range set {
-		if v == t {
-			return set[(i+1)%len(set)]
-		}
-	}
-	return set[0]
-}
-
-func nextProfile(p config.KeybindingProfile) config.KeybindingProfile {
-	set := config.KeybindingProfiles()
-	for i, v := range set {
-		if v == p {
-			return set[(i+1)%len(set)]
-		}
-	}
-	return set[0]
-}
-
-func nextTheme(t config.Theme) config.Theme {
-	set := config.Themes()
-	for i, v := range set {
-		if v == t {
-			return set[(i+1)%len(set)]
-		}
-	}
-	return set[0]
-}
-
-func nextTimestampFormat(f config.TimestampFormat) config.TimestampFormat {
-	set := config.TimestampFormats()
-	for i, v := range set {
-		if v == f {
-			return set[(i+1)%len(set)]
-		}
-	}
-	return set[0]
-}
-
-func nextScope(s config.Scope) config.Scope {
-	set := config.Scopes()
-	for i, v := range set {
-		if v == s {
+// next advances v to the next member of set, wrapping, and returns the first member when v
+// is not in it. A value the loader did not recognise cannot be cycled from where it is not,
+// so the first member is where a cycle starts, which is also what the five per-type copies
+// of this body did.
+//
+// The set is the caller's rather than derived from the type, so every call site passes the
+// exported accessor config validates against, and the view therefore offers exactly what the
+// loader accepts (R5, R6, R8, R10, R19). Deriving it here would need a registry keyed by
+// type, which is a second place for the two to disagree.
+func next[T comparable](v T, set []T) T {
+	for i, m := range set {
+		if v == m {
 			return set[(i+1)%len(set)]
 		}
 	}
