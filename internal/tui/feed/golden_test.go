@@ -46,10 +46,16 @@ func TestGoldenRowRendering(t *testing.T) {
 	goldie.New(t).Assert(t, "row_rendering", []byte(m.View()))
 }
 
-// TestGoldenRelativeTimestamps fixes [settings] R10's opt-in rendering: the same two rows
+// TestGoldenRelativeTimestamps fixes [settings] R10's opt-in rendering: the two rows
 // TestGoldenRowRendering paints, with the STARTED column carrying each Run's age instead of
 // its instant. It is the golden that proves R4a's "narrower, never wider", because the
 // column keeps its measured 20 and the ages sit inside it.
+//
+// The second Run starts three days before t0 rather than the hour before it that
+// TestGoldenRowRendering uses, and that difference is the point of the case. The clock reads
+// three hours after t0, so an hour before t0 renders "4h" and lands in the same bucket as the
+// first row. Three days lands in the next one up, so the golden fixes two units rather than
+// one, and a bucket boundary that moved would show here.
 func TestGoldenRelativeTimestamps(t *testing.T) {
 	m := relativeFeed(100, 4)
 	id := repoID("home-assistant", "core")
