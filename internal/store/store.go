@@ -43,10 +43,15 @@ const schemaVersion = 1
 // maxStoreBytes is the store's total on-disk bound (local-store R15, ADR-0017).
 // It is a compiled constant and not a user knob, by R9's argument transferred:
 // no value a user could pick improves on LRU eviction. It is a backstop, not a
-// target, and the reference workload sits an order of magnitude below it. It is a
-// var rather than a const only so the eviction test can lower it; nothing in the
-// product writes to it. The per-repository bound is R16's and applies upstream,
-// before eviction is ever involved.
+// target, but it is not out of reach: a Runs listing at per_page=100 is ~2.2 MiB
+// against cli/cli and ~1.33x that once stored base64-in-JSON, so a poll set of
+// repositories that busy passes the bound on Run listings alone, and a quieter one
+// never approaches it. Eviction is on the ordinary path rather than in a corner of
+// it, which is the point of LRU by last-revalidated: it is what makes both
+// workloads correct (ADR-0017, amended 2026-07-27). It is a var rather than a const
+// only so the eviction test can lower it; nothing in the product writes to it. The
+// per-repository bound is R16's and applies upstream, before eviction is ever
+// involved.
 var maxStoreBytes int64 = 50 << 20
 
 // maxEntryBytes is the largest response body the store will hold (local-store R25,

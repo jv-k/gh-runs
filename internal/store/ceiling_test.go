@@ -92,6 +92,20 @@ func getUndrained(t *testing.T, tr *Transport, url string) *http.Response {
 	return resp
 }
 
+// getAndDrain issues one GET through the transport and reads and closes the
+// response, the caller's half of the contract. It exists for the tests that care
+// only about what the store kept, where the response itself is not the instrument.
+func getAndDrain(t *testing.T, tr *Transport, url string) {
+	t.Helper()
+	resp := getUndrained(t, tr, url)
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close body: %v", err)
+	}
+}
+
 // withCeiling lowers maxEntryBytes for one test and restores it, exactly as the
 // eviction tests do with maxStoreBytes. Neither is a knob in the product.
 func withCeiling(t *testing.T, n int64) {
@@ -154,8 +168,7 @@ func TestTheCeilingBoundary(t *testing.T) {
 	t.Run("exactly at the ceiling is saved", func(t *testing.T) {
 		withCeiling(t, 4<<10)
 		tr, body, dir := ceilingTransport(t, int(maxEntryBytes))
-		resp := getUndrained(t, tr, "https://api.github.com/repos/cli/cli/actions/runs")
-		drain(t, resp)
+		getAndDrain(t, tr, "https://api.github.com/repos/cli/cli/actions/runs")
 		if n := len(entryFiles(t, dir)); n != 1 {
 			t.Errorf("a response exactly at the ceiling left %d entries, want 1", n)
 		}
@@ -167,8 +180,7 @@ func TestTheCeilingBoundary(t *testing.T) {
 	t.Run("one byte past the ceiling is declined", func(t *testing.T) {
 		withCeiling(t, 4<<10)
 		tr, _, dir := ceilingTransport(t, int(maxEntryBytes)+1)
-		resp := getUndrained(t, tr, "https://api.github.com/repos/cli/cli/actions/runs")
-		drain(t, resp)
+		getAndDrain(t, tr, "https://api.github.com/repos/cli/cli/actions/runs")
 		if n := len(entryFiles(t, dir)); n != 0 {
 			t.Errorf("a response one byte past the ceiling left %d entries, want none", n)
 		}
@@ -255,7 +267,7 @@ func TestDecliningLeavesAPriorEntryAlone(t *testing.T) {
 	tr := NewTransport(base, dir, clk)
 	const url = "https://api.github.com/repos/cli/cli/actions/runs"
 
-	drain(t, getUndrained(t, tr, url))
+	getAndDrain(t, tr, url)
 	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
 	if len(files) != 1 {
 		t.Fatalf("the first response left %d entries, want 1", len(files))
@@ -267,7 +279,7 @@ func TestDecliningLeavesAPriorEntryAlone(t *testing.T) {
 
 	// The resource has now grown past the ceiling. The store must decline it and
 	// leave what it already holds alone.
-	drain(t, getUndrained(t, tr, url))
+	getAndDrain(t, tr, url)
 
 	after, err := os.ReadFile(files[0])
 	if err != nil {
@@ -278,16 +290,5 @@ func TestDecliningLeavesAPriorEntryAlone(t *testing.T) {
 	}
 	if got := len(entryFiles(t, dir)); got != 1 {
 		t.Errorf("store holds %d entries, want the 1 it already held", got)
-	}
-}
-
-// drain reads and closes a response body, the caller's half of the contract.
-func drain(t *testing.T, resp *http.Response) {
-	t.Helper()
-	if _, err := io.ReadAll(resp.Body); err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	if err := resp.Body.Close(); err != nil {
-		t.Fatalf("close body: %v", err)
 	}
 }
