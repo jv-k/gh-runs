@@ -34,6 +34,18 @@ A Purge matching everything must be asked for by name. `gh runs delete --all --y
 
 The widest expressible command is `gh runs delete --all-repos --all --yes`. Every word of it is an explicit opt-in, and no default or working directory reaches it by accident.
 
+## Amendment: `-j/--job` carries gh's meaning, and `--job-name` is where parity is silent
+
+[run-lifecycle](../features/run-lifecycle/requirements.md) R1 admitted per-Job re-run (issue #106), and with it the one gh flag [cli-surface](../features/cli-surface/requirements.md) did not carry. Two flags land rather than one, and the split is this ADR's own rule about where parity ends.
+
+**`-j/--job <id>` is parity, and it closes the last gap.** It re-runs the Job that id names, which is exactly what `gh run rerun -j` does with exactly the argument gh takes. gh's own help words the rest of it, "including dependencies", and GitHub's endpoint doc says the same ([run-lifecycle](../features/run-lifecycle/requirements.md) R14a). Parity means carrying that behaviour rather than narrowing it in the description. [ADR-0008](./0008-full-cli-surface-despite-gh-overlap.md) committed the CLI to being a drop-in superset of `gh run`, and this was the only flag standing between it and that claim. Nothing about it needs this ADR: it is R2's parity working.
+
+**`--job-name <name>` is the extension, and gh has no precedent to mirror.** It re-runs the Job of that name in each Run of the resolved set, at most one per Run, which is what ADR-0019's amended `Plan` will accept. gh addresses one Run at a time and therefore never had a reason to select a Job by anything but its id, so parity is silent here in the same way it is silent outside a repository and on cross-repository delete. Re-running `test` across the twelve Runs a shared workflow just failed is the cross-repository-first motion this whole ADR exists to serve, expressed one level down.
+
+A name matching no Job in a given Run is a skip with a stated reason, not a failure, and the command still exits 0. That is R19's shape for an ineligible member of a frozen set, and it is why the two arguments cannot share one flag.
+
+**One flag resolving both grammars by context was rejected, and the reason is R16's honesty rule.** `--job` accepting an id or a name depending on how many Runs are addressed reads as economy and behaves as a trap: an operator pasting a working `gh run rerun -j 4521 ...` into a fan-out invocation gets `4521` read as a Job name, which matches nothing, which is a skip, which exits 0. The command would report success having issued no write. R16 forbids exactly that dishonesty about counts, and a write is where it costs most. Two flags have no context to resolve and so cannot mis-resolve it. A Job legitimately named `4521` also stays addressable, which the merged grammar could not promise.
+
 ## Considered Options
 
 **Fail outside a repository, with a diagnostic naming the flag.** The drafted recommendation: gh's failure, plus discoverability. Rejected by the product owner because it hides the product's identity. A cross-repository dashboard whose CLI errors outside a repository answers its defining question with a dead end, and the TUI's own scope rule (settings R19) already falls back to `all-repos` rather than failing.
