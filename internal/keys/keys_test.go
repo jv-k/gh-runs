@@ -175,7 +175,8 @@ func TestNoDuplicateListKey(t *testing.T) {
 			// bindings: a Purge is not modal, so they are live at the same moment every other
 			// key here is, and a collision would make one keystroke do two things (R14, AC10).
 			{"CancelRunning", p.CancelRunning}, {"RetryFailures", p.RetryFailures},
-			{"Refresh", p.Refresh}, {"OpenDetail", p.OpenDetail}, {"Filter", p.Filter}, {"Help", p.Help}, {"Quit", p.Quit},
+			{"Refresh", p.Refresh}, {"FullRefresh", p.FullRefresh},
+			{"OpenDetail", p.OpenDetail}, {"Filter", p.Filter}, {"Help", p.Help}, {"Quit", p.Quit},
 		}
 		seen := map[string]string{}
 		for _, e := range list {
@@ -481,5 +482,32 @@ func TestAccessorsReturnCallerOwnedCopies(t *testing.T) {
 	}
 	if containsKey(keys.Vim.Bindings()[0], sentinel) {
 		t.Error("mutating a Bindings slice reached the registry")
+	}
+}
+
+// TestFullRefreshBinding pins repo-discovery R11's on-demand full refresh. It is a
+// separate binding from Refresh because the two differ by three orders of magnitude in
+// cost: Refresh applies rows the Feed already holds and issues no request, and this one
+// spends two enumeration requests plus one probe per repository.
+//
+// R7a requires every binding to live in the registry, so AC18's assertions reach it. The
+// duplicate-key check above is what proves u collides with nothing.
+func TestFullRefreshBinding(t *testing.T) {
+	for _, p := range keys.Profiles() {
+		if got := p.FullRefresh.Keys(); len(got) != 1 || got[0] != "u" {
+			t.Errorf("%s: FullRefresh is %v, want [u]", p.Name, got)
+		}
+		if p.FullRefresh.Help().Desc == "" {
+			t.Errorf("%s: FullRefresh carries no help text, so the help view cannot name it", p.Name)
+		}
+		var found bool
+		for _, b := range p.Bindings() {
+			if len(b.Keys()) == 1 && b.Keys()[0] == "u" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: FullRefresh is absent from Bindings(), so AC18 does not reach it", p.Name)
+		}
 	}
 }

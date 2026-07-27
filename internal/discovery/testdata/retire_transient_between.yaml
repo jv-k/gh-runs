@@ -1,0 +1,110 @@
+---
+version: 2
+interactions:
+    # See PROVENANCE.md: composed in whole, nothing here was recorded. The probes carry
+    # no ETag so every re-probe is unconditional and these interactions play in taped
+    # order, each consumed once. The two 403 bodies differ only in documentation_url,
+    # which is what the governor's classifier reads. Measure before editing a request line.
+    # AC16, third sequence: 404, then a 5xx, then 404 retires. The transient answer
+    # neither retired it nor postponed it.
+    # Interaction 0: enumeration, one page, no rel="next", so the walk stops here.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"alpha","full_name":"jv-k/alpha","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false,"default_branch":"main"}]'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"
+    # Interaction 1: alpha's first probe. 200 and NO ETag, so every later probe of it
+    # is unconditional and the sequence below is matched in request order.
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":1,"workflow_runs":[{"id":1,"status":"completed","conclusion":"success"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"
+    # Interaction 2: a definitive failure. The count goes to one.
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 404 Not Found
+        code: 404
+        body: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"
+    # Interaction 3: a transient failure. It must neither retire nor reset: the count stays at one.
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 502 Bad Gateway
+        code: 502
+        body: '{"message":"Server Error"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"
+    # Interaction 4: the second definitive failure. The 5xx did not postpone it, so R23 retires here.
+    - id: 4
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 404 Not Found
+        code: 404
+        body: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"

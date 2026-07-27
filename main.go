@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -325,15 +326,16 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 	go discoverBehind(ctx, sched, disc, first, seeded)
 
 	root := tui.New(cl.tuiOptions(tuiDeps{
-		Config:    cfg,
-		Profile:   profile,
-		Clock:     clk,
-		Scheduler: sched,
-		Governor:  gov,
-		Store:     transport,
-		Discovery: disc,
-		Ops:       purge,
-		Downloads: downloadDir(),
+		Config:      cfg,
+		Profile:     profile,
+		Clock:       clk,
+		Scheduler:   sched,
+		Governor:    gov,
+		Store:       transport,
+		Discovery:   disc,
+		Ops:         purge,
+		Downloads:   downloadDir(),
+		FullRefresh: fullRefresh(ctx, sched, disc, first),
 	}))
 
 	// tea.WithContext ties the program to the same context the engine runs under, so a
@@ -457,6 +459,71 @@ func classifiedBy(disc *discovery.Discovery) func(domain.RepoID) bool {
 			}
 		}
 		return false
+	}
+}
+
+// fullRefresh is repo-discovery R11's on-demand full refresh, behind the root's u key. A
+// pass re-enumerates the account and re-probes every repository, which rewrites the
+// classification, the capability and the DefaultBranch of every record, and re-admits a
+// repository R23 retired. It is the only door back for a retired repository, because a warm
+// start skips its pass and nothing else re-admits one (ADR-0020), which is why retirement
+// could not ship before this was wired.
+//
+// One pass at a time. The guard is not politeness: fanOut spawns a goroutine per repository
+// and relies on the transport limiter for its wire bound, so two concurrent passes double
+// the requests in flight against a limiter sized for one, and both then write the same
+// document. A key held down would otherwise start a pass per repeat. A press while a pass
+// is running is dropped rather than queued, because the pass already in flight is about to
+// produce exactly the state the second press was asking for.
+//
+// It passes the program's context, so quitting mid-pass unwinds it with everything else,
+// and tells the engine per repository as each is classified, exactly as the launch pass
+// does.
+//
+// A failed pass is silent to the operator, and this comment used to imply otherwise. The
+// stderr line below paints into the alt screen the program holds and is erased by the next
+// frame, so it reaches a redirected stderr and nobody watching the terminal. That matches
+// what discoverBehind already does at launch, and it is a real gap rather than a decision:
+// surfacing it wants a message class and a chrome line the Feed does not have. The Feed
+// keeps showing what it had, which is correct but unexplained.
+func fullRefresh(ctx context.Context, sched *scheduler.Scheduler, disc *discovery.Discovery, launch domain.RepoID) func() {
+	return guardOnePass(func() {
+		tellEngine := func(discovery.Record) { sched.PollSetChanged() }
+		if err := disc.Pass(ctx, tellEngine); err != nil {
+			fmt.Fprintln(os.Stderr, "gh-runs: full refresh failed:", err)
+			// R22 adopts "when enumeration completes", and a failed pass has not completed.
+			// Adopting on a partial set would mark an ordinary member Adopted, a
+			// session-scoped membership the next launch would not re-admit. Same rule
+			// discoverBehind applies at launch, and the same reason.
+			return
+		}
+		// Re-adopt the launch repository, exactly as the launch path does. Without this the
+		// full refresh is the door back for an enumerated repository and not for an adopted
+		// one (R22): a repository outside the account enumeration is not re-admitted by a
+		// pass, so R23 could retire the very repository the operator is standing in and
+		// nothing inside the tool would bring it back. AdoptLaunchRepo returns immediately
+		// for a zero identity, an excluded repository and one enumeration already made
+		// Known, so the ordinary case costs no request.
+		_ = disc.AdoptLaunchRepo(ctx, launch, tellEngine)
+	})
+}
+
+// guardOnePass wraps f so at most one call runs at a time, dropping any that arrive while
+// one is in flight rather than queueing them. It is separate from fullRefresh so the rule
+// can be tested without a discovery, a scheduler or a transport.
+//
+// Dropping rather than queueing is the right shape for a refresh: the pass already running
+// is about to produce exactly the state a second press was asking for, so queueing would
+// spend a second account enumeration to reach a set the first is already fetching. It is a
+// mutual exclusion and not a sync.Once, so a later press still refreshes.
+func guardOnePass(f func()) func() {
+	var running atomic.Bool
+	return func() {
+		if !running.CompareAndSwap(false, true) {
+			return
+		}
+		defer running.Store(false)
+		f()
 	}
 }
 
@@ -636,6 +703,10 @@ type tuiDeps struct {
 	Discovery *discovery.Discovery
 	Ops       *ops.Ops
 	Downloads string
+	// FullRefresh runs repo-discovery R11's on-demand full refresh behind the root's key.
+	// It is built in runTUI rather than derived from Discovery here, because it needs the
+	// program's context and the engine, and tuiDeps carries neither.
+	FullRefresh func()
 }
 
 // tuiOptions assembles the root's dependency set. It is extracted from runTUI so a test can
@@ -650,9 +721,14 @@ type tuiDeps struct {
 func (c clients) tuiOptions(d tuiDeps) tui.Options {
 	client := c.shared
 	return tui.Options{
-		Updates:     d.Scheduler.Updates(),
-		Readout:     d.Governor.Readout,
-		Repos:       func() []domain.Repo { return knownRepos(d.Discovery) },
+		Updates: d.Scheduler.Updates(),
+		Readout: d.Governor.Readout,
+		Repos:   func() []domain.Repo { return knownRepos(d.Discovery) },
+		// The membership set, beside the capability snapshot above and pulled on the same
+		// tick (live-run-feed R37). Discovery already projects it, so this is the seam and
+		// not the policy: knownRepos filters to Known and this one deliberately does not,
+		// which is the whole distinction the Feed's prunes rest on.
+		Membership:  d.Discovery.Membership,
 		Revalidated: func() time.Time { return newestRevalidated(d.Store, d.Discovery.PollSet()) },
 		SetViewport: d.Scheduler.SetViewport,
 		SetFilter:   d.Scheduler.SetFilter,

@@ -73,6 +73,24 @@ type Planner interface {
 // on it (ADR-0014).
 type ReposDiscovered []domain.Repo
 
+// RepoMembership carries every repository discovery still holds, whether or not its
+// capability is known (R37). It is the set the Feed learns a departure from, and the
+// only one: both prunes read it and neither reads ReposDiscovered.
+//
+// The two are different questions and R37 exists because conflating them is a bug in
+// both directions. ReposDiscovered answers "may I act destructively here", so a
+// repository awaiting enumeration is rightly absent from it, and pruning against it
+// would clear a live failure for a repository that had not gone anywhere. Membership
+// answers "is this still discovery's", and absence in it is a departure.
+//
+// It carries identities rather than domain.Repo because a member awaiting its
+// capability has no meaningful permissions to carry, and offering a zero-valued
+// domain.Repo here would put a second, weaker capability source beside the gate's.
+//
+// Absence only became meaningful when discovery learned to retire (repo-discovery
+// R23). Before that nothing ever left the set, so neither prune could fire.
+type RepoMembership []domain.RepoID
+
 // RevalidatedAt carries the most recent revalidation instant the local store recorded
 // across the poll set (local-store R7). A paused Feed reads it to state what it is
 // showing and as of when, rather than presenting cached rows as live (R30). It is a
@@ -458,14 +476,21 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, tea.Batch(m.publishViewport(), dcmd)
 
 	case ReposDiscovered:
+		// The capability snapshot, and nothing else. It fills the gate R18 reads and
+		// prunes nothing: a repository is absent here whenever enumeration has not yet
+		// returned its permissions, which is a fast-path repository's ordinary state and
+		// not a departure. R37 moved both prunes onto RepoMembership for exactly that.
 		for _, r := range msg {
 			m.repos[r.ID.String()] = r
 		}
-		// Drop what a repository leaving the poll set has stranded. This is a full set,
-		// pulled by the root rather than an incremental batch, so absence is meaningful
-		// as soon as discovery can retire a repository at all, which is issue #115. The
-		// empty case is never meaningful: at cold start nothing is discovered yet, and
-		// pruning against it would clear a failure the poll set still holds.
+		return m, nil
+
+	case RepoMembership:
+		// Drop what a departed repository has stranded. This is a full set, pulled by the
+		// root rather than an incremental batch, so absence is meaningful now that
+		// discovery retires (repo-discovery R23). The empty case is never meaningful: at
+		// cold start discovery holds nothing, and pruning against it would clear a failure
+		// its repository is still a member behind.
 		if len(msg) > 0 {
 			m.pruneFailed(msg)
 			// A cancellation-requested mark waits on a poll of its repository, so it has the
@@ -1182,26 +1207,26 @@ func (m *Model) markCancelRequested(p ops.Progress) {
 	}
 }
 
-// pruneFailed drops a recorded poll failure whose repository is absent from the discovered
+// pruneFailed drops a recorded poll failure whose repository is absent from the membership
 // set, so ADR-0015's RepoPollFailed indicator cannot outlive the poll set that was going to
 // clear it. A repository deleted or made private upstream fails its next poll once and then
 // leaves the poll set, so no Update can ever arrive to clear it.
 //
 // It reads the arriving set and not m.repos, for the reason pruneCancelRequested below
-// gives. Keyed by the host-qualified identity, matching where m.failed is written
-// (ADR-0009).
+// gives, and it reads membership rather than the capability snapshot, which is R37. Keyed by
+// the host-qualified identity, matching where m.failed is written (ADR-0009).
 //
-// This closes the Feed's half of the leak and not the whole of it. Discovery never forgets a
-// repository: internal/discovery holds records that nothing deletes from, and Known only
-// moves false to true, so the arriving set does not yet shrink when a repository is deleted
-// or made private. Absence here is meaningful the moment it does. See issue #115.
-func (m *Model) pruneFailed(discovered ReposDiscovered) {
+// Both halves of the leak are closed now. This is the Feed's, and repo-discovery R23 is the
+// layer under it: discovery retires a repository after two consecutive definitive probe
+// failures and deletes the record, so the arriving set finally shrinks and absence here
+// means something. Before that nothing ever left, and this prune could not fire (#115).
+func (m *Model) pruneFailed(members RepoMembership) {
 	if len(m.failed) == 0 {
 		return
 	}
-	live := make(map[string]bool, len(discovered))
-	for _, r := range discovered {
-		live[r.ID.String()] = true
+	live := make(map[string]bool, len(members))
+	for _, id := range members {
+		live[id.String()] = true
 	}
 	for key := range m.failed {
 		if !live[key] {
@@ -1210,19 +1235,19 @@ func (m *Model) pruneFailed(discovered ReposDiscovered) {
 	}
 }
 
-// pruneCancelRequested drops a mark whose repository is absent from the discovered set, so
+// pruneCancelRequested drops a mark whose repository is absent from the membership set, so
 // a mark cannot outlive the poll set that was going to clear it (R4a). The caller has
 // already established that the set is non-empty, because an empty one is a cold start
 // rather than an account with no repositories.
 //
 // It reads the arriving set and not m.repos. m.repos is the accumulated union of every
-// discovery this session, kept that way because the capability gate must still answer for a
+// capability snapshot this session, kept that way because the gate must still answer for a
 // repository whose Runs are held from an earlier poll, so a repository that has left the
 // poll set is still "known" there. Pruning against it would therefore never drop anything.
-func (m *Model) pruneCancelRequested(discovered ReposDiscovered) {
-	live := make(map[domain.RepoID]bool, len(discovered))
-	for _, r := range discovered {
-		live[r.ID] = true
+func (m *Model) pruneCancelRequested(members RepoMembership) {
+	live := make(map[domain.RepoID]bool, len(members))
+	for _, id := range members {
+		live[id] = true
 	}
 	for id, repo := range m.cancelRequested {
 		if !live[repo] {

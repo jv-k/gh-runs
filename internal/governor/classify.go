@@ -46,6 +46,25 @@ func RateLimitedHeaders(h http.Header) bool {
 	return h.Get(rateLimitedHeader) == "true"
 }
 
+// ClassifiedHeaders reports whether the governor stamped a verdict on these headers at
+// all, which is a different question from what the verdict was.
+//
+// RateLimitedHeaders collapses the two: an unclassified response and one classified
+// as authorization both read false. That is the safe direction for a consumer asking
+// "should I surface this failure", because it surfaces either way. It is the unsafe
+// direction for repo-discovery R23, which counts a 403 as definitive evidence a
+// repository is gone precisely when the verdict is a positive not-rate-limited. There
+// an unstamped response read as authorization would retire a repository on a 403
+// nobody classified, and ADR-0020 fixes that outcome the other way: unclassified is
+// not definitive, so it retires nothing.
+//
+// A response that travelled the transport chain is always stamped, so this separates
+// a real verdict from one that never reached the governor rather than from one it
+// declined to give.
+func ClassifiedHeaders(h http.Header) bool {
+	return h.Get(rateLimitedHeader) != ""
+}
+
 // stampRateLimited records the classification on the response the consumer will
 // see. Go canonicalises the key, so RateLimited reads back what stamp wrote.
 func stampRateLimited(resp *http.Response, limited bool) {

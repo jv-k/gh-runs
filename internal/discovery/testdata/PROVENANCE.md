@@ -23,6 +23,18 @@ $ gh api "user/repos?per_page=100&affiliation=owner,collaborator,organization_me
 
 **The `Link` header's shape, in `pass_basic.yaml`.** The live header percent-encodes the commas the request sent, so `rel="next"` reads `affiliation=owner%2Ccollaborator%2Corganization_member&page=2`. `enumerate` re-requests that URL verbatim, so page 2's taped request carries the encoded form and not the raw one. `rel="last"` is present alongside `rel="next"`, which the fixture also reflects. The code reads neither `rel="last"` nor `total_count` ([ADR-0005](../../../docs/adr/0005-pagination-and-total-count.md)), so its presence is recorded rather than relied on.
 
+## The retirement fixtures, and the one thing measured about them
+
+`retire_two_definitive.yaml`, `retire_reset_on_success.yaml`, `retire_transient_between.yaml`, `retire_ratelimited_403.yaml` and `retire_authorization_403.yaml` are **composed in whole**. Nothing in them was recorded. They tape R23's four acceptance sequences plus the authorization case, and a live account has no repository that answers 404 twice on request.
+
+Two properties are deliberate rather than incidental.
+
+**The probes carry no `ETag`.** A re-probe is then unconditional, so every request for one repository matches on method and URL alone and the interactions play in the order they are taped. R23 is defined over consecutive answers, and a sequence is not expressible under replayable interactions, so these five are the only fixtures here played with each interaction consumed once (`withSequentialReplay`).
+
+**The two 403 bodies are the whole point of those two files.** They differ only in `documentation_url`, and that field is what the governor's classifier reads. `retire_authorization_403.yaml` names the reference page for the endpoint the probe requested, so the verdict is authorization and the failure counts. `retire_ratelimited_403.yaml` names a rate-limit page, which names no resource of ours, so the verdict is rate limiting and the failure counts for nothing. AC16 requires exactly this: a bare 403 classifies as rate limiting by default and would satisfy the criterion for the wrong reason.
+
+**What is not composed here is the classifier's rule**, which was measured for [rate-governor](../../../docs/features/rate-governor/requirements.md) open question 1 and is recorded there, not re-derived in this file. These fixtures exercise that rule. They are not evidence for it.
+
 ## Before you change a request line here
 
 Measure it. A URL edited to match the code is a fixture that is fictional about a URL that happens to work, which is what #154 found seven times. The mutual exclusion itself is held by `TestEnumeratePathDoesNotCombineTypeWithAffiliation`, which reads the production constant rather than any cassette, because that is the one assertion no fixture can make.

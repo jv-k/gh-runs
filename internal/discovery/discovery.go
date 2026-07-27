@@ -81,6 +81,13 @@ const enumeratePath = "user/repos?per_page=100&affiliation=owner,collaborator,or
 // is set to.
 const hourlyTier = time.Hour
 
+// retirementThreshold is how many consecutive definitive probe failures retire a
+// repository (R23, ADR-0020). Two, not one: one puts the whole policy a single odd
+// response away from evicting a live repository, and the hysteresis is cheap here.
+// The cost of waiting is a stale row for one more interval, and the cost of evicting
+// is a repository silently missing from the dashboard.
+const retirementThreshold = 2
+
 // Requester issues a request through the transport chain and returns the response
 // for the caller to read and close. It is exactly ghclient.Client's surface
 // (ADR-0012: Request, never Get or Do, so the response headers survive), narrowed
@@ -244,6 +251,19 @@ type Record struct {
 	// re-admit it: only a launch inside the repository does, so the Feed never
 	// accretes past clones a session was not launched in (R22, ADR-0020).
 	Adopted bool `json:"adopted"`
+
+	// DefinitiveFailures counts this repository's consecutive definitive probe
+	// failures, and R23 retires it at retirementThreshold. Definitive means a 404, or
+	// a 403 the governor reports as not rate limiting. Every other outcome leaves the
+	// count untouched in both directions, and a successful probe resets it to zero.
+	//
+	// It persists on the record rather than living in the session, because discovery's
+	// cadence bookkeeping dies with the session and a count that did the same would
+	// make the policy inert: under one revalidation interval a repository is probed
+	// exactly once, so two failures never happen in one launch. A record persisted
+	// before this field existed reloads at zero, which delays a retirement and never
+	// causes one (AC17).
+	DefinitiveFailures int `json:"definitive_failures"`
 }
 
 // ID is the record's host-qualified identity (R18). It routes through discovery's one
@@ -321,12 +341,20 @@ func recordFrom(id domain.RepoID, repo apiRepo, hasRuns bool) Record {
 // than Go's map order, which makes a failing test reproducible. It is not a priority
 // and must not be read as one.
 func (d *Discovery) PollSet() []domain.RepoID {
+	return d.idsWhere(func(r Record) bool { return r.HasRuns })
+}
+
+// idsWhere is the sorted projection PollSet and Membership are each one predicate over.
+// The sort is not a priority and no consumer depends on it: it is here so the same set
+// yields the same slice twice, rather than Go's map order, which makes a failing test
+// reproducible.
+func (d *Discovery) idsWhere(keep func(Record) bool) []domain.RepoID {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	keys := make([]string, 0, len(d.records))
 	for key, r := range d.records {
-		if r.HasRuns {
+		if keep(r) {
 			keys = append(keys, key)
 		}
 	}
@@ -337,6 +365,23 @@ func (d *Discovery) PollSet() []domain.RepoID {
 		ids = append(ids, d.records[key].ID())
 	}
 	return ids
+}
+
+// Membership is every repository discovery still holds, whether or not its
+// capability is Known (live-run-feed R37). It is deliberately not the capability
+// set: R18 gates destructive actions on capability, so a repository awaiting
+// enumeration is absent there and present here, and a consumer that read absence
+// from the capability set as departure would prune a repository that had merely not
+// been classified yet.
+//
+// The Feed's two prunes, the failed-poll indicator and run-lifecycle R4's
+// cancellation-requested mark, read this and nothing else. Retirement is what makes
+// that meaningful: before R23 nothing ever left the set, so absence could never
+// occur and neither prune could fire.
+//
+// The order is sorted by host-qualified key, for PollSet's reason and no other.
+func (d *Discovery) Membership() []domain.RepoID {
+	return d.idsWhere(func(Record) bool { return true })
 }
 
 // Records returns a copy of the whole classified set, both the poll set and the
@@ -385,16 +430,55 @@ func (d *Discovery) put(r Record) {
 // putProbed stores a probed record together with the probe's timing, under one
 // lock so a reader never sees the record without its cadence bookkeeping. It refuses
 // an excluded repository on the same terms as put.
+//
+// It reaches here only on a successful probe, which is what resets R23's count to
+// zero. The reset lives here rather than in either caller because both of them build
+// their Record from a different source (a fresh classification for a pass, the
+// previous record carried forward for a re-probe) and a re-probe's carried-forward
+// record still holds the count the failures before it left. One door for the success
+// case means neither caller can forget it.
 func (d *Discovery) putProbed(r Record, now time.Time, hasETag bool) {
 	if d.excluded(r.ID()) {
 		return
 	}
+	r.DefinitiveFailures = 0
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	key := r.ID().String()
 	d.records[key] = r
 	d.probed[key] = now
 	d.etagged[key] = hasETag
+}
+
+// countDefinitiveFailure records one definitive probe failure against id and retires
+// the repository once it has seen retirementThreshold of them consecutively (R23).
+//
+// A repository with no record is one that failed its first probe of a cold pass:
+// nothing was ever admitted, so there is nothing to retire and nothing to count
+// against. Retirement is over membership alone and never touches classification, so
+// this moves neither R3's has_runs nor R8's recorded capability.
+//
+// Retirement deletes the side entries with the record, so a retired repository leaves
+// behind no cadence timestamp and no ETag flag that a later re-admission would
+// inherit. The next persist then writes a document without it, which is what stops a
+// repository deleted or made private upstream returning on every later launch.
+func (d *Discovery) countDefinitiveFailure(id domain.RepoID) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	key := id.String()
+	r, ok := d.records[key]
+	if !ok {
+		return
+	}
+	r.DefinitiveFailures++
+	if r.DefinitiveFailures >= retirementThreshold {
+		delete(d.records, key)
+		delete(d.probed, key)
+		delete(d.etagged, key)
+		return
+	}
+	d.records[key] = r
 }
 
 // newRepoID host-qualifies a repository and rejects a foreign host or a path-unsafe
