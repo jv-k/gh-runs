@@ -72,6 +72,14 @@ R14 is where go-gh's `repository.Current()` trap lands, so it must not be met by
 
 **R22.** When enumeration completes and the fast-path repository (R14) is not in the enumerated set, discovery must adopt it **for the session** ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)): spend one `GET /repos/{owner}/{repo}` to learn its `permissions`, `archived` and `disabled`, admit it to the Feed, and admit it to the poll set if it has Runs. Its classification, capability and ETags persist like any other repository's, so revalidation stays free, but membership does not: only a launch inside the repository re-admits it. A session launched elsewhere never sees it, and the Feed never accretes past clones.
 
+### Retirement
+
+**R23.** Discovery must retire a repository whose last **two consecutive** probes returned a **definitive** failure, and must retire it on no other signal ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)). Definitive means a 404, or a 403 the [rate-governor](../rate-governor/requirements.md) R14 verdict reports as **not** rate limiting. Every other outcome, a 5xx, a network error, a timeout, a decode failure, and a rate-limited 403, must neither increment the count nor reset it, so a transient answer arriving between two definitive ones can neither cause a retirement nor postpone one indefinitely. A successful probe resets the count to zero. Retirement must delete the record, and the next persist must write a document without it, so the set does not carry a repository deleted or made private upstream into every later launch. The count must persist on the record: under one revalidation interval a repository is probed once, so a session-local count would never reach two and the requirement would be inert for short sessions.
+
+R23 does not amend R8 or the rule it rests on. A failure still classifies nothing, still never changes `has_runs`, and still never moves a recorded capability. Retirement is a separate authority, over membership alone.
+
+A retired repository returns only through R11's on-demand full refresh, which re-enumerates and re-admits it. A warm start skips its pass, so nothing else re-admits one. That makes R11 load-bearing rather than convenient, and it is the reason retirement must not ship before it.
+
 ## Acceptance criteria
 
 **AC1: Enumeration cost.** Against a cassette of the reference account, discovery issues exactly two enumeration requests and yields 163 repositories. A third page is never requested.
