@@ -67,6 +67,18 @@ func newFeed(width, height int) Model {
 	return m
 }
 
+// newFeedIn builds a Feed whose working-directory resolver reports the given repository, or
+// none when ok is false. The nil-seam case is already the whole existing suite, so the
+// this-repo goldens are what cover the wired one.
+func newFeedIn(width, height int, id domain.RepoID, ok bool) Model {
+	m := New(Options{
+		Profile:     keys.Standard,
+		CurrentRepo: func() (domain.RepoID, bool) { return id, ok },
+	})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	return m
+}
+
 // feedRuns sends one repository's Runs as a RunsFetched, the unit ADR-0015 fixes.
 func feedRuns(m Model, id domain.RepoID, runs ...domain.Run) Model {
 	m, _ = m.Update(scheduler.Update{Repo: id, Runs: runs})

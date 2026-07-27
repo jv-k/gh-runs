@@ -97,9 +97,17 @@ func resolveLaunchFilter(key string, node yaml.Node, diags []Diagnostic) (filter
 		case axisStatus, axisConclusion:
 			diags = resolveStatusAxis(path, sub, item, &f, diags)
 		case axisRepos:
+			// The this-repo marker is lifted out here, before the shared decoder sees the
+			// list. resolveRepoList is R7's exclude decoder too, and exclude and pin MUST
+			// NOT accept the marker: they name repositories to leave alone and to keep at
+			// the top, and neither means anything for a directory the tool is not in.
+			// Lifting it in the axis that owns it is what keeps that decoder strict
+			// (ADR-0016).
+			var rest yaml.Node
+			rest, f.ThisRepo = liftThisRepo(item)
 			// The same decode R7's exclude list uses, so one malformed entry is named as
 			// written with its line and the rest of the list stands (R14, ADR-0009).
-			f.Repos, diags = resolveRepoList(path, item, diags)
+			f.Repos, diags = resolveRepoList(path, rest, diags)
 		default:
 			diags = append(diags, Diagnostic{Message: fmt.Sprintf(
 				"%s: unrecognised filter axis, ignored", path)})
@@ -254,11 +262,51 @@ func launchFilterValue(f filter.Filter, axis string) any {
 		return listOrNil(namesOf(f.Conclusions))
 	case axisRepos:
 		// The bare OWNER/REPO spelling, through the same renderer R7's exclude list uses,
-		// so the file and the input line agree on one form (ADR-0009).
-		return listOrNil(repoRefs(f.Repos))
+		// so the file and the input line agree on one form (ADR-0009). The marker is
+		// written back as the bare this-repo entry it was read as, first, so a Save
+		// round-trips it rather than resolving it into whatever directory the operator
+		// happened to be in (ADR-0016, R17).
+		return listOrNil(append(thisRepoEntry(f.ThisRepo), repoRefs(f.Repos)...))
 	default:
 		return nil
 	}
+}
+
+// liftThisRepo splits the this-repo marker out of a repos list, returning the list with
+// every marker entry removed and whether one was present. A non-sequence node is returned
+// untouched, so resolveRepoList reports the type error exactly as it does today.
+//
+// It compares the entry's own text rather than decoding it, for the reason filterScalar
+// gives: a decode imposes a type the axis has not agreed to. The marker cannot collide with
+// a repository reference because domain.ParseRepoRef requires two segments and this has one,
+// which is asserted rather than assumed in TestThisRepoTokenCannotBeARepositoryReference.
+//
+// A repeated marker is not an error, for the same reason a repeated name is not: the axis is
+// a set and this is one member of it.
+func liftThisRepo(node yaml.Node) (yaml.Node, bool) {
+	if node.Kind != yaml.SequenceNode {
+		return node, false
+	}
+	found := false
+	kept := make([]*yaml.Node, 0, len(node.Content))
+	for _, item := range node.Content {
+		if item.Kind == yaml.ScalarNode && item.Value == filter.ThisRepoToken {
+			found = true
+			continue
+		}
+		kept = append(kept, item)
+	}
+	node.Content = kept
+	return node, found
+}
+
+// thisRepoEntry renders the marker back into the file's list form, or nothing when it is not
+// set. It is a slice rather than a string so the caller appends it without a branch.
+func thisRepoEntry(set bool) []string {
+	if !set {
+		return nil
+	}
+	return []string{filter.ThisRepoToken}
 }
 
 // scalarOrNil and listOrNil map an empty axis to the nil that removes its key.

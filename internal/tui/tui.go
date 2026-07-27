@@ -119,7 +119,13 @@ type Options struct {
 	Revalidated func() time.Time
 	SetViewport func([]domain.RepoID)
 	SetFilter   func(filter.Filter)
-	Profile     keys.Profile
+	// FeedCurrentRepo resolves what the filter's repo:this-repo marker means, the same
+	// resolver StorageCurrentRepo and WorkflowCurrentRepo take for their scope keys
+	// (settings R9, R19, ADR-0016). The Feed reaches this-repo through its filter rather
+	// than through a third scope key, because it already has a filter surface and a second
+	// repository axis beside it could disagree with the first.
+	FeedCurrentRepo func() (domain.RepoID, bool)
+	Profile         keys.Profile
 	// Config is the resolved settings the Settings pane opens over, and SaveSettings
 	// persists the pane's changes back to the config file (settings R17). main.go wires
 	// SaveSettings to config.Save over the resolved config path, so the pane's only write is
@@ -253,6 +259,7 @@ func New(opts Options) Model {
 		Profile:     opts.Profile,
 		SetViewport: opts.SetViewport,
 		SetFilter:   opts.SetFilter,
+		CurrentRepo: opts.FeedCurrentRepo,
 		// The Feed opens on the settings' launch filter (settings R9, AC3), which is already
 		// resolved: config.Load applied the flag over the file over the default before this
 		// value reached the root. There is no second precedence here, and there must not be.

@@ -149,6 +149,9 @@ func (m Model) View() string {
 	if f, ok := m.filterLine(); ok {
 		top = append(top, f)
 	}
+	if f, ok := m.thisRepoFallbackLine(); ok {
+		top = append(top, f)
+	}
 	if c, ok := m.capLabelLine(); ok {
 		top = append(top, c)
 	}
@@ -219,6 +222,9 @@ func (m Model) chromeLineCount() int {
 		n++
 	}
 	if _, ok := m.filterLine(); ok {
+		n++
+	}
+	if _, ok := m.thisRepoFallbackLine(); ok {
 		n++
 	}
 	if _, ok := m.capLabelLine(); ok {
@@ -336,6 +342,30 @@ func (m Model) filterLine() (string, bool) {
 	label := fmt.Sprintf("filter %s  (%s edit, then %s clears)",
 		q, hint(m.profile.Filter), hint(m.profile.FilterCancel))
 	return styleDim.Render(truncPad(textsan.Sanitize(label), m.width)), true
+}
+
+// thisRepoFallbackLine states that a stated repo:this-repo resolved to no repository, so the
+// axis contributed nothing and the Feed is showing every repository. settings R19 requires
+// the fallback be said rather than answered with an empty view or a picker, and a pin that is
+// not in force must not read the same as one that is (ADR-0016).
+//
+// It is its own line rather than a clause on filterLine because it does not fit beside the
+// query and the key hints at R4a's 100 columns, and a say-so obligation discharged by a
+// message truncated off the end of a line is not discharged. The wording mirrors the
+// Workflows tab's scopeLabel: the two are the same fallback on two surfaces, and a reader
+// should not have to learn it twice.
+//
+// It stands down while the input is focused, as filterLine does, because the input shows the
+// text being edited rather than the applied filter.
+func (m Model) thisRepoFallbackLine() (string, bool) {
+	if m.filterActive || !m.filter.ThisRepo {
+		return "", false
+	}
+	if _, ok := m.thisRepo(); ok {
+		return "", false
+	}
+	const label = "repo:this-repo found no repository in this working directory, showing all-repos"
+	return styleDim.Render(truncPad(label, m.width)), true
 }
 
 // headerLine is the column header, in the fixed order the rows follow.

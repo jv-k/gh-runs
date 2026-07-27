@@ -219,3 +219,99 @@ func TestMatchPermissivePair(t *testing.T) {
 		})
 	}
 }
+
+// runIn is a Run stamped with the given repository, for the repository axis's tests.
+func runIn(owner, name string) domain.Run {
+	return domain.Run{Repo: domain.RepoID{Host: domain.HostGitHub, Owner: owner, Name: name}}
+}
+
+// TestUnresolvedThisRepoWidens is the direction ADR-0016 chose, and the reason the marker is
+// a bool rather than a sentinel RepoID. A consumer that never calls Resolve must show every
+// repository rather than none: settings R19 already made that choice for the same failure on
+// the Workflows and Storage tabs, fall back and say so rather than paint an empty view.
+//
+// A sentinel identity would have failed the other way. It would be structurally valid, match
+// no Run, and narrow the Feed to nothing with nothing on screen to say why.
+func TestUnresolvedThisRepoWidens(t *testing.T) {
+	f := filter.Filter{ThisRepo: true}
+	for _, r := range []domain.Run{runIn("cli", "cli"), runIn("jv-k", "gh-runs")} {
+		if !f.Match(r) {
+			t.Errorf("an unresolved this-repo marker rejected %s: it must widen, not narrow to nothing (ADR-0016)", r.Repo)
+		}
+	}
+}
+
+// TestResolveAddsTheWorkingDirectoryRepository pins Resolve's whole contract: it is pure, the
+// argument is the whole of what it is handed, and the resolved identity is an OR member of the
+// repository axis with no special case.
+func TestResolveAddsTheWorkingDirectoryRepository(t *testing.T) {
+	here := domain.RepoID{Host: domain.HostGitHub, Owner: "jv-k", Name: "gh-runs"}
+
+	t.Run("the marker alone narrows to the working directory", func(t *testing.T) {
+		f := filter.Filter{ThisRepo: true}.Resolve(here, true)
+		if !f.Match(runIn("jv-k", "gh-runs")) {
+			t.Error("a resolved marker rejected the working directory's own repository")
+		}
+		if f.Match(runIn("cli", "cli")) {
+			t.Error("a resolved marker admitted another repository")
+		}
+	})
+
+	t.Run("it ORs with a named entry rather than replacing it", func(t *testing.T) {
+		f, err := filter.ParseQuery("repo:this-repo repo:cli/cli")
+		if err != nil {
+			t.Fatalf("ParseQuery: %v", err)
+		}
+		f = f.Resolve(here, true)
+		for _, r := range []domain.Run{runIn("jv-k", "gh-runs"), runIn("cli", "cli")} {
+			if !f.Match(r) {
+				t.Errorf("the axis rejected %s: this-repo and a named entry are OR members of one axis", r.Repo)
+			}
+		}
+		if f.Match(runIn("golang", "go")) {
+			t.Error("the axis admitted a repository neither member names")
+		}
+	})
+
+	t.Run("a duplicate collapses", func(t *testing.T) {
+		f, err := filter.ParseQuery("repo:this-repo repo:jv-k/gh-runs")
+		if err != nil {
+			t.Fatalf("ParseQuery: %v", err)
+		}
+		if got := len(f.Resolve(here, true).Repos); got != 1 {
+			t.Errorf("Repos holds %d entries after resolving onto its own name, want 1", got)
+		}
+	})
+
+	t.Run("no working directory repository leaves the axis alone", func(t *testing.T) {
+		f := filter.Filter{ThisRepo: true}.Resolve(domain.RepoID{}, false)
+		if len(f.Repos) != 0 {
+			t.Errorf("Resolve with no repository added %d entries, want none", len(f.Repos))
+		}
+		if !f.Match(runIn("cli", "cli")) {
+			t.Error("Resolve with no repository narrowed the axis; it must widen (settings R19)")
+		}
+	})
+
+	t.Run("it does not write through to the caller's filter", func(t *testing.T) {
+		f, err := filter.ParseQuery("repo:this-repo repo:cli/cli")
+		if err != nil {
+			t.Fatalf("ParseQuery: %v", err)
+		}
+		before := len(f.Repos)
+		_ = f.Resolve(here, true)
+		if len(f.Repos) != before {
+			t.Errorf("Resolve grew the receiver's Repos from %d to %d: it must be pure, because the Feed holds the stated filter and re-resolves it", before, len(f.Repos))
+		}
+	})
+
+	t.Run("the stated marker survives resolution", func(t *testing.T) {
+		f := filter.Filter{ThisRepo: true}.Resolve(here, true)
+		if !f.ThisRepo {
+			t.Error("Resolve cleared the marker; the Feed renders the stated filter, not the name it resolved to (ADR-0016)")
+		}
+		if got, want := f.QueryString(), "repo:this-repo repo:jv-k/gh-runs"; got != want {
+			t.Errorf("QueryString() = %q, want %q", got, want)
+		}
+	})
+}

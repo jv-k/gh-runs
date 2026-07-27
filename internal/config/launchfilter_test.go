@@ -191,16 +191,25 @@ func TestLaunchFilterReadsEveryAxis(t *testing.T) {
 	}
 }
 
-// TestLaunchFilterAxisCountIsDeliberate fails the day ADR-0016's Filter grows an axis, so
+// TestLaunchFilterAxisCountIsDeliberate fails the day ADR-0016's Filter grows a field, so
 // adding one is a decision about the config file rather than a silent omission from it.
-// Every field is now spelled in the file: the repository axis was the one omission, and
-// issue #102 closed it by giving the grammar the Settings view edits a repo: token.
+// Every field is spelled in the file: the repository axis was the one omission, and issue
+// #102 closed it by giving the grammar the Settings view edits a repo: token.
+//
+// A field is not the same as a sub-key, and since #117 the two counts differ. ThisRepo is a
+// tenth field that rides inside the existing repos key as a bare this-repo entry, because it
+// is a member of the repository axis rather than an axis of its own (ADR-0016). So the file
+// carries ten fields across nine sub-keys, and a new field has three homes to choose between
+// rather than two: its own sub-key, a spelling inside an existing one, or a documented
+// omission recorded here.
 func TestLaunchFilterAxisCountIsDeliberate(t *testing.T) {
-	const carried, deliberatelyAbsent = 9, 0
+	const subKeys, ridingInsideOne, deliberatelyAbsent = 9, 1, 0
+	carried := subKeys + ridingInsideOne
 	if got := reflect.TypeOf(filter.Filter{}).NumField(); got != carried+deliberatelyAbsent {
-		t.Fatalf("filter.Filter has %d axes, and launch_filter carries %d with %d left out on purpose. "+
-			"Decide where the new one belongs: a sub-key in launchfilter.go, or a documented omission here",
-			got, carried, deliberatelyAbsent)
+		t.Fatalf("filter.Filter has %d fields, and launch_filter carries %d of them across %d sub-keys "+
+			"(%d riding inside another key), with %d left out on purpose. Decide where the new one belongs: "+
+			"its own sub-key in launchfilter.go, a spelling inside an existing one, or a documented omission here",
+			got, carried, subKeys, ridingInsideOne, deliberatelyAbsent)
 	}
 }
 
@@ -546,6 +555,9 @@ func TestSaveLaunchFilterRoundTripsEveryAxis(t *testing.T) {
 		Created:     mustParse(t, "created:>=2026-01-01").Created,
 		Statuses:    []domain.Status{domain.StatusQueued, domain.StatusInProgress},
 		Conclusions: []domain.Conclusion{domain.ConclusionFailure, domain.ConclusionTimedOut},
+		// The marker is a field of the filter and rides inside the repos key, so "every
+		// axis" has to include it or the round trip that names itself exhaustive is not.
+		ThisRepo: true,
 	}
 
 	if err := config.Save(env, baseConfig(), next); err != nil {
@@ -668,5 +680,107 @@ func TestSaveClearedLaunchFilterReadsBackEmpty(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg.LaunchFilter, filter.Filter{}) {
 		t.Errorf("LaunchFilter = %+v, want empty:\n%s", cfg.LaunchFilter, readSaved(t, dir))
+	}
+}
+
+// TestLaunchFilterReadsTheThisRepoMarker pins the file half of ADR-0016's marker: a bare
+// this-repo entry sits beside named entries under launch_filter.repos, where the key already
+// says which axis it is, and it lands on the marker field rather than in Repos.
+func TestLaunchFilterReadsTheThisRepoMarker(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "launch_filter:\n  repos:\n    - this-repo\n    - cli/cli\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	cfg, diags := config.Load(env, config.Flags{})
+
+	if len(diags) != 0 {
+		t.Fatalf("a well-formed repos list produced diagnostics: %v", diags)
+	}
+	if !cfg.LaunchFilter.ThisRepo {
+		t.Error("the this-repo entry did not set the marker")
+	}
+	want := []domain.RepoID{{Host: domain.HostGitHub, Owner: "cli", Name: "cli"}}
+	if !reflect.DeepEqual(cfg.LaunchFilter.Repos, want) {
+		t.Errorf("LaunchFilter.Repos = %v, want %v: the marker must be lifted out rather than "+
+			"decoded as an identity", cfg.LaunchFilter.Repos, want)
+	}
+}
+
+// TestSaveLaunchFilterRoundTripsTheThisRepoMarker is the round trip the issue asks for
+// through load, edit and Save. The marker MUST come back as the word it went in as: resolving
+// it into a name on the way out would write the directory the operator happened to be in over
+// the setting they stated, which is the R17 defect that kept the repository axis out of the
+// file to begin with (ADR-0016).
+func TestSaveLaunchFilterRoundTripsTheThisRepoMarker(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "launch_filter:\n  repos:\n    - this-repo\n    - cli/cli\n")
+	env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+	prev, _ := config.Load(env, config.Flags{})
+	if !prev.LaunchFilter.ThisRepo {
+		t.Fatal("the fixture did not load the marker, so this test would prove nothing")
+	}
+
+	// Edit an unrelated axis, as the Settings view would, and save the whole filter back.
+	next := prev
+	edited := prev.LaunchFilter
+	edited.Branch = "main"
+	next.LaunchFilter = edited
+	if err := config.Save(env, prev, next); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	saved := readSaved(t, dir)
+	if !strings.Contains(saved, "- this-repo") {
+		t.Errorf("the marker was not written back as this-repo:\n%s", saved)
+	}
+	cfg, diags := config.Load(env, config.Flags{})
+	if len(diags) != 0 {
+		t.Fatalf("Load of the saved file returned diagnostics: %v\n%s", diags, saved)
+	}
+	if !reflect.DeepEqual(cfg.LaunchFilter, next.LaunchFilter) {
+		t.Errorf("round-tripped LaunchFilter = %+v, want %+v:\n%s",
+			cfg.LaunchFilter, next.LaunchFilter, saved)
+	}
+}
+
+// TestExcludeAndPinRejectTheThisRepoMarker pins the boundary the lift exists to keep. exclude
+// and pin share resolveRepoList with launch_filter.repos, and only the launch filter's own
+// axis handler lifts the marker out. Those two name repositories to leave alone and to keep at
+// the top, and neither means anything for a directory the tool is not in, so each must report
+// the entry by name and keep the rest of its list.
+func TestExcludeAndPinRejectTheThisRepoMarker(t *testing.T) {
+	for _, key := range []string{"exclude", "pin"} {
+		t.Run(key, func(t *testing.T) {
+			dir := t.TempDir()
+			writeConfig(t, dir, key+":\n  - this-repo\n  - cli/cli\n")
+			env := envMap(map[string]string{"XDG_CONFIG_HOME": dir})
+
+			cfg, diags := config.Load(env, config.Flags{})
+
+			got := cfg.Exclude
+			if key == "pin" {
+				got = cfg.Pin
+			}
+			want := []domain.RepoID{{Host: domain.HostGitHub, Owner: "cli", Name: "cli"}}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("%s = %v, want %v: the marker must not be admitted here, and the "+
+					"entries that parsed must stand (R14)", key, got, want)
+			}
+			if len(diags) == 0 {
+				t.Errorf("%s accepted this-repo silently; a rejected entry must be named (R14)", key)
+			}
+		})
+	}
+}
+
+// TestThisRepoTokenCannotBeARepositoryReference asserts the collision the canon reasons about
+// rather than assuming it. ADR-0016 argues the marker is safe because ParseRepoRef requires
+// two segments and this has one. If that ever stopped being true, the token would parse as a
+// repository somewhere and the lift above would be shadowing a real identity.
+func TestThisRepoTokenCannotBeARepositoryReference(t *testing.T) {
+	if _, err := domain.ParseRepoRef(filter.ThisRepoToken); err == nil {
+		t.Fatalf("ParseRepoRef(%q) succeeded: the marker now collides with a repository "+
+			"reference, and the whole spelling has to be reconsidered (ADR-0016)", filter.ThisRepoToken)
 	}
 }

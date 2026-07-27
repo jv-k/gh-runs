@@ -76,6 +76,16 @@ func ParseQuery(s string) (Filter, error) {
 			}
 			f.Created = dr
 		case "repo":
+			// The working directory's repository is a marker rather than an identity,
+			// so it never reaches ParseRepoRef. The word is the one workflows_scope and
+			// storage_scope already use for the same idea, and it cannot collide with a
+			// repository reference because ParseRepoRef requires two segments and this
+			// has one (ADR-0016). Repeating it is not an error, for the same reason a
+			// repeated name is not.
+			if value == ThisRepoToken {
+				f.ThisRepo = true
+				continue
+			}
 			// Through the one validation door, the same one the CLI's -R, GH_REPO and
 			// settings R7's exclude list use (ADR-0009). A malformed ref or an
 			// unsupported host is rejected by name and fails the whole line, because
@@ -93,6 +103,16 @@ func ParseQuery(s string) (Filter, error) {
 	}
 	return f, nil
 }
+
+// ThisRepoToken is the word the repository axis uses for the working directory's
+// repository, in the filter input's grammar as repo:this-repo and in the config
+// file as a bare this-repo entry under launch_filter.repos, where the key already
+// names the axis. It is the same word workflows_scope and storage_scope carry for
+// the same idea, so the tool has one spelling of it rather than three (ADR-0016).
+//
+// It is exported because config writes and reads the same token and may not invent
+// its own copy of it, and because a token defined twice is a token that drifts.
+const ThisRepoToken = "this-repo"
 
 // QueryString renders a Filter back into the input's grammar, in a fixed axis order
 // so the same Filter always renders the same line. It is what a surface handing the
@@ -135,6 +155,13 @@ func (f Filter) QueryString() string {
 	}
 	for _, cc := range f.Conclusions {
 		parts = append(parts, "status:"+string(cc))
+	}
+	// The marker renders before the named entries, and renders whether or not it has
+	// been resolved, because the stated filter is what the operator typed. A Filter
+	// carrying only the marker is therefore non-empty, which is what emptyFilter reads
+	// QueryString to decide.
+	if f.ThisRepo {
+		parts = append(parts, "repo:"+ThisRepoToken)
 	}
 	for _, id := range f.Repos {
 		parts = append(parts, "repo:"+id.Owner+"/"+id.Name)

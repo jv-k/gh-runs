@@ -40,6 +40,49 @@ type Filter struct {
 
 	// Client-side only, like Conclusions. Empty means every repository.
 	Repos []domain.RepoID
+
+	// ThisRepo states that the working directory's repository is part of the
+	// repository axis, without saying which repository that is. It is a marker
+	// rather than an entry in Repos because Repos holds parsed identities and an
+	// unresolved value has nowhere to sit among them (ADR-0016).
+	//
+	// It is a bool rather than a sentinel RepoID deliberately. A structurally valid
+	// identity matching no Run would fail closed and silently, where an unresolved
+	// marker widens: Match ignores one, so a consumer that never resolves shows
+	// everything rather than nothing. That is the direction settings R19 already
+	// chose for the same failure on the other two tabs, fall back and say so.
+	//
+	// Nothing in this package looks the repository up. Resolve takes it as an
+	// argument, which is the same rule that keeps the Workflow selector unresolved
+	// here.
+	ThisRepo bool
+}
+
+// Resolve returns a copy of the Filter with the this-repo marker turned into a real
+// entry in the repository axis. It is pure: repo and ok are the whole of what it is
+// handed, and the caller is the one that knows the working directory (ADR-0016).
+//
+// The resolved identity is an OR member with no special case, so repo:this-repo
+// repo:cli/cli matches either and a duplicate collapses, which is the axis's stated
+// rule applied rather than excepted. Where ok is false the marker contributes
+// nothing and the copy is returned unchanged, so the axis widens rather than
+// narrowing to nothing.
+//
+// The marker survives on the returned copy. It states what the operator asked for,
+// and the Feed keeps rendering that rather than the name it resolved to.
+func (f Filter) Resolve(repo domain.RepoID, ok bool) Filter {
+	if !f.ThisRepo || !ok {
+		return f
+	}
+	if slices.Contains(f.Repos, repo) {
+		return f
+	}
+	// Copy rather than append in place: f.Repos may share its array with the caller's
+	// filter, and appending would write through to it.
+	resolved := make([]domain.RepoID, len(f.Repos), len(f.Repos)+1)
+	copy(resolved, f.Repos)
+	f.Repos = append(resolved, repo)
+	return f
 }
 
 // Match evaluates the whole Filter against one Run, client-side. It is total:
@@ -74,6 +117,11 @@ func (f Filter) Match(r domain.Run) bool {
 	}
 	// The repository axis: client-side scoping, OR within the set, empty means
 	// every repository (live-run-feed R3). No Query() form, like Conclusions.
+	//
+	// An unresolved ThisRepo is ignored rather than treated as an empty set, so a
+	// consumer that never calls Resolve widens instead of matching nothing. Only
+	// Repos is consulted here, and Resolve is what puts the working directory's
+	// repository into it (ADR-0016).
 	if len(f.Repos) > 0 && !slices.Contains(f.Repos, r.Repo) {
 		return false
 	}

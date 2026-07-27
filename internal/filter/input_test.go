@@ -114,6 +114,11 @@ func TestGrammarSpellsEveryAxis(t *testing.T) {
 		Statuses:    []domain.Status{domain.StatusCompleted},
 		Conclusions: []domain.Conclusion{domain.ConclusionFailure},
 		Repos:       []domain.RepoID{{Host: domain.HostGitHub, Owner: "cli", Name: "cli"}},
+		// The marker rides inside the repository axis rather than beside it, so the
+		// fixture carries both forms at once. That is also the round trip worth pinning:
+		// repo:this-repo and repo:cli/cli are OR members of one axis, and the grammar
+		// must return both rather than collapsing one into the other (ADR-0016).
+		ThisRepo: true,
 	}
 
 	v := reflect.ValueOf(full)

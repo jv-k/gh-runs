@@ -630,7 +630,10 @@ func (c clients) tuiOptions(d tuiDeps) tui.Options {
 		Revalidated: func() time.Time { return newestRevalidated(d.Store, d.Discovery.PollSet()) },
 		SetViewport: d.Scheduler.SetViewport,
 		SetFilter:   d.Scheduler.SetFilter,
-		Profile:     d.Profile,
+		// The Feed's filter carries the repository axis, so repo:this-repo resolves through
+		// the same working-directory resolver the other two tabs' scope keys use (ADR-0016).
+		FeedCurrentRepo: currentRepoID,
+		Profile:         d.Profile,
 		// The Settings pane opens over the resolved config and writes changed keys back through
 		// config.Save, preserving comments, key order and keys this version does not recognise
 		// (settings R17, AC11). os.LookupEnv locates the same config.yml Load read at startup, so
