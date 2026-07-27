@@ -558,3 +558,12 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
+
+// SetProfile adopts the keybinding profile the operator chose in Settings and passes it to
+// the confirmation this view opens over a log deletion, so the whole chain answers one
+// profile (settings R5, R17).
+func (m Model) SetProfile(p keys.Profile) Model {
+	m.profile = p
+	m.confirm = m.confirm.SetProfile(p)
+	return m
+}

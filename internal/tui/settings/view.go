@@ -202,11 +202,10 @@ func (m Model) label(r row) string {
 // The rule for whether a description says "starts", and the rule a new row is measured
 // against: a setting that changes only how a held frame reads applies from the next frame,
 // and a setting that changes what a tab fetches or holds applies at the next launch and says
-// "starts". The theme and the timestamp format are the first kind, and they carry no timing
-// wording because they have no delay to warn about. The two tab scopes and the launch filter
-// are the second kind, because narrowing one also means dropping the held state, so the
-// change cannot happen without a relaunch. The keybinding profile is the first kind by this
-// rule and does not yet behave like it, which is #127.
+// "starts". The theme, the timestamp format and the keybinding profile are the first kind,
+// and they carry no timing wording because they have no delay to warn about. The two tab
+// scopes and the launch filter are the second kind, because narrowing one also means
+// dropping the held state, so the change cannot happen without a relaunch.
 func (m Model) description(r row) string {
 	switch r {
 	case rowBudget:

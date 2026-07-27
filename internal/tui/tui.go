@@ -97,6 +97,10 @@ type tab interface {
 	Update(tea.Msg) (tab, tea.Cmd)
 	View() string
 	SetActive(bool) tab
+	// SetProfile adopts a keybinding profile changed in Settings. Every tab takes it, not
+	// only the focused one: the change is live, and a tab that kept the launch profile
+	// would answer the old motion keys the moment focus reached it (settings R5, R17).
+	SetProfile(keys.Profile) tab
 	Title() string
 	// CapturesInput reports whether the tab holds text-input focus (the Feed's filter). While
 	// it does, the root routes every key but the terminal interrupt to it, so the global
@@ -343,6 +347,40 @@ func (m Model) applyPalette() Model {
 //
 // The tab's vocabulary is its own, so the config value is converted here, exactly as the two
 // tab scopes are converted for their tabs (ADR-0011).
+// applyProfile pushes the keybinding profile the Settings pane holds into the root's own
+// global keys, into every tab, and into the running surface (settings R5, R17). It is the
+// third of applyPalette's siblings, and it exists because the pane used to re-seed only
+// itself: cycling from Vim to Standard showed the operator positive evidence inside the
+// pane and then returned them to a Feed that still answered the old keys.
+//
+// Every tab takes it rather than the focused one, for the reason the root broadcasts data to
+// all three: a tab that kept the launch profile would answer the old motion keys the moment
+// focus reached it, and nothing would say why. The running surface takes it too, because it
+// paints the key that stops a Purge (purge R16) and the key it names and the key it answers
+// have to move together.
+//
+// This runs on a change and not at construction, which is where it differs from
+// applyTimestamp. The launch profile is already resolved by the time the root sees it:
+// main.go turns the loaded keybinding_profile into a keys.Profile and hands it to Options,
+// which every tab and pane is built with. There is no second read of the config to remove,
+// so routing construction through here would only add a way for Options.Profile and the
+// pane's held name to disagree, with the pane silently winning.
+//
+// A name the registry does not know leaves every profile alone, which is the same guard the
+// pane's own cycle uses (R5: there are exactly two, and no third is reachable).
+func (m Model) applyProfile() Model {
+	p, ok := keys.ForName(string(m.settings.Config().KeybindingProfile))
+	if !ok {
+		return m
+	}
+	m.profile = p
+	for i := range m.tabs {
+		m.tabs[i] = m.tabs[i].SetProfile(p)
+	}
+	m.running = m.running.SetProfile(p)
+	return m
+}
+
 func (m Model) applyTimestamp() Model {
 	ft, ok := m.tabs[feedTabIndex].(feedTab)
 	if !ok {
@@ -573,11 +611,11 @@ func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.settings.IsOpen() {
 		var cmd tea.Cmd
 		m.settings, cmd = m.settings.Update(k)
-		// The theme and the timestamp form apply from the next frame rather than the next
-		// launch (R17). Both are read back off the pane here, which is the whole mechanism:
-		// the root pulls after every key it routed, and the pane pushes nothing and issues no
-		// Cmd for either.
-		return m.applyPalette().applyTimestamp(), cmd
+		// The theme, the timestamp form and the keybinding profile apply from the next frame
+		// rather than the next launch (R17). All three are read back off the pane here, which
+		// is the whole mechanism: the root pulls after every key it routed, and the pane
+		// pushes nothing and issues no Cmd for any of them.
+		return m.applyPalette().applyTimestamp().applyProfile(), cmd
 	}
 	if m.tabs[m.active].CapturesInput() {
 		return m.routeKeyToActive(k)
@@ -796,10 +834,11 @@ func (t feedTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 	nm, cmd := t.m.Update(msg)
 	return feedTab{nm}, cmd
 }
-func (t feedTab) View() string         { return t.m.View() }
-func (t feedTab) SetActive(a bool) tab { return feedTab{t.m.SetActive(a)} }
-func (t feedTab) Title() string        { return "Runs" }
-func (t feedTab) CapturesInput() bool  { return t.m.CapturesInput() }
+func (t feedTab) View() string                  { return t.m.View() }
+func (t feedTab) SetActive(a bool) tab          { return feedTab{t.m.SetActive(a)} }
+func (t feedTab) SetProfile(p keys.Profile) tab { return feedTab{t.m.SetProfile(p)} }
+func (t feedTab) Title() string                 { return "Runs" }
+func (t feedTab) CapturesInput() bool           { return t.m.CapturesInput() }
 
 // workflowsTab lifts the Workflows tab into the tab interface (ADR-0011). It lists the
 // Workflows across the discovered repositories and enables or disables one from the cursor
@@ -811,10 +850,11 @@ func (t workflowsTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 	nm, cmd := t.m.Update(msg)
 	return workflowsTab{nm}, cmd
 }
-func (t workflowsTab) View() string         { return t.m.View() }
-func (t workflowsTab) SetActive(a bool) tab { return workflowsTab{t.m.SetActive(a)} }
-func (t workflowsTab) Title() string        { return "Workflows" }
-func (t workflowsTab) CapturesInput() bool  { return t.m.CapturesInput() }
+func (t workflowsTab) View() string                  { return t.m.View() }
+func (t workflowsTab) SetActive(a bool) tab          { return workflowsTab{t.m.SetActive(a)} }
+func (t workflowsTab) SetProfile(p keys.Profile) tab { return workflowsTab{t.m.SetProfile(p)} }
+func (t workflowsTab) Title() string                 { return "Workflows" }
+func (t workflowsTab) CapturesInput() bool           { return t.m.CapturesInput() }
 
 // storageTab lifts the Storage tab into the tab interface (ADR-0011). It is the Reclamation
 // surface: a per-repository rollup and a merged Cache-and-Artifact list, from which a
@@ -827,7 +867,8 @@ func (t storageTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 	nm, cmd := t.m.Update(msg)
 	return storageTab{nm}, cmd
 }
-func (t storageTab) View() string         { return t.m.View() }
-func (t storageTab) SetActive(a bool) tab { return storageTab{t.m.SetActive(a)} }
-func (t storageTab) Title() string        { return "Storage" }
-func (t storageTab) CapturesInput() bool  { return t.m.CapturesInput() }
+func (t storageTab) View() string                  { return t.m.View() }
+func (t storageTab) SetActive(a bool) tab          { return storageTab{t.m.SetActive(a)} }
+func (t storageTab) SetProfile(p keys.Profile) tab { return storageTab{t.m.SetProfile(p)} }
+func (t storageTab) Title() string                 { return "Storage" }
+func (t storageTab) CapturesInput() bool           { return t.m.CapturesInput() }

@@ -279,3 +279,13 @@ func isDigit(k tea.KeyPressMsg) bool {
 	s := k.String()
 	return len(s) == 1 && s[0] >= '0' && s[0] <= '9'
 }
+
+// SetProfile adopts the keybinding profile the operator chose in Settings. Motion keys
+// change only which keystroke a held frame answers, so the change applies from the next
+// keystroke rather than at the next launch, and the root pushes it down the tree it holds
+// (settings R5, R17). The pane's own state is untouched: a confirmation mid-typing keeps
+// its typed count.
+func (m Model) SetProfile(p keys.Profile) Model {
+	m.profile = p
+	return m
+}

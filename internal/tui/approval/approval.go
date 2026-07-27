@@ -428,3 +428,10 @@ func (m Model) environmentIDs() []int64 {
 	}
 	return ids
 }
+
+// SetProfile adopts the keybinding profile the operator chose in Settings, pushed down from
+// the root through the Feed that owns this pane (settings R5, R17).
+func (m Model) SetProfile(p keys.Profile) Model {
+	m.profile = p
+	return m
+}

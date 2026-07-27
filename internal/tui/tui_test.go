@@ -25,6 +25,10 @@ type recordingTab struct {
 	readouts int // count of governor.Readout broadcasts, a subset of data
 	active   bool
 	captures bool
+	// profile is the last keybinding profile the root pushed here, and profiles counts the
+	// pushes, so a test can tell a live change from the one construction applies.
+	profile  keys.Profile
+	profiles int
 	// msgs is every message the root routed here, in order, so a test can assert on what
 	// arrived rather than only on how many did.
 	msgs []tea.Msg
@@ -47,8 +51,17 @@ func (t *recordingTab) Update(msg tea.Msg) (tab, tea.Cmd) {
 }
 func (t *recordingTab) View() string         { return t.title }
 func (t *recordingTab) SetActive(a bool) tab { t.active = a; return t }
-func (t *recordingTab) Title() string        { return t.title }
-func (t *recordingTab) CapturesInput() bool  { return t.captures }
+
+// profiles counts the keybinding profiles the root pushed here, and profile is the last of
+// them, so a test can assert that a live change reached a tab it never routed a key to
+// (settings R5, R17).
+func (t *recordingTab) SetProfile(p keys.Profile) tab {
+	t.profiles++
+	t.profile = p
+	return t
+}
+func (t *recordingTab) Title() string       { return t.title }
+func (t *recordingTab) CapturesInput() bool { return t.captures }
 
 func press(s string) tea.KeyPressMsg {
 	switch s {
@@ -147,10 +160,11 @@ func (p *sizeProbe) Update(msg tea.Msg) (tab, tea.Cmd) {
 	}
 	return p, nil
 }
-func (p *sizeProbe) View() string        { return "" }
-func (p *sizeProbe) SetActive(bool) tab  { return p }
-func (p *sizeProbe) Title() string       { return "probe" }
-func (p *sizeProbe) CapturesInput() bool { return false }
+func (p *sizeProbe) View() string                { return "" }
+func (p *sizeProbe) SetActive(bool) tab          { return p }
+func (p *sizeProbe) SetProfile(keys.Profile) tab { return p }
+func (p *sizeProbe) Title() string               { return "probe" }
+func (p *sizeProbe) CapturesInput() bool         { return false }
 
 // TestQuitOnClosedChannel pins ADR-0015: the root treats a closed engine channel as
 // quit.

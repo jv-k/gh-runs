@@ -264,3 +264,11 @@ func (m Model) sizedTo(w, h int) Model {
 	m.width, m.height = w, h
 	return m
 }
+
+// SetProfile adopts the keybinding profile the operator chose in Settings. The surface
+// outlives the operator's attention and keeps painting the key that stops a Purge (purge
+// R16), so the key it names and the key it answers have to move together and at once.
+func (m Model) SetProfile(p keys.Profile) Model {
+	m.profile = p
+	return m
+}
