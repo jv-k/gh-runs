@@ -18,12 +18,13 @@ var now0 = t0.Add(3 * time.Hour)
 
 // relativeFeed builds a Feed rendering [settings] R10's relative format against a fake
 // clock, which is what makes an age deterministic under a golden (R36: held state alone).
+// The format arrives through the setter rather than a construction option, because that is
+// the one way the root sets it: the setting is live, so the root has to reach a held model.
 func relativeFeed(width, height int) Model {
 	m := New(Options{
-		Profile:   keys.Standard,
-		Timestamp: TimestampRelative,
-		Clock:     clockwork.NewFakeClockAt(now0),
-	})
+		Profile: keys.Standard,
+		Clock:   clockwork.NewFakeClockAt(now0),
+	}).SetTimestampFormat(TimestampRelative)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return m
 }
@@ -114,5 +115,29 @@ func TestAbsoluteTimestampsAreTheDefault(t *testing.T) {
 
 	if view := m.View(); !strings.Contains(view, "2026-07-15T16:39:00Z") {
 		t.Errorf("the default format did not render the absolute instant (R10, R4a):\n%s", view)
+	}
+}
+
+// TestTimestampFormatChangesOnAHeldModel pins the half of settings R17 the root depends on:
+// the format is resolved as a row paints, so setting it on a Feed that already holds Runs
+// repaints them, and the frame R10's deferral froze is repainted with the rest. Without
+// this, the root could push a live change into a Feed that keeps painting the old form.
+func TestTimestampFormatChangesOnAHeldModel(t *testing.T) {
+	m := New(Options{Profile: keys.Standard, Clock: clockwork.NewFakeClockAt(now0)})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 4})
+	id := repoID("cli", "cli")
+	m = discovered(m, repo("cli", "cli", true, false))
+	m = feedRuns(m, id, mkRun(31415926535, "cli", "cli", "CI", domain.StatusInProgress, "", t0))
+
+	if got := startedCell(t, m); got != "2026-07-15T16:39:00Z" {
+		t.Fatalf("the held frame opened rendering %q, want the absolute instant (R10)", got)
+	}
+	m = m.SetTimestampFormat(TimestampRelative)
+	if got := startedCell(t, m); got != "3h" {
+		t.Errorf("a format set on a held model rendered %q, want the age %q (R17)", got, "3h")
+	}
+	m = m.SetTimestampFormat(TimestampAbsolute)
+	if got := startedCell(t, m); got != "2026-07-15T16:39:00Z" {
+		t.Errorf("cycling back rendered %q, want the absolute instant (R17)", got)
 	}
 }

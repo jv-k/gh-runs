@@ -52,7 +52,11 @@ const (
 	rowProfile
 	rowTheme
 	// The timestamp format sits with the theme because it is the other purely presentational
-	// choice: neither changes what the tool does, both change how a frame reads.
+	// choice: neither changes what the tool does, both change how a frame reads, and both
+	// therefore apply from the next frame. What they do not share is a mechanism. The palette
+	// is ambient, so a theme change reaches every view without travelling; the timestamp is a
+	// field on one tab, and the root pushes it there. Both are read off this pane by the root
+	// after every key it routes here, and this pane pushes neither.
 	rowTimestamp
 	rowWorkflowsScope
 	rowStorageScope

@@ -121,12 +121,7 @@ type Options struct {
 	// filter, which matches every Run and is the default (R3). Nothing else applies it: the
 	// composition root publishes the same value to the scheduler before the first poll, so
 	// the opening listing is the filtered one rather than a narrowing of an unfiltered page.
-	Filter filter.Filter
-	// Timestamp is how the STARTED column renders a Run's instant ([settings] R10). The
-	// zero value reads as absolute, the default, so a caller that states no format gets the
-	// rendering live-run-feed R4a sizes the column to. The relative form needs Clock, and
-	// falls back to absolute without one rather than reading a clock of its own.
-	Timestamp   TimestampFormat
+	Filter      filter.Filter
 	DetailFetch rundetail.Fetch
 	Clock       clock.Clock
 	// Ops freezes the selection into a Plan when the delete key opens the confirmation
@@ -161,6 +156,11 @@ type Model struct {
 	// timestamp is the STARTED column's rendering and clk is what the relative form measures
 	// an age from ([settings] R10). The clock is the same one the detail pane takes, injected
 	// once by the root, so the two panes can never disagree about what time it is.
+	//
+	// The zero value reads as absolute, the default, so a Feed nobody set a format on paints
+	// the rendering live-run-feed R4a sizes the column to. The root sets it with
+	// SetTimestampFormat rather than through Options, because the setting is live and the
+	// root has to be able to change it on a held model.
 	timestamp TimestampFormat
 	clk       clock.Clock
 
@@ -319,7 +319,6 @@ func New(opts Options) Model {
 	return Model{
 		active:          true,
 		profile:         opts.Profile,
-		timestamp:       opts.Timestamp,
 		clk:             opts.Clock,
 		setViewport:     opts.SetViewport,
 		setFilter:       opts.SetFilter,
@@ -349,6 +348,17 @@ func New(opts Options) Model {
 		}),
 		approver: opts.Approver,
 	}
+}
+
+// SetTimestampFormat records how the STARTED column renders a Run's instant ([settings]
+// R10). It is a setter on a held model rather than a construction option because the
+// setting applies from the next frame: the root reads it off the Settings pane after every
+// key it routes there and pushes it here, exactly as it pushes the active flag. Nothing is
+// re-rendered by this call, because renderRow resolves the format as it paints, so a frame
+// frozen by R10's deferral still repaints in the new form.
+func (m Model) SetTimestampFormat(f TimestampFormat) Model {
+	m.timestamp = f
+	return m
 }
 
 // SetActive records whether this tab is focused. Losing focus is idle, so it applies the

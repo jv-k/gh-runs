@@ -253,11 +253,9 @@ func New(opts Options) Model {
 		// resolved: config.Load applied the flag over the file over the default before this
 		// value reached the root. There is no second precedence here, and there must not be.
 		Filter: opts.Config.LaunchFilter,
-		// The STARTED column's rendering is the loaded setting (settings R10), converted here
-		// because a tab carries its own vocabulary rather than importing config, exactly as the
-		// two tab scopes are converted for their tabs (ADR-0011). The relative form measures an
-		// age from the clock below, which is the same one the detail pane takes.
-		Timestamp:     feed.TimestampFormat(opts.Config.Timestamp),
+		// The STARTED column's rendering is not set here. It is a live setting, so it travels
+		// applyTimestamp below, which reads the Settings pane and is the only place the root
+		// resolves it. Construction goes through that same path so there is one read.
 		DetailFetch:   opts.DetailFetch,
 		Clock:         opts.Clock,
 		Ops:           opts.Ops,
@@ -315,9 +313,11 @@ func New(opts Options) Model {
 		running:      running.New(opts.Profile).WithRetrier(opts.Retrier),
 		terminalDark: true,
 	}
-	// The palette is applied at construction so the first frame is already painted in the
-	// theme the config resolved, rather than repainting once the terminal answers (R6).
-	return m.applyPalette()
+	// Both live settings are applied at construction, so the first frame is already painted in
+	// the theme and the timestamp form the config resolved rather than repainting after it
+	// (R6, R10). Reading them off the pane here is what makes launch and every later frame one
+	// path instead of two.
+	return m.applyPalette().applyTimestamp()
 }
 
 // applyPalette resolves the theme the Settings pane holds against the terminal's reported
@@ -326,6 +326,30 @@ func New(opts Options) Model {
 // root was constructed with, which is what makes a theme change apply from the next frame.
 func (m Model) applyPalette() Model {
 	palette.Use(palette.ResolveAppearance(m.settings.Config().Theme, m.terminalDark))
+	return m
+}
+
+// applyTimestamp pushes the STARTED column's rendering the Settings pane holds into the Feed
+// (settings R10), and is applyPalette's sibling: the pane is the authority for the running
+// instance (R17), so this reads its config rather than the one the root was constructed with,
+// which is what makes a timestamp change apply from the next frame.
+//
+// It is a push rather than a message because the palette's ambience does not generalise. A
+// palette reaches every view without travelling, and a tab's own field cannot. Pushing it
+// from the root here adds no message class and no routing rule, so nothing changes about
+// which messages reach an inactive tab and live-run-feed R33's background reveal is
+// untouched. It also holds whether or not the Feed is the focused tab, because the root
+// holds every tab and reaches this one by index.
+//
+// The tab's vocabulary is its own, so the config value is converted here, exactly as the two
+// tab scopes are converted for their tabs (ADR-0011).
+func (m Model) applyTimestamp() Model {
+	ft, ok := m.tabs[feedTabIndex].(feedTab)
+	if !ok {
+		return m
+	}
+	f := feed.TimestampFormat(m.settings.Config().Timestamp)
+	m.tabs[feedTabIndex] = feedTab{m: ft.m.SetTimestampFormat(f)}
 	return m
 }
 
@@ -549,9 +573,11 @@ func (m Model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.settings.IsOpen() {
 		var cmd tea.Cmd
 		m.settings, cmd = m.settings.Update(k)
-		// A theme change applies from the next frame rather than the next launch, the second
-		// setting the running view applies to itself after the keybinding profile (R17).
-		return m.applyPalette(), cmd
+		// The theme and the timestamp form apply from the next frame rather than the next
+		// launch (R17). Both are read back off the pane here, which is the whole mechanism:
+		// the root pulls after every key it routed, and the pane pushes nothing and issues no
+		// Cmd for either.
+		return m.applyPalette().applyTimestamp(), cmd
 	}
 	if m.tabs[m.active].CapturesInput() {
 		return m.routeKeyToActive(k)
