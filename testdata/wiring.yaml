@@ -1,8 +1,8 @@
 ---
 version: 2
-# The two one-shot binaries the composition root routes around the local-store, taped over
-# the assembled transport chain: an Artifact download (storage-reclamation R13) and a
-# whole-Run log export (log-viewer R11).
+# The three transfers the composition root routes around the local-store, taped over the
+# assembled transport chain: an Artifact download (storage-reclamation R13), a whole-Run log
+# export (log-viewer R11), and a per-Job log fetch (log-viewer R13).
 #
 # Both have the same shape. The API endpoint answers a redirect to a short-lived signed blob
 # URL, which the client follows to a 200 body. The blob carries an ETag, which is what makes
@@ -60,3 +60,32 @@ interactions:
             Content-Type: ["application/zip"]
             Etag: ['"0x8DBEEFCAFE67890"']
         body: "PK-run-logs-zip-payload\n"
+    # The per-Job log fetch (log-viewer R1), taped in the shape internal/tui/logview's own
+    # job_log.yaml already carries: a 302 from the API endpoint to a signed blob. It is plain
+    # text rather than a zip, which is the reason this one was missed. Size is not the test:
+    # the store's rule is a 200 GET carrying an ETag (local-store R19), and the blob below
+    # carries one, so a fetch routed through the store persists an entry addressed by a URL
+    # that expires in about a minute and can never be requested again (R13).
+    - id: 4
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/jobs/123456789/logs
+      response:
+        status: 302 Found
+        code: 302
+        body: ""
+        headers:
+            Location: ["https://pipelines.blob.example/signed-job-log?sig=ghi789"]
+            X-Ratelimit-Remaining: ["4997"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 5
+      request:
+        method: GET
+        url: https://pipelines.blob.example/signed-job-log?sig=ghi789
+      response:
+        status: 200 OK
+        code: 200
+        headers:
+            Content-Type: ["text/plain; charset=utf-8"]
+            Etag: ['"0x8DBEEFCAFEABCDE"']
+        body: "2026-07-27T12:00:00.0000000Z Run actions/checkout@v4\n"

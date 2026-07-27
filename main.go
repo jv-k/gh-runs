@@ -559,9 +559,15 @@ func discoverBehind(ctx context.Context, sched *scheduler.Scheduler, disc *disco
 // whose subject is reclaiming storage must not consume multiples of an Artifact in hidden
 // storage to hand the user a copy of it.
 //
-// Two transfers are routed this way, and they are the two that have that shape: the Artifact
-// download and the whole-Run log export. Every other request is an API resource, small and
-// revalidatable, and belongs on shared.
+// Three transfers are routed this way, and they are the three that have that shape: the
+// Artifact download, the whole-Run log export and the per-Job log fetch. Every other request
+// is an API resource, small and revalidatable, and belongs on shared.
+//
+// The shape is the redirect to a signed URL, not the size. The per-Job fetch was wired to
+// shared for three stages because it is plain text and reads like an ordinary API call, and
+// the comment above it said so. It is not one: the store persists the blob the redirect leads
+// to, keyed by a URL that expires in about a minute (log-viewer R13). Size is what makes the
+// archive cases expensive, and it is not what makes any of them wrong.
 type clients struct {
 	shared *ghclient.Client
 	blob   *ghclient.Client
@@ -597,6 +603,24 @@ func (c clients) logExport(dir string) logview.Exporter {
 	return logview.ClientExport(c.blob, dir)
 }
 
+// logFetch is the log view's per-Job plain-text seam (log-viewer R1), and the third member of
+// the pair above. Same reason for being named, and the same answer: blob, never shared.
+//
+// It reads like an API resource and is not one. The Job-log endpoint answers a 302 to a signed
+// blob URL, and http.Client follows that redirect through the same Transport, so on shared the
+// blob GET reaches the store. persist runs only on a 200, so it never sees the redirect and
+// always sees the blob, and store.key hashes the request URL, so the entry is addressed by a
+// single-use URL that expires in about a minute and no later request can ever carry. repoOf
+// yields "" for that path, so no repository invalidation reclaims it either. Nothing revalidates
+// it, and R13 says nothing should persist per signed fetch at all.
+//
+// logview's 25 MiB ceiling does not make this safe. It is applied by the consumer, downstream of
+// persist's unconditional read of the whole body, so it bounds what the pane renders rather than
+// what the process resides, and a Job log has no upper bound (R21).
+func (c clients) logFetch() logview.Fetch {
+	return logview.ClientFetch(c.blob)
+}
+
 // tuiDeps is everything the root's dependency set needs that is not a request surface: the
 // resolved settings, the engines, and the directory a download lands in. It is a struct rather
 // than nine parameters because the composition root's dependency list is exactly the kind of
@@ -620,7 +644,8 @@ type tuiDeps struct {
 // the difference between guarding a decision and guarding the place it is taken.
 //
 // Every field naming a client names shared, the surface that enters at the store, except the
-// Artifact download and the whole-Run log export, which name blob (see the clients doc above).
+// Artifact download, the whole-Run log export and the per-Job log fetch, which name blob (see
+// the clients doc above).
 func (c clients) tuiOptions(d tuiDeps) tui.Options {
 	client := c.shared
 	return tui.Options{
@@ -691,17 +716,14 @@ func (c clients) tuiOptions(d tuiDeps) tui.Options {
 		DispatchFetch: dispatch.NewClientFetch(client),
 		DispatchOps:   d.Ops,
 		DispatchStore: d.Store,
-		// The log view fetches a Job's plain text over the same client the whole tool shares
-		// (log-viewer R1), so the store revalidates and the governor accounts it. That fetch is
-		// one small text resource and is bounded at 25 MiB by design.
-		//
-		// The whole-Run archive export is the other case, and it dials blob for the reason the
-		// Artifact download does: it is an unbounded one-shot zip behind a signed URL that lives
-		// about a minute (log-viewer R11, R13), so the store would buffer the whole body and
-		// write an entry nothing can revalidate or address again (see the clients doc). Its
-		// deletion reuses purge, the one mutation entry, so a log DELETE is paced and logged like
-		// every other (R17).
-		LogFetch:  logview.ClientFetch(client),
+		// Both log seams dial blob, and for one reason: each arrives from a signed URL behind a
+		// redirect, which is the response shape ADR-0012 routes around the store. The archive is
+		// an unbounded one-shot zip; the per-Job fetch is plain text and looks like an ordinary
+		// API read, which is exactly why it was wired to shared for three stages and why the
+		// deciding line is now a named function on each (see the clients doc). Log deletion
+		// reuses purge, the one mutation entry, so a log DELETE is paced and logged like every
+		// other (R17).
+		LogFetch:  c.logFetch(),
 		LogExport: c.logExport(d.Downloads),
 		// The approvals decision pane approves a fork-PR Run or reviews a Run's pending deployments
 		// through the same ops engine every other write uses, so an approve and a review are paced
