@@ -1,0 +1,62 @@
+---
+version: 2
+# The two one-shot binaries the composition root routes around the local-store, taped over
+# the assembled transport chain: an Artifact download (storage-reclamation R13) and a
+# whole-Run log export (log-viewer R11).
+#
+# Both have the same shape. The API endpoint answers a redirect to a short-lived signed blob
+# URL, which the client follows to a 200 body. The blob carries an ETag, which is what makes
+# this cassette load-bearing: the local-store persists any 200 GET that carries one, so a
+# transfer routed through the store would be read into memory whole and written to disk a
+# second time. The wiring tests assert that each transfer's own client leaves the store empty
+# and that the shared client does not, so neither assertion can pass vacuously.
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/artifacts/12345/zip
+      response:
+        status: 302 Found
+        code: 302
+        body: ""
+        headers:
+            Location: ["https://pipelines.blob.example/signed-artifact?sig=abc123"]
+            X-Ratelimit-Remaining: ["4999"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 1
+      request:
+        method: GET
+        url: https://pipelines.blob.example/signed-artifact?sig=abc123
+      response:
+        status: 200 OK
+        code: 200
+        headers:
+            Content-Type: ["application/zip"]
+            Etag: ['"0x8DBEEFCAFE12345"']
+        body: "PK-artifact-zip-payload\n"
+    # The whole-Run log archive (log-viewer R11). The measured endpoint answers a 303, not the
+    # Artifact's 302, and the signed URL it names lives about a minute (log-viewer R13), so the
+    # entry the store would write could never be revalidated or even addressed again.
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/runs/98765/logs
+      response:
+        status: 303 See Other
+        code: 303
+        body: ""
+        headers:
+            Location: ["https://pipelines.blob.example/signed-run-logs?sig=def456"]
+            X-Ratelimit-Remaining: ["4998"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 3
+      request:
+        method: GET
+        url: https://pipelines.blob.example/signed-run-logs?sig=def456
+      response:
+        status: 200 OK
+        code: 200
+        headers:
+            Content-Type: ["application/zip"]
+            Etag: ['"0x8DBEEFCAFE67890"']
+        body: "PK-run-logs-zip-payload\n"

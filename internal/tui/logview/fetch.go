@@ -62,12 +62,19 @@ func ClientFetch(client Requester) Fetch {
 	}
 }
 
-// ClientExport is the production Exporter, wired in main.go over the shared ghclient and a
+// ClientExport is the production Exporter, wired in main.go over the blob ghclient and a
 // target directory main.go resolves. It fetches the run-level archive, follows the 303, and
 // streams the zip to disk exactly as received, without unpacking, because unpacking assumes a
 // directory the user did not ask for (R11). It writes one deterministic filename per Run and
 // streams rather than buffering, so a large archive never lands in memory. The archive is the
 // one fetch of everything, and it is here and nowhere the render path can reach (AC5).
+//
+// The blob client is load-bearing to that streaming claim, not an implementation detail of
+// main.go: the local-store's transport reads any 200 GET carrying an ETag into memory whole
+// before this function sees the body, so on the shared client the io.Copy below would stream
+// out of a buffer that already held the entire archive, and the store would then keep a copy
+// of it that the signed single-use URL can never revalidate. blob shares the governor and the
+// limiter and stops short of the store.
 func ClientExport(client Requester, dir string) Exporter {
 	return func(repo domain.RepoID, runID int64) (string, error) {
 		resp, err := client.Request(http.MethodGet, archivePath(repo, runID), nil)
