@@ -107,7 +107,21 @@ The server's `created` parameter filters on `created_at`, and [cli-surface](../f
 
 `Match` plus the grammar are the axis's whole surface. `ParseQuery` accepts `repo:OWNER/REPO` and `repo:HOST/OWNER/REPO` through `domain.ParseRepoRef`, the one validation door ([ADR-0009](./0009-repository-identity-is-host-qualified.md)). Repeated tokens accumulate, OR within the axis. `QueryString` renders the bare `OWNER/REPO` form, which round-trips exactly because `NewRepoID` admits no host but github.com. `Query()` still emits nothing for the axis and cannot, because no such parameter exists.
 
-A named repository is not "the repository of the working directory". `Repos` holds parsed identities, and a sentinel resolved per launch is a change to this type that would have to earn its way back through this ADR. Issue #117 carries that.
+### The working directory's repository is a marker, not an identity
+
+A named repository is not "the repository of the working directory", and [settings](../features/settings/requirements.md) R19's note makes the second one the Runs tab's equivalent of the scope key the other two tabs carry. `Repos` holds parsed identities, so the unresolved value has nowhere to sit in it. Issue #117 took the decision, and it is a field.
+
+**`Filter` gains one marker beside `Repos`, and a pure method that resolves it.** The marker states that the working directory's repository is part of the axis. The method takes that repository as an argument, as a value and a reported presence, and returns a `Filter` whose `Repos` carries it. Nothing in this package looks the repository up: the argument is the whole of what it is handed, which is the same rule that keeps the `Workflow` selector unresolved here.
+
+**The marker is spelled `repo:this-repo`,** in the input's grammar and in `launch_filter.repos`, the word `workflows_scope` and `storage_scope` already use for the same idea. `ParseQuery` sets the marker, `QueryString` renders it, so a filter carrying it round-trips exactly as a named entry does. The token cannot collide with a repository reference, because `domain.ParseRepoRef` requires two segments and this has one.
+
+**It is an OR member, with no special case.** `repo:this-repo repo:cli/cli` matches either, the resolved identity joins the set, and a duplicate collapses, which is the axis's stated rule applied rather than excepted. Exclusivity was considered and refused: one entry in a list silently annulling the others is a rule no other axis has and every reader would have to remember.
+
+**`Match` ignores an unresolved marker,** so a consumer that never resolves widens rather than narrowing to nothing. That is the direction [settings](../features/settings/requirements.md) R19 already chose for the same failure (fall back and say so, never paint an empty view), and it is the reason the marker is a field rather than a sentinel `RepoID`: a structurally valid identity that matches no Run would fail closed and silently.
+
+**Resolution is the consumer's, at match time, and the stored value stays unresolved.** The Feed takes the same `CurrentRepo func() (domain.RepoID, bool)` seam the Workflows and Storage tabs already take from `main.go`, and resolves where it matches, holding the stated filter for its input line and its filter label. Resolving on adoption instead would rewrite the operator's `repo:this-repo` into a name under them. Resolving into `config.Config` would be worse: that value is what the Settings view edits and saves, so the first save in any directory would write the resolved name over the marker, which is the R17 defect that kept the repository axis out of the file to begin with.
+
+**The say-so obligation travels with the capability.** Where the marker resolves to nothing, the axis contributes nothing and the Feed states the fallback in its filter line, which is R19's rule for the other two tabs applied to the surface that now has their capability.
 
 ## One measurement flagged, not taken
 
@@ -129,6 +143,14 @@ Which field the server's `actor` parameter matches is unmeasured: `Actor` and `T
 
 **Opaque `url.Values` into the engine.** Covered above: resolution and request shaping migrate into the TUI, against [ADR-0015](./0015-the-async-model.md).
 
+**A third scope key for the Runs tab**, `runs_scope: all-repos | this-repo` beside the other two. Costs this ADR nothing, reuses the wiring the other two tabs already have, and gets R17's round trip free because an enum row is not a text buffer. Refused because it gives the Feed two repository axes that can disagree, where [settings](../features/settings/requirements.md) R19's note already fixes the mechanism as the filter the Feed has and the other two tabs lack.
+
+**A sentinel `domain.RepoID` inside `Repos`.** No new field, one list. Refused because the marker would be a structurally valid identity that no Run ever equals, so an unresolved filter narrows to nothing with no diagnostic, and every consumer of `Repos` (the config writer, the Settings row's renderer, the exclude list) would have to learn to spot it.
+
+**`Repos` as a list of a ref sum type**, each entry an identity or the marker. The most honest modelling of an axis that genuinely holds two kinds of thing. Refused on this ADR's own closing rule: it changes the field three consumers and the engine compile against, and every read site pays the unwrap forever, to buy what one boolean buys.
+
+**Resolving at config load.** Simplest type story, no marker past the loader. Refused because `config.Config` is what the Settings view edits and saves, so the first save writes the resolved name over the marker, in whatever directory the operator happens to be in.
+
 ## Consequences
 
 **`filter` stays free of I/O.** Parse, classify, compare. Nothing in the package issues a request, resolves a selector, or holds a list it did not receive as an argument.
@@ -144,3 +166,7 @@ Which field the server's `actor` parameter matches is unmeasured: `Actor` and `T
 **`cli` stays the thin adapter cli-surface says it is.** Flags fill the struct, `ParseStatus` and `ParseCreated` do the rejecting, and R6's by-name errors come from `filter` for every consumer.
 
 **Axes are additive, semantics are decisions.** A new axis a requirement names is a diff: a field, its `Match` arm, and a `Query` arm if the server honours one. Changing an existing axis's field or matching rule is a change to the contract three consumers and the engine compile against, and earns its way back through here.
+
+**`Filter` now holds a value that is not yet a filter.** The marker is the first field whose meaning depends on something outside the struct, and it is bounded on purpose: one field, one resolution method, `Match` widening where it is unresolved. A second such field would be a decision, not a diff, because the invariant "a `Filter` states its whole meaning" is what the first one spends.
+
+**A tenth field, and the guard test that counts them.** `TestLaunchFilterAxisCountIsDeliberate` asserts `filter.Filter`'s field count against the sub-keys `launch_filter` carries, and the marker rides inside the existing `repos` key rather than adding a tenth. The test's constants have to say so, which is the test doing its job rather than the test being wrong.
