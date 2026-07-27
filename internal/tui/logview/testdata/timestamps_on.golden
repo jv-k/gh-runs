@@ -1,6 +1,6 @@
 [1mcli/cli · CI · Job: build[m
 
-[1;38;2;0;175;255;48;2;48;48;48m▸ 2026-07-15T03:11:52.0835958Z Set up job[m
+[1;38;2;255;255;255;48;2;68;68;68m▸ 2026-07-15T03:11:52.0835958Z Set up job[m
 [1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Run actions/checkout@v4[m
 [1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Set up Go[m
 [1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Restore cache[m
@@ -15,4 +15,4 @@
 [1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Post Run actions/checkout@v4[m
 [1;38;2;0;175;255m▸ 2026-07-15T03:11:52.0835958Z Complete job[m
 
-[38;2;138;138;138mt timestamps · space fold · / search · D delete logs · e export · r refetch · esc close[m
+[38;2;158;158;158mt timestamps · space fold · / search · D delete logs · e export · r refetch · esc close[m

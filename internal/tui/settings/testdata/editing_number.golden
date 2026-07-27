@@ -1,5 +1,5 @@
 [1mSettings[m
-[38;2;138;138;138mChanges are saved to your config file.[m
+[38;2;158;158;158mChanges are saved to your config file.[m
 
   Budget                    [1;38;2;0;175;255mnormal[m
   Keybinding profile        [1;38;2;0;175;255mvim[m
@@ -14,5 +14,5 @@
   Purge breaker threshold   [1;38;2;0;175;255m50[m
 [38;2;0;175;255m> [m[1mDiscovery refresh         [m[1;38;2;0;175;255m15[m[38;2;0;175;255m_[m
 
-[38;2;138;138;138mHow quickly a newly active repository shows up, in minutes.[m
-[38;2;138;138;138menter commit   esc cancel[m
+[38;2;158;158;158mHow quickly a newly active repository shows up, in minutes.[m
+[38;2;158;158;158menter commit   esc cancel[m

@@ -109,28 +109,91 @@ func pair(dark, light string) Colour {
 	return Colour{dark: lipgloss.Color(dark), light: lipgloss.Color(light)}
 }
 
-// The roles. Every dark value is the literal the views carried before this package existed,
-// so the dark appearance is byte-identical to what every golden already holds. The light
-// values are the same hues darkened to carry on white, because a mid-tone chosen against a
-// black background is the one that disappears on a light one.
+// The reference backgrounds settings R22 measures against. They are exported so R22's numbers
+// exist in code rather than only in prose, and so the property test reads the same values the
+// canon names instead of a copy of them.
+//
+// They are an assumption and are named as one. The tool paints onto the terminal's own
+// background and never sets one: it asks at startup and keeps only whether the answer is dark.
+// So these are the worst case committed to rather than the best case citable. Contrast to a
+// dark foreground rises as the background lightens, so a role clearing #faf4f2 clears
+// solarized-light, #fafafa and white by construction (ADR-0024).
+const (
+	// ReferenceBackgroundDark is Monokai Pro, the dark appearance's reference.
+	ReferenceBackgroundDark = "#2d2a2e"
+	// ReferenceBackgroundLight is Monokai Pro Light, the light appearance's reference.
+	ReferenceBackgroundLight = "#faf4f2"
+)
+
+// Highlight is a foreground and a background painted together, in both appearances. It is one
+// thing rather than two Roles, because applying its background applies its foreground with it,
+// which is what makes its contrast exactly known instead of a cross product against whatever
+// colour the text already carried (CONTEXT.md, settings R22).
+//
+// That collapse is the point. Six foreground roles could land on the log viewer's search
+// match, and the worst of them painted at 1.95:1, which is the worst contrast in the tool and
+// the one case it controls completely. A highlighted line loses its severity colour for as
+// long as it is highlighted, and that costs nothing the canon requires: R16 already forbids
+// meaning riding on colour alone.
+type Highlight struct {
+	fg Colour
+	bg Colour
+}
+
+// Foreground is the colour a highlighted run of text is painted in.
+func (h Highlight) Foreground() Colour { return h.fg }
+
+// Background is the colour painted behind it.
+func (h Highlight) Background() Colour { return h.bg }
+
+// highlight builds a Highlight from its four values, each appearance's foreground beside its
+// own background, dark first for the reason pair takes dark first.
+func highlight(darkFg, darkBg, lightFg, lightBg string) Highlight {
+	return Highlight{
+		fg: pair(darkFg, lightFg),
+		bg: pair(darkBg, lightBg),
+	}
+}
+
+// The roles. Every dark value but Muted is the literal the views carried before this package
+// existed. The light values are the same hues darkened to carry on a light background, because
+// a mid-tone chosen against a black background is the one that disappears on a light one.
+//
+// Several values are free hex rather than xterm-256 cube entries, and that is a real cost
+// accepted rather than an oversight. At the dark end the cube has too few distinct saturated
+// colours to give fourteen roles distinct values above the floor: darkening Failing and Warn
+// inside it lands both on Attention's value, and Positive and Success land on Passed and
+// Requested. On a 256-colour terminal colorprofile quantizes these back toward those same cube
+// entries, so that terminal sees a compression the palette cannot prevent (ADR-0024).
 //
 // Meaning never rides on colour alone (R16), so none of these carries a distinction that
 // its text label does not also carry. They exist to make a frame readable, not to encode.
 //
-// Four light values sit below WCAG AA's 4.5:1 on white, Failing worst at 3.80:1, measured
-// and tracked in issue #93. A role added here should beat that line rather than match these.
-// The dark values must not move: every golden in the tree is taken under them.
+// Every value here clears settings R22's floor against its appearance's reference background,
+// and a role or highlight added here MUST clear it too. The floor is 4.5:1 by WCAG 2.x for a
+// Role, and for a Highlight it is 4.5:1 between its own pair plus CIE76 ΔE 10 from the
+// reference background, so the highlight is discernible at all. TestEveryRoleClearsThe-
+// ContrastFloor and its Highlight counterpart enforce both over the whole set, and the golden
+// beside them records the measured figure for each. Aim at 5.0 rather than at 4.5 where the
+// hue allows: the margin is what stops a later adjustment to a reference background dropping
+// a role below the line (ADR-0024).
+//
+// The dark values are no longer frozen. This comment used to say they must not move because
+// every golden in the tree is taken under them, and dark Muted at 4.10 was the one role below
+// the floor. A colour change never moves a cell width, so regenerating those goldens is a pure
+// byte substitution of one SGR triple rather than a review of 65 frames, and the invariant was
+// protecting the goldens' convenience rather than anything a user could observe (ADR-0024).
 var (
 	// Muted is secondary text: help lines, column rules, a completed or cancelled state.
-	Muted = pair("#8a8a8a", "#6c6c6c")
+	Muted = pair("#9e9e9e", "#6c6c6c")
 	// Danger is failure, deletion and anything irreversible.
 	Danger = pair("#ff5f5f", "#d70000")
 	// Warn is a caution short of failure: a timed-out Run, a confirmation's warning line.
-	Warn = pair("#ff875f", "#af5f00")
+	Warn = pair("#ff875f", "#8c4a00")
 	// Failing is a repository whose polling is failing. It is deliberately not Danger:
 	// exhaustion and a failing repository can be on screen together, and in one colour they
 	// would read as a single condition (live-run-feed's failed-poll indicator).
-	Failing = pair("#ff8700", "#d75f00")
+	Failing = pair("#ff8700", "#a34700")
 	// Attention is a state waiting on a person: pending, action required, a disabled Workflow.
 	Attention = pair("#ffaf00", "#875f00")
 	// Queued is the queued Status, distinct from Attention so the two do not read alike.
@@ -142,41 +205,62 @@ var (
 	// Info is an action offered on a row, a step below Accent.
 	Info = pair("#5fafd7", "#005f87")
 	// Positive is an enabled Workflow and an Artifact row.
-	Positive = pair("#87d787", "#008700")
+	Positive = pair("#87d787", "#007a00")
 	// Success is an operation that finished cleanly, in a pane that reports one.
-	Success = pair("#5fd75f", "#00875f")
+	Success = pair("#5fd75f", "#00785a")
 	// Passed is the successful Conclusion, and a command line in a log.
 	Passed = pair("#5faf5f", "#005f00")
 	// Waiting is a Run held for a deployment or an approval, and the approvals badge.
 	Waiting = pair("#af87ff", "#5f00d7")
 	// Requested is the requested Status, and a notice line in a log.
 	Requested = pair("#00d7af", "#005f5f")
-	// CursorBackground is the log viewer's current line.
-	CursorBackground = pair("#303030", "#d0d0d0")
-	// MatchBackground is a search hit in the log viewer.
-	MatchBackground = pair("#5f5f00", "#ffff87")
 )
 
-// Roles returns every role by name, so a test can assert a property over the whole set
-// rather than over the entries someone remembered to list. The map is built per call, so a
-// caller cannot reach the package's own values.
+// The highlights. Each is a foreground and a background painted together, so the contrast a
+// highlighted line paints at is exactly these two values rather than whatever severity colour
+// the line already carried. The paired foregrounds are #ffffff on both dark backgrounds and
+// #1c1c1c on both light ones, and all four clear 5.0.
+var (
+	// Cursor is the log viewer's current line. Its dark background moved from #303030, which
+	// is CIE76 ΔE 3.9 from the dark reference background and therefore invisible on the very
+	// terminal theme that reference adopts (ADR-0024).
+	Cursor = highlight("#ffffff", "#444444", "#1c1c1c", "#d0d0d0")
+	// Match is a search hit in the log viewer. Both backgrounds are unchanged: they were
+	// always discernible, and it was the foreground landing on them that was not.
+	Match = highlight("#ffffff", "#5f5f00", "#1c1c1c", "#ffff87")
+)
+
+// Roles returns every role by name, and foregrounds only, so a test can assert a property over
+// the whole set rather than over the entries someone remembered to list. The highlights are
+// Highlights' to return, because each is a pair and R22 measures a pair differently. The map is
+// built per call, so a caller cannot reach the package's own values.
 func Roles() map[string]Colour {
 	return map[string]Colour{
-		"Muted":            Muted,
-		"Danger":           Danger,
-		"Warn":             Warn,
-		"Failing":          Failing,
-		"Attention":        Attention,
-		"Queued":           Queued,
-		"Accent":           Accent,
-		"Selected":         Selected,
-		"Info":             Info,
-		"Positive":         Positive,
-		"Success":          Success,
-		"Passed":           Passed,
-		"Waiting":          Waiting,
-		"Requested":        Requested,
-		"CursorBackground": CursorBackground,
-		"MatchBackground":  MatchBackground,
+		"Muted":     Muted,
+		"Danger":    Danger,
+		"Warn":      Warn,
+		"Failing":   Failing,
+		"Attention": Attention,
+		"Queued":    Queued,
+		"Accent":    Accent,
+		"Selected":  Selected,
+		"Info":      Info,
+		"Positive":  Positive,
+		"Success":   Success,
+		"Passed":    Passed,
+		"Waiting":   Waiting,
+		"Requested": Requested,
+	}
+}
+
+// Highlights returns every highlight by name, the companion to Roles and for the same reason:
+// a test asserts R22 over the whole set rather than over the entries someone remembered to
+// list. Both accessors exist because the two carry different obligations, and a Highlight
+// measured as though it were a Role would be measured against the terminal background it never
+// touches. The map is built per call, so a caller cannot reach the package's own values.
+func Highlights() map[string]Highlight {
+	return map[string]Highlight{
+		"Cursor": Cursor,
+		"Match":  Match,
 	}
 }

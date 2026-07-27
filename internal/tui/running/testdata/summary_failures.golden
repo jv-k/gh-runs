@@ -1,5 +1,5 @@
-[1;38;2;95;215;95mPurge finished[m   [38;2;0;175;255m18,201[m deleted   14 gone   36 skipped   [38;2;255;95;95m7 failed[m   [38;2;138;138;138mof 18,258[m
+[1;38;2;95;215;95mPurge finished[m   [38;2;0;175;255m18,201[m deleted   14 gone   36 skipped   [38;2;255;95;95m7 failed[m   [38;2;158;158;158mof 18,258[m
   [38;2;255;95;95m5 x failed: HTTP 403: Must have admin rights to Repository.[m
   [38;2;255;95;95m2 x failed: HTTP 500[m
-  [38;2;138;138;138m36 x skipped: run is not completed[m
-[38;2;138;138;138mctrl+r retry 7 failures   ctrl+x dismiss[m
+  [38;2;158;158;158m36 x skipped: run is not completed[m
+[38;2;158;158;158mctrl+r retry 7 failures   ctrl+x dismiss[m
