@@ -72,18 +72,20 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 | Tab by position | `1`, `2`, `3` | R2. Three tabs is few enough to address directly |
 | Settings | `,` | R2. Reachable from any tab, and never a fourth tab |
 | Toggle row selection | `space` | R4 in [purge](../purge/requirements.md) |
-| Apply deferred changes, refresh | `r` | R10. Applies rows the Feed already holds, and issues no request |
-| Full refresh | `u` | [repo-discovery](../repo-discovery/requirements.md) R11's on-demand full refresh, and the only door back for a repository R23 retired |
+| Apply deferred changes, refresh | `r` | R10 and R11. R11's affordance must name this key |
+| Full refresh | `u` | [repo-discovery](../repo-discovery/requirements.md) R11's on-demand full refresh, and the only door back for a repository its R23 retired |
 | Open Run detail | `enter` | [BUILD-ORDER](../../BUILD-ORDER.md) stage 8 |
 | Filter | `/` | R22, R23 |
 | Help | `?` | `bubbles/help` renders the registry |
 | Quit | `q`, `ctrl+c` | R7. Ctrl+C quits in both and binds to nothing else |
 
-**Refresh split into two keys, and this table used to give both jobs to `r`.** The row read "R10 and R11. R11's affordance must name this key", which was written before either had an implementation and priced them as one action. They are not one action, and the gap is three orders of magnitude. `r` applies rows the Feed already holds and issues **no request at all**, which is why it is safe to press constantly and why R10 wants it on the cheapest key there is. [repo-discovery](../repo-discovery/requirements.md) R11's full refresh re-enumerates the account and re-probes every repository, which is the reference cost model's expensive case: two enumeration requests plus one per repository, about 3% to 4% of the hourly primary allowance at the reference account's ~163. Bound to one key, an operator applying deferred rows five times would spend a fifth of their hourly allowance without asking for anything.
+**The two R11s in that table are different requirements, and `r`'s row means this document's.** R11 here is the deferred-change affordance, which must name the key that applies it, so `r`'s row is unchanged and R10 and R11 keep it. [repo-discovery](../repo-discovery/requirements.md) R11 is the on-demand full refresh, a different requirement in a different document that this table never bound to any key. `u` is new rather than a reassignment, and nothing moved off `r`.
 
-So `r` keeps R10 and `u` carries R11. The choice of `u` is unremarkable and the separation is not: `r`, `R` and `F` are all taken, and `f` would sit one shift from re-run-failed. It is a bare letter rather than a chord because [ADR-0011](../../adr/0011-package-layout-and-dependency-direction.md) reserves chords for the running surface's two bindings, which stay live for hours over a tab whose bare letters delete and re-run, and this is an ordinary list action.
+**They are not one action, which is why one key could not have carried both.** The gap is three orders of magnitude. `r` applies rows the Feed already holds and issues **no request at all**, which is why it is safe to press constantly and why R10 and R11 want it on the cheapest key there is. A full refresh re-enumerates the account and re-probes every repository, the reference cost model's expensive case: two enumeration requests plus one per repository, about 3% to 4% of the hourly primary allowance at the reference account's ~163. Sharing a key, an operator applying deferred rows five times would spend a fifth of their hourly allowance without asking for anything, and R11's affordance here would be naming a key that does something it does not mention.
 
-**`u` fires immediately and asks nothing.** It is a read, the governor already stops a burst that meets exhaustion ([repo-discovery](../repo-discovery/requirements.md) R17), and [purge](../purge/requirements.md)'s graduated friction exists for irreversible writes. Friction here would sit on the one action that recovers a repository R23 retired in error, which is the path that must stay cheapest to take.
+The choice of `u` is unremarkable and the separation is not: `r`, `R` and `F` are all taken, and `f` would sit one shift from re-run-failed. It is a bare letter rather than a chord because [ADR-0011](../../adr/0011-package-layout-and-dependency-direction.md) reserves chords for the running surface's two bindings, which stay live for hours over a tab whose bare letters delete and re-run, and this is an ordinary list action.
+
+**`u` fires immediately and asks nothing.** It is a read, the governor already stops a burst that meets exhaustion ([repo-discovery](../repo-discovery/requirements.md) R17), and [purge](../purge/requirements.md)'s graduated friction exists for irreversible writes. Friction here would sit on the one action that recovers a repository [repo-discovery](../repo-discovery/requirements.md) R23 retired in error, which is the path that must stay cheapest to take.
 
 | Confirm modal | Both profiles | Required by |
 |---|---|---|

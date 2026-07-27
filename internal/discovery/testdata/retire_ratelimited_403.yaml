@@ -1,6 +1,10 @@
 ---
 version: 2
 interactions:
+    # See PROVENANCE.md: composed in whole, nothing here was recorded. The probes carry
+    # no ETag so every re-probe is unconditional and these interactions play in taped
+    # order, each consumed once. The two 403 bodies differ only in documentation_url,
+    # which is what the governor's classifier reads. Measure before editing a request line.
     # AC16, fourth sequence: a 403 carrying the governor's rate-limited verdict retires
     # nothing however many consecutive times it arrives. The body names a rate-limit
     # page, which names no resource of ours, so the governor classifies it as rate

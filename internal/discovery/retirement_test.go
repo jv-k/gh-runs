@@ -218,33 +218,56 @@ func TestACountOfOneSurvivesALaunch(t *testing.T) {
 	}
 }
 
-// TestADocumentWithoutTheCountFieldReloadsAtZero is AC17's third survival. A record
-// persisted before the field existed reloads with the count at zero, which delays a
-// retirement and never causes one. pass_basic.yaml's document is written by a pass
-// that never failed, so every count in it is the zero value, which is exactly the
-// shape an older document has.
+// TestADocumentWithoutTheCountFieldReloadsAtZero is AC17's third survival: "A document
+// written before the count field existed reloads with every count at zero and retires
+// nothing on reload alone."
+//
+// It seeds a document shaped like one written before the field existed, through the real
+// store, rather than one written by a pass that happened to record no failures. Those are
+// different documents: the second carries "definitive_failures": 0 and the first carries no
+// such key at all, and only the first is what an upgrading user has on disk.
+//
+// The cassette holds two 404s and no success, so the reloaded count is what decides when
+// retirement lands. A document reloading at one would retire on the FIRST of them.
 func TestADocumentWithoutTheCountFieldReloadsAtZero(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
+	alpha := alphaID(t)
 
-	h := newHarness(t, "pass_basic", dir)
-	if err := h.disc.Pass(ctx, nil); err != nil {
-		t.Fatalf("pass: %v", err)
-	}
+	h := newHarness(t, "retire_from_reload", dir, withSequentialReplay())
 
-	next := h.relaunch()
-	n := next.Reload()
-	if n == 0 {
-		t.Fatal("the reload read nothing, so there is no document to assert about")
+	// A record with no definitive_failures key, which is exactly what the field's
+	// introduction leaves on an existing user's disk.
+	type legacyRecord struct {
+		Host        string             `json:"host"`
+		Owner       string             `json:"owner"`
+		Name        string             `json:"name"`
+		Permissions domain.Permissions `json:"permissions"`
+		HasRuns     bool               `json:"has_runs"`
+		Known       bool               `json:"known"`
 	}
-	if got := len(next.Records()); got != n {
-		t.Errorf("reload admitted %d records but reported %d, want them equal", got, n)
+	h.store.SaveDoc("discovery", []legacyRecord{{
+		Host: domain.HostGitHub, Owner: "jv-k", Name: "alpha", HasRuns: true, Known: true,
+	}})
+
+	if n := h.disc.Reload(); n != 1 {
+		t.Fatalf("the seeded document reloaded %d records, want 1", n)
 	}
-	for _, r := range next.Records() {
+	for _, r := range h.disc.Records() {
 		if r.DefinitiveFailures != 0 {
-			t.Errorf("%s reloaded carrying %d definitive failures, want zero on a document that recorded none",
+			t.Errorf("%s reloaded carrying %d definitive failures, want zero from a document with no such field",
 				r.ID(), r.DefinitiveFailures)
 		}
+	}
+
+	h.disc.Reprobe(ctx, []domain.RepoID{alpha}, nil)
+	if !holds(h.disc, alpha) {
+		t.Error("one definitive failure retired a repository reloaded from a pre-field document, so the count did not reload at zero")
+	}
+
+	h.disc.Reprobe(ctx, []domain.RepoID{alpha}, nil)
+	if holds(h.disc, alpha) {
+		t.Error("the second definitive failure did not retire it, so the reloaded count is not being counted at all")
 	}
 }
 

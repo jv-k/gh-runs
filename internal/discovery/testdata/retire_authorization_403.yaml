@@ -1,6 +1,10 @@
 ---
 version: 2
 interactions:
+    # See PROVENANCE.md: composed in whole, nothing here was recorded. The probes carry
+    # no ETag so every re-probe is unconditional and these interactions play in taped
+    # order, each consumed once. The two 403 bodies differ only in documentation_url,
+    # which is what the governor's classifier reads. Measure before editing a request line.
     # R23's other definitive signal: a 403 the governor reports as NOT rate limiting.
     # Its documentation_url points at the reference page for the endpoint requested
     # (workflow-runs names runs), which is the correspondence the governor's classifier

@@ -46,7 +46,7 @@ func RateLimitedHeaders(h http.Header) bool {
 	return h.Get(rateLimitedHeader) == "true"
 }
 
-// Classified reports whether the governor stamped a verdict on these headers at
+// ClassifiedHeaders reports whether the governor stamped a verdict on these headers at
 // all, which is a different question from what the verdict was.
 //
 // RateLimitedHeaders collapses the two: an unclassified response and one classified
@@ -61,7 +61,7 @@ func RateLimitedHeaders(h http.Header) bool {
 // A response that travelled the transport chain is always stamped, so this separates
 // a real verdict from one that never reached the governor rather than from one it
 // declined to give.
-func Classified(h http.Header) bool {
+func ClassifiedHeaders(h http.Header) bool {
 	return h.Get(rateLimitedHeader) != ""
 }
 

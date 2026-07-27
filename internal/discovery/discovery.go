@@ -341,12 +341,20 @@ func recordFrom(id domain.RepoID, repo apiRepo, hasRuns bool) Record {
 // than Go's map order, which makes a failing test reproducible. It is not a priority
 // and must not be read as one.
 func (d *Discovery) PollSet() []domain.RepoID {
+	return d.idsWhere(func(r Record) bool { return r.HasRuns })
+}
+
+// idsWhere is the sorted projection PollSet and Membership are each one predicate over.
+// The sort is not a priority and no consumer depends on it: it is here so the same set
+// yields the same slice twice, rather than Go's map order, which makes a failing test
+// reproducible.
+func (d *Discovery) idsWhere(keep func(Record) bool) []domain.RepoID {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	keys := make([]string, 0, len(d.records))
 	for key, r := range d.records {
-		if r.HasRuns {
+		if keep(r) {
 			keys = append(keys, key)
 		}
 	}
@@ -371,24 +379,9 @@ func (d *Discovery) PollSet() []domain.RepoID {
 // that meaningful: before R23 nothing ever left the set, so absence could never
 // occur and neither prune could fire.
 //
-// The order is sorted by host-qualified key, for PollSet's reason and no other: the
-// same set yields the same slice twice, which makes a failing test reproducible. It
-// is not a priority.
+// The order is sorted by host-qualified key, for PollSet's reason and no other.
 func (d *Discovery) Membership() []domain.RepoID {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	keys := make([]string, 0, len(d.records))
-	for key := range d.records {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	ids := make([]domain.RepoID, 0, len(keys))
-	for _, key := range keys {
-		ids = append(ids, d.records[key].ID())
-	}
-	return ids
+	return d.idsWhere(func(Record) bool { return true })
 }
 
 // Records returns a copy of the whole classified set, both the poll set and the

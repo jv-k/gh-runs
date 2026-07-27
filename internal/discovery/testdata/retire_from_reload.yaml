@@ -1,0 +1,46 @@
+---
+version: 2
+interactions:
+    # See PROVENANCE.md: composed in whole, nothing here was recorded. It holds two 404s
+    # for one repository and NO enumeration and NO success, so a test drives it from a
+    # seeded document via Reload rather than from a Pass. That is what makes the count a
+    # reloaded one: if a pre-field document reloaded at anything but zero, the FIRST of
+    # these two would retire the repository and the test would fail.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 404 Not Found
+        code: 404
+        body: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 404 Not Found
+        code: 404
+        body: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"

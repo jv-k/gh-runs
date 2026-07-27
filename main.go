@@ -335,7 +335,7 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 		Discovery:   disc,
 		Ops:         purge,
 		Downloads:   downloadDir(),
-		FullRefresh: fullRefresh(ctx, sched, disc),
+		FullRefresh: fullRefresh(ctx, sched, disc, first),
 	}))
 
 	// tea.WithContext ties the program to the same context the engine runs under, so a
@@ -478,13 +478,33 @@ func classifiedBy(disc *discovery.Discovery) func(domain.RepoID) bool {
 //
 // It passes the program's context, so quitting mid-pass unwinds it with everything else,
 // and tells the engine per repository as each is classified, exactly as the launch pass
-// does. An error is reported to stderr and nothing else: the sets the root pulls are
-// unchanged by a failed pass, so the Feed keeps showing what it had.
-func fullRefresh(ctx context.Context, sched *scheduler.Scheduler, disc *discovery.Discovery) func() {
+// does.
+//
+// A failed pass is silent to the operator, and this comment used to imply otherwise. The
+// stderr line below paints into the alt screen the program holds and is erased by the next
+// frame, so it reaches a redirected stderr and nobody watching the terminal. That matches
+// what discoverBehind already does at launch, and it is a real gap rather than a decision:
+// surfacing it wants a message class and a chrome line the Feed does not have. The Feed
+// keeps showing what it had, which is correct but unexplained.
+func fullRefresh(ctx context.Context, sched *scheduler.Scheduler, disc *discovery.Discovery, launch domain.RepoID) func() {
 	return guardOnePass(func() {
-		if err := disc.Pass(ctx, func(discovery.Record) { sched.PollSetChanged() }); err != nil {
+		tellEngine := func(discovery.Record) { sched.PollSetChanged() }
+		if err := disc.Pass(ctx, tellEngine); err != nil {
 			fmt.Fprintln(os.Stderr, "gh-runs: full refresh failed:", err)
+			// R22 adopts "when enumeration completes", and a failed pass has not completed.
+			// Adopting on a partial set would mark an ordinary member Adopted, a
+			// session-scoped membership the next launch would not re-admit. Same rule
+			// discoverBehind applies at launch, and the same reason.
+			return
 		}
+		// Re-adopt the launch repository, exactly as the launch path does. Without this the
+		// full refresh is the door back for an enumerated repository and not for an adopted
+		// one (R22): a repository outside the account enumeration is not re-admitted by a
+		// pass, so R23 could retire the very repository the operator is standing in and
+		// nothing inside the tool would bring it back. AdoptLaunchRepo returns immediately
+		// for a zero identity, an excluded repository and one enumeration already made
+		// Known, so the ordinary case costs no request.
+		_ = disc.AdoptLaunchRepo(ctx, launch, tellEngine)
 	})
 }
 

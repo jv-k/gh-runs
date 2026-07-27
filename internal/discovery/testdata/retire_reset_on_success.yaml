@@ -1,6 +1,10 @@
 ---
 version: 2
 interactions:
+    # See PROVENANCE.md: composed in whole, nothing here was recorded. The probes carry
+    # no ETag so every re-probe is unconditional and these interactions play in taped
+    # order, each consumed once. The two 403 bodies differ only in documentation_url,
+    # which is what the governor's classifier reads. Measure before editing a request line.
     # AC16, second sequence: 404 then 200 leaves the repository present, and a third
     # 404 does not retire it, which is the count having reset.
     # Interaction 0: enumeration, one page, no rel="next", so the walk stops here.

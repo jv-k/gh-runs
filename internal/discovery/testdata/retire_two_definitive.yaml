@@ -1,6 +1,10 @@
 ---
 version: 2
 interactions:
+    # See PROVENANCE.md: composed in whole, nothing here was recorded. The probes carry
+    # no ETag so every re-probe is unconditional and these interactions play in taped
+    # order, each consumed once. The two 403 bodies differ only in documentation_url,
+    # which is what the governor's classifier reads. Measure before editing a request line.
     # AC16, first sequence: a repository answering 404 twice leaves the set and leaves
     # the persisted document. beta is probed once and never fails, so it proves the
     # retirement is scoped to the repository that failed.

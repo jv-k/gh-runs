@@ -129,7 +129,7 @@ func definitiveFailure(err error) bool {
 	case http.StatusNotFound:
 		return true
 	case http.StatusForbidden:
-		return governor.Classified(he.Headers) && !governor.RateLimitedHeaders(he.Headers)
+		return governor.ClassifiedHeaders(he.Headers) && !governor.RateLimitedHeaders(he.Headers)
 	default:
 		return false
 	}
