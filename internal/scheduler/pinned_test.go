@@ -209,10 +209,26 @@ func TestPinnedRepositoryPollsMoreOftenOverVirtualTime(t *testing.T) {
 
 	// Advance exactly one slow interval, one medium interval at a time. The pinned
 	// repository comes due at each step; the unpinned one only at the last.
+	//
+	// Each step waits for every poll that step released, which is the barrier the tallies
+	// below are read through. The step where the slow interval elapses releases two,
+	// because both repositories come due together there. Waiting for one lets the loop
+	// stamp both polls and settle while the second goroutine has not yet reached the wire,
+	// so the assertion reads a tally one short, on whichever of the two lost the race
+	// (#133). No barrier on the loop's timer is needed beside this one: the loop arms its
+	// timer before it publishes the wait, so waitSettle already means the timer is armed.
+	//
+	// Which step that is comes from the same interval arithmetic the tallies below assert,
+	// not from the step's position, so a change to either target moves the barrier with it
+	// rather than leaving it silently one poll short.
 	const steps = int(slowTarget / mediumTarget) // 6
-	for range steps {
+	for step := range steps {
 		h.clk.Advance(mediumTarget)
-		h.waitPolls(t, 1)
+		wantPolls := 1 // the pinned repository, due at every step
+		if elapsed := time.Duration(step+1) * mediumTarget; elapsed%slowTarget == 0 {
+			wantPolls++ // and the unpinned one's single slow tick
+		}
+		h.waitPolls(t, wantPolls)
 		h.waitSettle(t, mediumTarget)
 	}
 
