@@ -28,6 +28,8 @@ A cell-filled background is an SGR 48 sequence. That puts it inside the assertio
 
 **Painting only the named members was considered and rejected.** It reads as the conservative choice and it produces two classes of explicit member: `dark`, which asks the terminal for a background it then does not use, and `nord`, which sets one. The rule stops being a sentence and becomes a table. One sentence is what a person can hold: **auto is the only member that does not paint.**
 
+**`dark` and `light` paint [ADR-0024](./0024-the-contrast-floor-and-its-reference-backgrounds.md)'s two reference backgrounds, `#2d2a2e` and `#faf4f2`.** Every member that paints has to name a background, and for these two the value already exists: it is the background their roles were measured against when the floor was set. Taking anything else would invalidate every figure ADR-0024 recorded for no gain. So the arithmetic does not move, and what changes is its standing: those two numbers stop being an assumption about the operator's terminal and become a property of a background the tool sets.
+
 The cost is real and is accepted. An operator who sets `dark` today gets their own terminal background and after 2.1 gets ours. That is a visible change to a setting they already chose, and R6 names 2.1 as when it happens rather than letting it arrive unannounced.
 
 ## One key, and one member names one painted background
@@ -36,7 +38,7 @@ The cost is real and is accepted. An operator who sets `dark` today gets their o
 
 **A second key was considered and rejected.** The argument for it is real: `auto` is a resolution strategy and `nord` is a name, so they are different kinds of thing sharing one key's value space. The argument against it is fatal. With two keys, `theme: auto` beside a named family means unpainted borrowed foregrounds on an arbitrary background, which is exactly the failure the first decision above refuses. A shape whose valid combinations include the one thing the design exists to prevent is the wrong shape, whatever its taxonomy.
 
-One member naming one painted background is also what keeps the rest of the canon simple. R22's table has one row per member, and R14's diagnostic lists what is typeable. A theme family with a dark and a light variant ships as two members.
+One member naming one painted background is also what keeps the rest of the canon simple. R22 is one clause per member rather than a cross product of families and variants, AC15's generated golden is one block per member, and R14's diagnostic lists what is typeable. A theme family with a dark and a light variant ships as two members.
 
 ## A member takes its theme's background exactly and its foregrounds approximately
 
@@ -56,11 +58,11 @@ This is not a precaution against a hypothetical. Measured with the same WCAG 2.x
 
 Nord's comment colour at 1.69:1 is worse than the 1.95:1 search match that issue [#93](https://github.com/jv-k/gh-runs/issues/93) was opened over, and Solarized Light's own body foreground does not clear the floor against its own background. Faithful borrowing was never on the table. The only question this ADR had was whether to adapt or to exempt.
 
-**Said in this ADR's own voice, because it will draw reports: `theme: nord` is not byte-identical to Nord.** Somebody will diff our blue against the Nord specification and file it. The answer is here rather than in a maintainer's memory. The background matches their terminal exactly, the hues are Nord's, and the values are moved as far as the floor requires and no further. What is kept is the part an operator sees at a glance and the part a contrast checker measures. What is given up is byte fidelity to a palette that fails the floor in five places out of eight.
+**Said in this ADR's own voice, because it will draw reports: `theme: nord` is not byte-identical to Nord.** Somebody will diff our blue against the Nord specification and file it. The answer is here rather than in a maintainer's memory. The background matches their terminal exactly, the hues are Nord's, and the values are moved as far as the floor requires and no further. What is kept is the part an operator sees at a glance and the part a contrast checker measures. What is given up is byte fidelity to a palette three of whose eight roles do not clear the floor against its own background.
 
 ## The floor is the bound, and it replaces "small and fixed rather than a gallery"
 
-A theme joins the set if and only if every one of its roles clears 4.5:1 against the background it paints, and both of its highlights clear 4.5:1 internally and CIE76 ΔE 10 against that same background.
+No theme joins the set unless every one of its roles clears 4.5:1 against the background it paints, and both of its highlights clear 4.5:1 internally and CIE76 ΔE 10 against that same background. The floor is a gate on the way in and not a rule that admits: clearing it makes a theme eligible for the set, and a decision still puts it there. Stated the other way round, as an "if and only if", it would make every conforming theme in existence a member, which is the gallery this bound exists to refuse.
 
 **A count was considered and rejected.** "At most seven members" is a line a reviewer has to hold and an arbitrary one to defend at the eighth. The floor is a line AC15 enforces, so growth is bounded by a test rather than by a sentence somebody has to remember to quote. It also bounds the right thing: the objection to a gallery was never the number of names, it was that a gallery is where quality stops being checked.
 
