@@ -72,6 +72,16 @@ R14 is where go-gh's `repository.Current()` trap lands, so it must not be met by
 
 **R22.** When enumeration completes and the fast-path repository (R14) is not in the enumerated set, discovery must adopt it **for the session** ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)): spend one `GET /repos/{owner}/{repo}` to learn its `permissions`, `archived` and `disabled`, admit it to the Feed, and admit it to the poll set if it has Runs. Its classification, capability and ETags persist like any other repository's, so revalidation stays free, but membership does not: only a launch inside the repository re-admits it. A session launched elsewhere never sees it, and the Feed never accretes past clones.
 
+### Retirement
+
+**R23.** Discovery must retire a repository whose last **two consecutive** probes returned a **definitive** failure, and must retire it on no other signal ([ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md)). Definitive means a 404, or a 403 the [rate-governor](../rate-governor/requirements.md) R14 verdict reports as **not** rate limiting. Every other outcome, a 5xx, a network error, a timeout, a decode failure, and a rate-limited 403, must neither increment the count nor reset it, so a transient answer arriving between two definitive ones can neither cause a retirement nor postpone one indefinitely. A successful probe resets the count to zero. Retirement must delete the record, and the next persist must write a document without it, so the set does not carry a repository deleted or made private upstream into every later launch. The count must persist on the record: under one revalidation interval a repository is probed once, so a session-local count would never reach two and the requirement would be inert for short sessions.
+
+R23 amends neither R3 nor R8. A failure still classifies nothing, so it still never changes R3's `has_runs`, and it still never moves R8's recorded capability. Retirement is a separate authority, over membership alone.
+
+On a fine-grained PAT the 403 signal does not fire, and R23 degrades to 404 alone. The governor's verdict rests on a `documentation_url` corresponding to the endpoint requested, and GitHub answers that token class with the general fine-grained-permissions page, which names no resource, so the response classifies as rate limiting ([rate-governor](../rate-governor/requirements.md) open question 1). That is the safe direction and not a gap to close: the alternative is guessing toward the reading that keeps issuing. A deleted or private repository answers 404 and retires on every token class.
+
+A retired repository returns only through R11's on-demand full refresh, which re-enumerates and re-admits it. A warm start skips its pass, so nothing else re-admits one. That makes R11 load-bearing rather than convenient, and it is the reason retirement must not ship before it.
+
 ## Acceptance criteria
 
 **AC1: Enumeration cost.** Against a cassette of the reference account, discovery issues exactly two enumeration requests and yields 163 repositories. A third page is never requested.
@@ -103,6 +113,10 @@ R14 is where go-gh's `repository.Current()` trap lands, so it must not be met by
 **AC14: Host qualification.** Every persisted and published key carries a host component. No key can be constructed without one. A repository resolving to a host other than github.com is rejected explicitly and contributes no entry.
 
 **AC15: Deterministic refresh.** A test of the scheduled re-probe advances the injected clock and completes without sleeping.
+
+**AC16: Retirement takes two definitive failures and nothing else.** Against cassettes, four sequences settle R23. A repository answering 404 twice is absent from the set and absent from the document the following persist writes. One answering 404 then 200 is still present, and a third 404 does not retire it, which is the count having reset. One answering 404, then a 5xx, then 404 is retired, which is the transient rule: the 5xx neither retired it nor postponed it. And a 403 carrying the governor's rate-limited verdict retires nothing however many consecutive times it arrives. The fixture for the last must carry that verdict rather than a bare 403, because a bare one classifies as rate limiting by default and would pass the criterion for the wrong reason.
+
+**AC17: A retirement survives a launch, and so does a count of one.** A set persisted after a retirement reloads without the retired repository. A repository carrying one definitive failure at persist time reloads with that count and retires on its next definitive failure rather than starting over. A document written before the count field existed reloads with every count at zero and retires nothing on reload alone.
 
 ## Constraints
 

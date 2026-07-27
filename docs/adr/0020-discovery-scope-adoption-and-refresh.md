@@ -31,6 +31,30 @@ The design is self-adapting: whatever the ETag measurement finds, the tier a rep
 
 **The knob survives settings R13's test, and the wording there is amended to say so precisely.** R13 rejects "poll interval in seconds" because choosing it needs the token tier, the repo count and the points model. That reasoning binds the scheduler's poll interval and does not transfer here: two-tier makes the settable tier cheap by construction, so "how quickly should a newly active repository appear?" is answerable from the person's own context, in minutes, with no cost model in hand. That is the same intent test settings R12 and R19 already apply. Settings R13, AC6 and AC12 are amended in place to name the **scheduler's** poll interval as the rejected key, and settings gains the `discovery_refresh_minutes` key as R20 there.
 
+## A repository retires after two consecutive definitive failures
+
+This ADR fixed how a repository enters discovery's set and said nothing about how one leaves, and nothing ever did. No record is deleted, `Known` only moves false to true, and `classify.go` states the rule outright: a probe failure classifies nothing, and the repository keeps whatever a prior pass or a reload recorded. That rule is right for the transient 502 it was written for. It also means a repository deleted or made private upstream keeps its record forever, and the persisted document carries it into every later launch.
+
+Two consumers rest on the opposite premise. Both of the Feed's prunes, the failed-poll indicator ([ADR-0015](./0015-the-async-model.md)'s `RepoPollFailed`) and the cancellation-requested mark ([run-lifecycle](../features/run-lifecycle/requirements.md) R4), drop what a repository leaving the set has stranded, and neither can fire while the set only grows. A repository deleted upstream fails its next poll once and then keeps a stuck indicator that nothing can ever clear, which is the leak issue [#113](https://github.com/jv-k/gh-runs/issues/113) fixed the Feed's half of and issue [#115](https://github.com/jv-k/gh-runs/issues/115) named the rest of.
+
+**A repository retires when two consecutive probes return a definitive failure.** Definitive means a 404, or a 403 the governor has classified as authorization rather than rate limiting. Everything else, a 5xx, a network error, a timeout, a decode failure, and a rate-limited 403, neither increments the count nor resets it. A successful probe resets it to zero. Retirement deletes the record from the in-memory set, and the next persist writes a document without it.
+
+Six things follow, and each was the alternative to a worse one.
+
+**The count is 2, not 1.** A single odd response cannot evict, which is the whole tension `classify.go` names. At the revalidation tier's default 5 minutes, two costs 10 minutes from the last successful probe before a genuinely deleted repository leaves, and 2 hours on the hourly tier. The first figure moves with `discovery_refresh_minutes` and the second moves with nothing. Both are well inside what a dashboard can carry.
+
+**A transient answer leaves the count untouched rather than resetting it.** Resetting reads as the safer direction and is not: on a flaky connection a genuinely deleted repository alternates 502 and 404 and never retires, which is the immortality this section exists to end. Leaving the count alone keeps the property that only definitive evidence ever moves it, in either direction.
+
+**The 403 is read through the governor, never from the status code.** A secondary-limit 403 arrives with a healthy `x-ratelimit-remaining`, so the status cannot tell rate limiting from authorization. [rate-governor](../features/rate-governor/requirements.md) open question 1 measured the discriminator, the classifier is the one issue [#68](https://github.com/jv-k/gh-runs/issues/68) closed, and R14 there exposes the verdict per response so a consumer never re-derives it. Discovery reads that verdict, so a burst meeting a secondary limit can never retire the account wholesale. An unclassified response reports false, which is the safe direction here: it is not definitive, so it retires nothing.
+
+On a fine-grained PAT that signal does not fire at all, and that is correct. The discriminator is a `documentation_url` corresponding to the endpoint the request targeted. GitHub answers a fine-grained PAT with the general fine-grained-permissions page instead, which names no resource in any number, so open question 1's correspondence cannot be tested and the response classifies as rate limiting rather than as authorization. Retirement therefore degrades to 404 alone for that token class. Nothing is lost that was ever safe to have: the alternative is guessing in the direction that keeps issuing, which open question 1 refuses for the whole tool. A deleted or private repository still answers 404 and still retires on every token class.
+
+**The count persists on the record.** Discovery's cadence bookkeeping is in-memory and dies with the session, and a count that did the same would make the policy inert for short sessions: under one revalidation interval a repository is probed exactly once, so two failures never happen in one launch. A record persisted before the field existed reloads at zero, which delays a retirement and never causes one.
+
+**Retirement is reversible only through R11's on-demand full refresh, which becomes load-bearing.** Deleting from the document means a warm launch never re-admits the repository, because `Reload` returning non-zero is what makes a launch skip its pass. R11 already requires an on-demand full refresh and nothing wires it to a key. This decision makes that wiring the one action inside the tool that recovers a repository restored, made public again, or re-granted access.
+
+**The Feed learns membership from a second pulled set, not from absence in the capability set.** The root broadcasts `ReposDiscovered`, which carries only records whose capability enumeration or adoption has recorded, and the Feed's gate reads presence in it as "capability is known" ([live-run-feed](../features/live-run-feed/requirements.md) R18). Absence therefore already means not-yet-known, so the prunes cannot also read it as gone: a live fast-path repository is absent by design and has its real failure indicator pruned while the failure is real. One message cannot carry both meanings. The root pulls a second set on the same tick, every record discovery still holds, `Known` or not, and the prunes read that. The capability set and its fail-closed gate are untouched.
+
 ## Three unknowns, dispositioned
 
 **The empty-list ETag (open question 4) is no longer load-bearing, and its measurement folds into an existing ticket.** Two-tier means the answer changes cost, not design. The observation (does a Run-list 200 with zero Runs carry an ETag?) joins [Measure whether a filtered listing's ETag is body-faithful](https://github.com/jv-k/gh-runs/issues/19), which already exists to record listing ETag behaviour with the same instrumentation. The requirements doc records the observed answer when it lands.
@@ -63,13 +87,35 @@ The design is self-adapting: whatever the ETag measurement finds, the tier a rep
 
 **Acting on `disabled`, gating it like `archived`.** Acts on a field no test can exercise with a real fixture, on a documented meaning this project cannot observe. Recording without acting keeps the claim falsifiable later at zero present cost.
 
+**Retiring on absence from a full account re-enumeration.** The only signal that is a true set, and the closest match to what the Feed's prunes assume. Rejected because nothing re-enumerates during a session: a pass runs at most once per launch, and only on a cold local-store. Retirement would land no earlier than the next cold start unless a re-enumeration cadence were decided alongside it, and that cadence is the reference cost model's expensive case (two enumeration requests plus one probe per repository) spent to detect an event that happens a few times a year. The mechanism is not rejected on merit and stays available if a periodic pass is ever justified on its own terms.
+
+**Retiring on the first definitive failure.** Simplest to state, and it retires a deleted repository within one interval rather than two. Rejected because it puts the whole policy one odd response away from evicting a live repository, and hysteresis is cheap here: the cost of waiting is a stale row, and the cost of evicting is a repository silently missing from the dashboard.
+
+**Counting any 403 as definitive, which is what the ticket proposed.** Rejected on the governor's own measurement: a secondary-limit 403 is indistinguishable from an authorization 403 by status and by `x-ratelimit-remaining`, so a burst that meets a secondary limit would retire repositories wholesale. This is precisely the eviction `classify.go`'s rule exists to prevent, arriving through the door built to prevent it.
+
+**Counting any 4xx.** Catches 410 and 451 alongside 404, and sweeps in 401, a whole-token failure that would retire the entire account at once, and 429. The carve-outs it needs leave it no simpler than reading 404 plus the governor's verdict.
+
+**Marking the record retired rather than deleting it.** Keeps a trace of what was dropped and lets a later pass tell a resurrected repository from a new one. Rejected because every consumer of the set (the poll set, the records, the capability snapshot, the persisted document) would need the same filter, and a missed one silently re-admits a retired repository, while the set only ever grows across launches. Deletion makes each of those shrink for free, and `Capability` falls back to not-yet-known, so a stale reference fails closed.
+
+**Deleting in memory but leaving the persisted document alone.** Retirement would last one session, the repository would reload, fail twice and be pruned again, and the operator would watch the same stuck indicator return on every launch. It is the shape of a fix without the effect of one.
+
+**Telling the Feed what was retired, rather than what is still there.** Semantically the cleanest kill of the absence premise: nothing anywhere would read absence as meaning. Rejected on the async model's shape ([ADR-0015](./0015-the-async-model.md)): retirement is an event, the root is a pull-based tick, and an event needs a queue between pulls plus a delivery guarantee the tick offers nobody. A second pulled set is idempotent, matches every other pull on that tick, and needs neither.
+
+**Carrying `Known` in the broadcast payload and having the gate read the flag.** One set and one pull, at the cost of rewriting the Feed's fail-closed capability condition, the most safety-critical read it makes, and every golden that depends on it. A second set changes no existing message and no existing gate.
+
 ## Consequences
 
-**repo-discovery is amended.** R1 names the affiliation set. R11 carries the two-tier cadence and the knob. R22 is new and carries session adoption. Open questions 1, 3, 4, 5, 6 and 7 become resolved notes pointing here. AC10's economics now describe the revalidation tier.
+**repo-discovery is amended.** R1 names the affiliation set. R11 carries the two-tier cadence and the knob. R22 is new and carries session adoption. R23 is new and carries retirement, with AC16 and AC17 fixing the four sequences that settle it and the two that must survive a launch. Open questions 1, 3, 4, 5, 6 and 7 become resolved notes pointing here. AC10's economics now describe the revalidation tier.
 
 **settings is amended.** R13's rejected "poll interval" row, AC6 and AC12 now name the scheduler's poll interval precisely, so the discovery refresh row does not trip them. R20 is new there: `discovery_refresh_minutes`, default 5, floor 1, clamped with a diagnostic below the floor. R14's specific-diagnostic contract is unchanged.
 
 **live-run-feed's open question 10 closes**, pointing at R22.
+
+**live-run-feed gains R37**, the membership set the prunes read. R18's fail-closed gate and the capability set it reads are unchanged, and the requirement says so, because the reason for two sets is that one cannot carry both meanings.
+
+**R11's on-demand full refresh becomes load-bearing rather than convenient.** It is the only door back for a retired repository, and nothing wires it. Retirement should not ship ahead of it.
+
+**The governor gains a consumer outside its own transport.** `RateLimitedHeaders` was written for a consumer holding headers without a response ([rate-governor](../features/rate-governor/requirements.md) R14) and now also carries discovery's definitive-failure test. The direction is unchanged: discovery already sits above the governor in the chain, and it reads a stamp rather than re-deriving a classification.
 
 **Ticket #19 widens by one observation**: whether an empty Run list's 200 carries an ETag.
 
