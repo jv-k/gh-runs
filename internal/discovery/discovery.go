@@ -68,10 +68,11 @@ const excludeDocName = "discovery-exclude"
 // `visibility` with a 422, so the combination this once sent was never a request
 // the API served (#154). `affiliation` is the parameter R1's requirement is written
 // in, and its three values are the full set the endpoint offers, so dropping
-// `type=all` narrows the result set for nobody. TestEnumeratePathDoesNotCombine-
-// TypeWithAffiliation holds the rule, because no cassette can: a fixture proves
-// only what the API said to the request we taped, and six taped a 200 for the
-// request it rejects.
+// `type=all` narrows the result set for nobody. The rule is held by
+// TestEnumeratePathDoesNotCombineTypeWithAffiliation, because no cassette can: a
+// fixture proves only what the API said to the request we taped, and this
+// package's five fixtures taped a 200 across seven enumeration requests for the
+// one the API rejects.
 const enumeratePath = "user/repos?per_page=100&affiliation=owner,collaborator,organization_member"
 
 // hourlyTier is the fixed re-probe cadence for a repository with no persisted

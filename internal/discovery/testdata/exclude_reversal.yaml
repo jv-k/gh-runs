@@ -1,6 +1,10 @@
 ---
 version: 2
 interactions:
+    # See PROVENANCE.md: the repositories and the ETags here are composed to
+    # exercise named criteria, and the enumeration request URL was measured
+    # against the live API (#154). Measure before editing a request line.
+    #
     # A three-repository account, taped both unconditionally and conditionally, so the
     # same fixture serves several sessions over one store directory: the first session's
     # probes are unconditional, and every later session carries the ETags the store

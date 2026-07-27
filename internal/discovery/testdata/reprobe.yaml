@@ -1,6 +1,10 @@
 ---
 version: 2
 interactions:
+    # See PROVENANCE.md: the repositories and the ETags here are composed to
+    # exercise named criteria, and the enumeration request URL was measured
+    # against the live API (#154). Measure before editing a request line.
+    #
     # Interaction 0: enumeration, one page, two repositories, no next.
     - id: 0
       request:

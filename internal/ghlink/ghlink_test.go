@@ -31,14 +31,19 @@ func TestNextStopsWhenAbsent(t *testing.T) {
 }
 
 // TestNextToleratesQueryCommas pins the bracket-aware parse: a listing URL carrying
-// commas of its own must not be torn apart by a comma split (purge R1). This is a
-// robustness case rather than an observation. It was written as /user/repos, which
-// measurement has since contradicted (see TestNextReadsTheMeasuredUserReposHeader
-// and the package note), so it keeps the shape and drops the claim about which
-// endpoint produces it.
+// raw commas of its own must not be torn apart by a comma split, since a comma is
+// also the header's own entry separator (purge R1).
+//
+// The URL below is synthetic and deliberately names no real endpoint. This case was
+// written as /user/repos with affiliation=owner,collaborator,organization_member,
+// and measurement has since contradicted that: /user/repos percent-encodes those
+// commas, which TestNextReadsTheMeasuredUserReposHeader now holds. No endpoint is
+// known to emit a raw comma here. The case stays because the parse is cheap and the
+// absence of a counterexample is not a documented guarantee, but it must not read as
+// an observation of anything.
 func TestNextToleratesQueryCommas(t *testing.T) {
-	header := `<https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&page=2>; rel="next"`
-	want := "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&page=2"
+	header := `<https://api.example.invalid/listing?per_page=100&fields=a,b,c&page=2>; rel="next"`
+	want := "https://api.example.invalid/listing?per_page=100&fields=a,b,c&page=2"
 	if got := ghlink.Next(header); got != want {
 		t.Fatalf("Next() = %q, want %q", got, want)
 	}

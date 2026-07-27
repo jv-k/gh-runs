@@ -1,16 +1,10 @@
 ---
 version: 2
 interactions:
-    # The repositories below are composed: alpha through epsilon exist to exercise
-    # R7's permission tiers, an archived repository and AC1's pagination stop, and no
-    # live account would return that set. The REQUEST shape and the Link header are
-    # not composed. Both were measured against api.github.com on 2026-07-27, after
-    # #154 found that this fixture and five others taped a 200 OK for a URL the API
-    # answers 422 to. Two things came back different from what had been written here:
-    # the request carries no `type` (it is mutually exclusive with `affiliation`), and
-    # rel="next" percent-encodes the commas the request sent. Page 2's request URL is
-    # the encoded one because enumerate follows rel="next" verbatim. If you change
-    # either, measure it first.
+    # See PROVENANCE.md: the repositories are composed, the enumeration request URL
+    # and the Link header below were measured (#154). rel="next" percent-encodes the
+    # commas the request sent, and enumerate re-requests that URL verbatim, so
+    # interaction 1's request carries the encoded form. Measure before editing either.
     #
     # Interaction 0: enumeration page 1. Three repositories, and a Link header
     # whose rel="next" points at page 2, so the walk continues (repo-discovery R1).
