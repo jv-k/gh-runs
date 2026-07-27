@@ -2,14 +2,12 @@ package workflows_test
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
-	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 	"github.com/jv-k/gh-runs/v2/internal/keys"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
 	"github.com/jv-k/gh-runs/v2/internal/tui/dispatch"
@@ -46,16 +44,6 @@ func press(s string) tea.KeyPressMsg {
 		r := []rune(s)[0]
 		return tea.KeyPressMsg{Code: r, Text: s}
 	}
-}
-
-// newClient builds a ghclient over a transport (a cassette), for the fetch tests.
-func newClient(t *testing.T, transport http.RoundTripper) workflows.Requester {
-	t.Helper()
-	client, err := ghclient.New(ghclient.Options{AuthToken: "dummy-fixed-token", Transport: transport})
-	if err != nil {
-		t.Fatalf("build client: %v", err)
-	}
-	return client
 }
 
 // newWorkflows builds a Workflows tab sized w x h, wired to the given toggler and fetch and
