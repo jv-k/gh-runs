@@ -14,11 +14,9 @@ package store
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -58,18 +56,7 @@ func ceilingTransport(t *testing.T, size int) (*Transport, *countingBody, string
 	t.Helper()
 	body := newCountingBody(size)
 	base := stubRoundTrip(func(*http.Request) *http.Response {
-		h := make(http.Header)
-		h.Set("ETag", `W/"ceiling"`)
-		h.Set("Content-Type", "application/json; charset=utf-8")
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Status:     "200 OK",
-			Proto:      "HTTP/1.1",
-			ProtoMajor: 1,
-			ProtoMinor: 1,
-			Header:     h,
-			Body:       body,
-		}
+		return ok200Body(`W/"ceiling"`, body)
 	})
 	dir := t.TempDir()
 	clk := clockwork.NewFakeClockAt(time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC))
@@ -92,22 +79,8 @@ func getUndrained(t *testing.T, tr *Transport, url string) *http.Response {
 	return resp
 }
 
-// getAndDrain issues one GET through the transport and reads and closes the
-// response, the caller's half of the contract. It exists for the tests that care
-// only about what the store kept, where the response itself is not the instrument.
-func getAndDrain(t *testing.T, tr *Transport, url string) {
-	t.Helper()
-	resp := getUndrained(t, tr, url)
-	if _, err := io.ReadAll(resp.Body); err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	if err := resp.Body.Close(); err != nil {
-		t.Fatalf("close body: %v", err)
-	}
-}
-
-// withCeiling lowers maxEntryBytes for one test and restores it, exactly as the
-// eviction tests do with maxStoreBytes. Neither is a knob in the product.
+// withCeiling lowers maxEntryBytes for one test and restores it, as the eviction
+// tests lower maxStoreBytes. Neither is a knob in the product.
 func withCeiling(t *testing.T, n int64) {
 	t.Helper()
 	orig := maxEntryBytes
@@ -163,12 +136,10 @@ func TestOverTheCeilingIsNeitherBufferedNorSaved(t *testing.T) {
 // resource and is kept; one byte past it is a payload and is not. An off-by-one
 // here is invisible in production and silently stops caching the Feed's own poll.
 func TestTheCeilingBoundary(t *testing.T) {
-	withCeiling(t, 4<<10)
-
 	t.Run("exactly at the ceiling is saved", func(t *testing.T) {
 		withCeiling(t, 4<<10)
 		tr, body, dir := ceilingTransport(t, int(maxEntryBytes))
-		getAndDrain(t, tr, "https://api.github.com/repos/cli/cli/actions/runs")
+		getThrough(t, tr, "https://api.github.com/repos/cli/cli/actions/runs")
 		if n := len(entryFiles(t, dir)); n != 1 {
 			t.Errorf("a response exactly at the ceiling left %d entries, want 1", n)
 		}
@@ -180,7 +151,7 @@ func TestTheCeilingBoundary(t *testing.T) {
 	t.Run("one byte past the ceiling is declined", func(t *testing.T) {
 		withCeiling(t, 4<<10)
 		tr, _, dir := ceilingTransport(t, int(maxEntryBytes)+1)
-		getAndDrain(t, tr, "https://api.github.com/repos/cli/cli/actions/runs")
+		getThrough(t, tr, "https://api.github.com/repos/cli/cli/actions/runs")
 		if n := len(entryFiles(t, dir)); n != 0 {
 			t.Errorf("a response one byte past the ceiling left %d entries, want none", n)
 		}
@@ -215,15 +186,7 @@ func TestUnderTheCeilingIsUnchanged(t *testing.T) {
 
 	// The entry carries the repository tag, so invalidation can still reach it
 	// (R10, R14). A ceiling that quietly changed what was written would show here.
-	var e entry
-	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
-	data, err := os.ReadFile(files[0])
-	if err != nil {
-		t.Fatalf("read entry: %v", err)
-	}
-	if err := json.Unmarshal(data, &e); err != nil {
-		t.Fatalf("decode entry: %v", err)
-	}
+	e := readEntry(t, dir)
 	if e.Repo != "github.com/cli/cli" {
 		t.Errorf("entry Repo = %q, want github.com/cli/cli", e.Repo)
 	}
@@ -249,26 +212,16 @@ func TestDecliningLeavesAPriorEntryAlone(t *testing.T) {
 	bodies := []*countingBody{small, large}
 	var n int
 	base := stubRoundTrip(func(*http.Request) *http.Response {
-		h := make(http.Header)
-		h.Set("ETag", `W/"v`+strconv.Itoa(n)+`"`)
-		b := bodies[n]
+		resp := ok200Body(`W/"v`+strconv.Itoa(n)+`"`, bodies[n])
 		n++
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Status:     "200 OK",
-			Proto:      "HTTP/1.1",
-			ProtoMajor: 1,
-			ProtoMinor: 1,
-			Header:     h,
-			Body:       b,
-		}
+		return resp
 	})
 
 	tr := NewTransport(base, dir, clk)
 	const url = "https://api.github.com/repos/cli/cli/actions/runs"
 
-	getAndDrain(t, tr, url)
-	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	getThrough(t, tr, url)
+	files := entryFiles(t, dir)
 	if len(files) != 1 {
 		t.Fatalf("the first response left %d entries, want 1", len(files))
 	}
@@ -279,7 +232,7 @@ func TestDecliningLeavesAPriorEntryAlone(t *testing.T) {
 
 	// The resource has now grown past the ceiling. The store must decline it and
 	// leave what it already holds alone.
-	getAndDrain(t, tr, url)
+	getThrough(t, tr, url)
 
 	after, err := os.ReadFile(files[0])
 	if err != nil {

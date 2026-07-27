@@ -22,13 +22,17 @@ R15 required a bound per repository and in total, and named neither. The per-rep
 
 **50 MB is a backstop, not a target.** The bound is not a knob, by R9's own argument transferred: there is no value of it a user can pick that improves on the mechanism.
 
-**Amended 2026-07-27, on measurement.** This section previously said the reference workload sits an order of magnitude below the bound, so reference use never evicts. Measured against `cli/cli`, a Runs listing at `per_page=100`, the scheduler's own poll shape, is ~2.2 MB, and one Run object is ~24 KB. Base64-in-JSON makes the stored entry about 1.33x that. A poll set of ~26 repositories that busy is past 50 MB on Run listings alone, so eviction is on the reference path rather than in a corner of it, and a quieter poll set never approaches the bound. The policy is unchanged and this is not a defect in it: LRU by last-revalidated is what makes both workloads correct. What was wrong was the claim about which one the reference workload is, and the figure it rested on was never measured.
+**Amended 2026-07-27, on measurement.** Two corrections, both to this section, both inputs to pricing the ceiling below.
 
-## A per-entry ceiling, above both, added 2026-07-27
+The first: this section previously said the reference workload sits an order of magnitude below the bound, so reference use never evicts. Measured against `cli/cli`, a Runs listing at `per_page=100`, the scheduler's own poll shape, is 2,311,840 bytes (~2.20 MiB), and one Run object is ~23 KiB (the [PRD](../PRD.md)'s constraints table is where these live). Base64-in-JSON makes the stored entry about 1.33x that. A poll set of ~26 repositories that busy is past 50 MB on Run listings alone, so eviction is on the reference path rather than in a corner of it, and a quieter poll set never approaches the bound. The policy is unchanged and this is not a defect in it: LRU by last-revalidated is what makes both workloads correct. What was wrong was the claim about which one the reference workload is, and the figure it rested on was never measured.
+
+The second: this section previously said R16 caps what is written per repository "at write time, before eviction is involved". That is true of no code. Nothing in `store` bounds anything per repository, and the phrase is struck above. R16 is a property of what the tool requests, applied before a response exists at all, which is what the table in the amendment below records.
+
+## Amendment: a per-entry ceiling, above both the bounds this ADR named
 
 **The store declines to hold a response body above 8 MiB, and declines to buffer it rather than merely to save it.** local-store R25 carries it, AC21 pins it, and [issue 138](https://github.com/jv-k/gh-runs/issues/138) is where it was decided.
 
-This ADR resolved what bounds the store's growth and named two bounds. It needs a third, because the two it named both assume the response in hand is a resource worth keeping, and nothing in the store tested that assumption. `persist` read whatever it was handed, in full, before the ETag was looked at, and the only thing standing between the store and an arbitrarily large binary was a composition-root convention: name the client `blob` rather than `shared` for anything large. That convention is invisible from inside the store, enforced only by review, and has been got wrong three times (an Artifact download, a whole-Run log export, and a per-Job log fetch, the last of which was live when this amendment was written).
+This ADR resolved what bounds the store's growth and named two bounds. It needs a third, because the two it named both assume the response in hand is a resource worth keeping, and nothing in the store tested that assumption. `persist` read whatever it was handed, in full, before the ETag was looked at, and the only thing standing between the store and an arbitrarily large binary was a composition-root convention: name the client `blob` rather than `shared` for anything large. That convention is invisible from inside the store, enforced only by review, and has been got wrong three times: an Artifact download ([issue 85](https://github.com/jv-k/gh-runs/issues/85)), a whole-Run log export ([issue 89](https://github.com/jv-k/gh-runs/issues/89)), and a per-Job log fetch ([issue 153](https://github.com/jv-k/gh-runs/issues/153)), the last of which was live on `main` when this amendment was written.
 
 **The three bounds, and where each acts:**
 
@@ -42,7 +46,9 @@ This ADR resolved what bounds the store's growth and named two bounds. It needs 
 
 **Not read from `Content-Length`.** go-gh sets no `Accept-Encoding`, so `net/http` adds `gzip` itself, decodes transparently, and deletes the header. It is therefore absent for gzipped JSON, which is every response worth keeping, and present for binary downloads, which are what the ceiling refuses. The size is measured by reading at most the ceiling plus one byte.
 
-**8 MiB is priced off the largest legitimate response, not off the total bound.** ~3.6x the measured 2.2 MB, so a repository busier than the reference one does not silently stop caching the Feed's own poll, a failure that costs a full 200 per cycle and shows nowhere. Independent of the 50 MB figure because the two answer different questions: this one asks whether a response is a resource or a payload, R15's asks how much is kept. Not a knob, by the same R9 transfer that this ADR already applies to R15's bound.
+**8 MiB is priced off the largest legitimate response, not off the total bound.** ~3.6x the measured 2.20 MiB (the [PRD](../PRD.md)'s constraints table holds the figure and the three responses measured beside it), so a repository busier than the reference one does not silently stop caching the Feed's own poll, a failure that costs a full 200 per cycle and shows nowhere. Independent of the 50 MB figure because the two answer different questions: this one asks whether a response is a resource or a payload, R15's asks how much is kept. Not a knob, by the same R9 transfer that this ADR already applies to R15's bound.
+
+**What the ceiling does not close.** It bounds the second of the two costs rather than eliminating it. A blob response *under* 8 MiB is still saved, and if its URL addresses no repository it is still stored with `Repo: ""`, which repository invalidation can never reach, so it sits until LRU evicts it. That residue is a few kilobytes against a 50 MB budget, which is why the size rule is enough on its own and the host rule was not worth its cost. The client-side choice is what closes it, and this is what defence in depth means here.
 
 **The client-side choice stays.** [ADR-0012](./0012-transport-chain-and-the-client-surface.md)'s two entry points are unchanged, and a binary download still enters the chain below the store. A store-side rule and a client-side choice are defence in depth rather than alternatives.
 
@@ -73,6 +79,12 @@ Open question 5 named the hazard: a Run aging out of a `created` window changing
 **A freshness TTL sweep** (delete entries not revalidated in N days). It evicts working entries on a machine that was merely switched off, and N is a freshness lifetime by another name, which R9's reasoning resists.
 
 **Count bounds** (N entries per repository, M total). Blind to entry size, and R15 asks for a disk-footprint bound.
+
+**A `/repos/` path rule** for the per-entry ceiling (decline any response whose request did not address a repository). Proposed in [issue 89](https://github.com/jv-k/gh-runs/issues/89) and rejected on inspection: `repoOf` yields `""` for any path whose first segment is not `repos`, and repo-discovery's account enumeration is `/user/repos`, so the rule would decline the one response this store most wants to keep. It fails in the direction that costs a full 200 every poll.
+
+**A host rule** for the same ceiling (decline anything not addressed to the API host). It does separate a signed blob URL from the account enumeration correctly, which the path rule does not, and it costs the store a notion of "the API host" that it does not have and would have to be handed at construction. Size needs nothing the store is not already holding and covers a response shape nobody has thought of yet.
+
+**Declining to save without declining to buffer.** The one-line version of the ceiling, and it reclaims neither cost that matters: the read runs before the ETag is looked at, so the response is already held whole by the time the rule fires.
 
 **Persisting the full Readout.** `Remaining` can be stale in either direction across a restart, and acting on it is the exact hazard the open question warned about. The monotonicity argument covers exhaustion alone.
 

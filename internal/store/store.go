@@ -43,7 +43,7 @@ const schemaVersion = 1
 // maxStoreBytes is the store's total on-disk bound (local-store R15, ADR-0017).
 // It is a compiled constant and not a user knob, by R9's argument transferred:
 // no value a user could pick improves on LRU eviction. It is a backstop, not a
-// target, but it is not out of reach: a Runs listing at per_page=100 is ~2.2 MiB
+// target, but it is not out of reach: a Runs listing at per_page=100 is ~2.20 MiB
 // against cli/cli and ~1.33x that once stored base64-in-JSON, so a poll set of
 // repositories that busy passes the bound on Run listings alone, and a quieter one
 // never approaches it. Eviction is on the ordinary path rather than in a corner of
@@ -59,19 +59,28 @@ var maxStoreBytes int64 = 50 << 20
 // composition-root convention that was invisible from in here and was got wrong
 // three times: name the client `blob` rather than `shared` for anything large.
 //
-// It keys on size and on nothing else. A host or path rule looks tempting and is
-// not safe as stated: repoOf returns "" for any path whose first segment is not
-// `repos`, and discovery's own enumeration is /user/repos, so a path rule would
-// decline the one response the store most wants to keep. Size needs nothing the
-// store is not already holding.
+// It keys on size and on nothing else. A path rule is not safe as stated: repoOf
+// returns "" for any path whose first segment is not `repos`, and discovery's own
+// enumeration is /user/repos, so it would decline the one response the store most
+// wants to keep. A host rule does separate the two correctly, and costs the store a
+// notion of "the API host" it does not have and would have to be handed at
+// construction. Size needs nothing the store is not already holding.
 //
 // 8 MiB is roughly 3.6x the largest legitimate response measured: a Runs listing at
-// per_page=100, the scheduler's own poll shape, is ~2.2 MiB against cli/cli, and a
-// single Run object is ~24 KB. The headroom is so that a repository busier than the
-// reference one, or a Run object that grows a field, does not silently stop caching
-// the Feed's own poll. The figure is over the BODY, which is what persist can
-// measure before deciding; the entry is written base64-in-JSON, so the ceiling
-// admits an entry of about 10.7 MiB, ~21% of maxStoreBytes.
+// per_page=100, the scheduler's own poll shape, is ~2.20 MiB against cli/cli, and a
+// single Run object is ~23 KiB. The PRD's constraints table holds those figures. The
+// headroom is so that a repository busier than the reference one, or a Run object
+// that grows a field, does not silently stop caching the Feed's own poll. The figure
+// is over the BODY, which is what persist can measure before deciding; the entry is
+// written base64-in-JSON, so the ceiling admits an entry of about 10.7 MiB, ~21% of
+// maxStoreBytes.
+//
+// It bounds the entry cost rather than eliminating it. A blob response UNDER the
+// ceiling is still saved, and where its URL addresses no repository it still carries
+// Repo: "", which invalidate can never reach, so it survives until LRU evicts it.
+// That residue is a few kilobytes against a 50 MB budget, which is why size alone is
+// enough here. Closing it entirely is the client-side choice's job (ADR-0012's two
+// entry points), and the two together are defence in depth.
 //
 // It is independent of maxStoreBytes because the two answer different questions:
 // this one asks whether a response is a resource or a payload, R15's asks how much
