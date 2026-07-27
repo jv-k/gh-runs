@@ -490,10 +490,9 @@ func discoverBehind(ctx context.Context, sched *scheduler.Scheduler, disc *disco
 // whose subject is reclaiming storage must not consume multiples of an Artifact in hidden
 // storage to hand the user a copy of it.
 //
-// Only the Artifact download is routed this way. The whole-Run log export has the same shape
-// and the same problem, and is tracked separately at
-// https://github.com/jv-k/gh-runs/issues/89 rather than changed under a storage-reclamation
-// commit.
+// Two transfers are routed this way, and they are the two that have that shape: the Artifact
+// download and the whole-Run log export. Every other request is an API resource, small and
+// revalidatable, and belongs on shared.
 type clients struct {
 	shared *ghclient.Client
 	blob   *ghclient.Client
@@ -521,6 +520,14 @@ func (c clients) storageDownload(dir string) storage.Downloader {
 	return storage.ClientDownload(c.blob, dir)
 }
 
+// logExport is the log view's whole-Run archive seam (log-viewer R11), and storageDownload's
+// pair. Same reason for being named, and the same answer: blob, never shared. The archive is
+// larger than an Artifact more often than not, and the signed URL it arrives from lives about
+// a minute (log-viewer R13), so a store entry for it is unreachable the moment it is written.
+func (c clients) logExport(dir string) logview.Exporter {
+	return logview.ClientExport(c.blob, dir)
+}
+
 // tuiDeps is everything the root's dependency set needs that is not a request surface: the
 // resolved settings, the engines, and the directory a download lands in. It is a struct rather
 // than nine parameters because the composition root's dependency list is exactly the kind of
@@ -544,8 +551,7 @@ type tuiDeps struct {
 // the difference between guarding a decision and guarding the place it is taken.
 //
 // Every field naming a client names shared, the surface that enters at the store, except the
-// Artifact download, which names blob (see the clients doc above). The whole-Run log export
-// still names shared and should not, which is issue #89.
+// Artifact download and the whole-Run log export, which name blob (see the clients doc above).
 func (c clients) tuiOptions(d tuiDeps) tui.Options {
 	client := c.shared
 	return tui.Options{
@@ -616,12 +622,18 @@ func (c clients) tuiOptions(d tuiDeps) tui.Options {
 		DispatchFetch: dispatch.NewClientFetch(client),
 		DispatchOps:   d.Ops,
 		DispatchStore: d.Store,
-		// The log view fetches a Job's plain text and, on request, downloads the whole-Run
-		// archive to the working directory, both over the same client (log-viewer R1, R11). Its
+		// The log view fetches a Job's plain text over the same client the whole tool shares
+		// (log-viewer R1), so the store revalidates and the governor accounts it. That fetch is
+		// one small text resource and is bounded at 25 MiB by design.
+		//
+		// The whole-Run archive export is the other case, and it dials blob for the reason the
+		// Artifact download does: it is an unbounded one-shot zip behind a signed URL that lives
+		// about a minute (log-viewer R11, R13), so the store would buffer the whole body and
+		// write an entry nothing can revalidate or address again (see the clients doc). Its
 		// deletion reuses purge, the one mutation entry, so a log DELETE is paced and logged like
 		// every other (R17).
 		LogFetch:  logview.ClientFetch(client),
-		LogExport: logview.ClientExport(client, d.Downloads),
+		LogExport: c.logExport(d.Downloads),
 		// The approvals decision pane approves a fork-PR Run or reviews a Run's pending deployments
 		// through the same ops engine every other write uses, so an approve and a review are paced
 		// and travel ops's write path (approvals R11, R12), and it reads the pending deployments
