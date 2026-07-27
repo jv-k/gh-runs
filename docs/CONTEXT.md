@@ -110,21 +110,25 @@ The first observation of a repository's Runs in a session. It fires no notificat
 _Avoid_: Initial state, snapshot (Baseline is specifically the silent first read).
 
 **Appearance**:
-Which of the two colour sets is painted, dark or light. Resolved from the Theme and the terminal's background whenever either first becomes known or changes, then held as one ambient value that every style reads as it renders. The terminal's background is asked for once, not per frame.
-_Avoid_: Theme (the Theme is the setting a person chooses, and it has three values. The Appearance is what that resolves to, and it has two.), mode, scheme.
+Which of two colour sets is painted, dark or light. It is how the `auto` Theme resolves, and not how every Theme does: a named Theme carries one set and needs no resolution. Where it applies, it is resolved from the terminal's background whenever that first becomes known or changes, then held as one ambient value that every style reads as it renders. The terminal's background is asked for once, not per frame.
+_Avoid_: Theme (the Theme is the setting a person chooses. The Appearance is what `auto` resolves to, and it has two values.), mode, scheme.
 
 **Theme**:
-The setting that chooses an Appearance: `auto`, `dark` or `light`, defaulting to auto ([settings](./features/settings/requirements.md) R6). A person's stated preference, and an input.
-_Avoid_: Appearance (see above), palette (the palette is the colours. The Theme only picks between them.), colour scheme.
+The setting that chooses what is painted: `auto`, `dark`, `light`, `nord`, `dracula`, `gruvbox-dark` or `solarized-light`, defaulting to auto ([settings](./features/settings/requirements.md) R6, [ADR-0025](./adr/0025-named-themes-and-who-owns-the-background.md)). A person's stated preference, and an input. **`auto` is the only member that does not paint a background**: it inherits the terminal's and resolves an Appearance from it. Every other member carries a Painted background. The named members and the painting arrive in 2.1.
+_Avoid_: Appearance (see above), palette (the palette is the colours. The Theme only picks between them.), colour scheme, gallery.
 
 **Role**:
-One named foreground colour in both Appearances, resolved as a style renders rather than when it is built. `Danger`, `Muted` and `Passed` are Roles. A Role never encodes meaning by itself ([settings](./features/settings/requirements.md) R16), and it must clear the contrast floor against its Appearance's Reference background (R22).
-_Avoid_: Colour (a Role is a pair of them, chosen for a purpose), style (a style is lipgloss's, and it holds a Role), token.
+One named foreground colour, resolved as a style renders rather than when it is built. `Danger`, `Muted` and `Passed` are Roles. A Role never encodes meaning by itself ([settings](./features/settings/requirements.md) R16), and it must clear the contrast floor against its member's Painted background, or against the Reference background where the member is `auto` (R22).
+_Avoid_: Colour (a Role is one chosen for a purpose), style (a style is lipgloss's, and it holds a Role), token.
 
 **Highlight**:
-A foreground and a background painted **together**, in both Appearances. `Cursor` and `Match` are the two. A Highlight is one thing rather than two Roles, because applying its background applies its foreground with it, which is what makes its contrast exactly known instead of a cross product against whatever colour the text already had.
+A foreground and a background painted **together**. `Cursor` and `Match` are the two. A Highlight is one thing rather than two Roles, because applying its background applies its foreground with it, which is what makes its contrast exactly known instead of a cross product against whatever colour the text already had.
 _Avoid_: Background colour (that names one half and hides that the pair is the unit), selection, mark.
 
+**Painted background**:
+The background a Theme member carries and the tool sets, by filling every cell of the viewport. Both colours in a painted member are ours, so R22's floor against it is exact arithmetic rather than an assumption ([ADR-0025](./adr/0025-named-themes-and-who-owns-the-background.md)). It is a different thing from a Reference background, which is a background we assume and never set.
+_Avoid_: Reference background (see below, and the distinction is the whole point), theme background, canvas.
+
 **Reference background**:
-The terminal background an Appearance's contrast is measured against: `#2d2a2e` for dark, `#faf4f2` for light ([ADR-0024](./adr/0024-the-contrast-floor-and-its-reference-backgrounds.md)). A stated assumption rather than a guarantee, because the tool never sets a background and the Appearance is chosen from a single dark-or-light split.
-_Avoid_: Terminal background (that is whatever the person actually has, which we do not control and do not know), canvas, base.
+The terminal background the `auto` Theme's contrast is measured against: `#2d2a2e` for dark, `#faf4f2` for light ([ADR-0024](./adr/0024-the-contrast-floor-and-its-reference-backgrounds.md), amended). A stated assumption rather than a guarantee, because under `auto` the tool never sets a background and the Appearance is chosen from a single dark-or-light split. It binds `auto` alone. Every other member has a Painted background instead.
+_Avoid_: Terminal background (that is whatever the person actually has, which we do not control and do not know), Painted background (see above), canvas, base.
