@@ -108,3 +108,23 @@ _Avoid_: Match, association (those imply a certainty Correlation deliberately wi
 **Baseline**:
 The first observation of a repository's Runs in a session. It fires no notifications, so launching to a night of finished Runs does not announce them all at once. Notifications describe what changed against the Baseline, never the Baseline itself. Notifications are deferred to 2.1 ([PRD](./PRD.md) Scope), so this term is preserved for them: the Baseline is the silent first read they will measure against.
 _Avoid_: Initial state, snapshot (Baseline is specifically the silent first read).
+
+**Appearance**:
+Which of the two colour sets is painted, dark or light. Resolved from the Theme and the terminal's background whenever either first becomes known or changes, then held as one ambient value that every style reads as it renders. The terminal's background is asked for once, not per frame.
+_Avoid_: Theme (the Theme is the setting a person chooses, and it has three values. The Appearance is what that resolves to, and it has two.), mode, scheme.
+
+**Theme**:
+The setting that chooses an Appearance: `auto`, `dark` or `light`, defaulting to auto ([settings](./features/settings/requirements.md) R6). A person's stated preference, and an input.
+_Avoid_: Appearance (see above), palette (the palette is the colours. The Theme only picks between them.), colour scheme.
+
+**Role**:
+One named foreground colour in both Appearances, resolved as a style renders rather than when it is built. `Danger`, `Muted` and `Passed` are Roles. A Role never encodes meaning by itself ([settings](./features/settings/requirements.md) R16), and it must clear the contrast floor against its Appearance's Reference background (R22).
+_Avoid_: Colour (a Role is a pair of them, chosen for a purpose), style (a style is lipgloss's, and it holds a Role), token.
+
+**Highlight**:
+A foreground and a background painted **together**, in both Appearances. `Cursor` and `Match` are the two. A Highlight is one thing rather than two Roles, because applying its background applies its foreground with it, which is what makes its contrast exactly known instead of a cross product against whatever colour the text already had.
+_Avoid_: Background colour (that names one half and hides that the pair is the unit), selection, mark.
+
+**Reference background**:
+The terminal background an Appearance's contrast is measured against: `#2d2a2e` for dark, `#faf4f2` for light ([ADR-0024](./adr/0024-the-contrast-floor-and-its-reference-backgrounds.md)). A stated assumption rather than a guarantee, because the tool never sets a background and the Appearance is chosen from a single dark-or-light split.
+_Avoid_: Terminal background (that is whatever the person actually has, which we do not control and do not know), canvas, base.
