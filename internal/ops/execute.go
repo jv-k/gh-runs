@@ -223,7 +223,7 @@ func (o *Ops) execute(ctx context.Context, plan Plan, emit progressFunc) (Summar
 	switch plan.op {
 	case OpDelete:
 		return o.executeDelete(ctx, plan, emit)
-	case OpCancel, OpForceCancel, OpRerun, OpRerunFailed, OpEnable, OpDisable:
+	case OpCancel, OpForceCancel, OpRerun, OpRerunFailed, OpRerunJob, OpEnable, OpDisable:
 		return o.executeLifecycle(ctx, plan, emit)
 	default:
 		return Summary{}, unsupportedOperation(plan.op)
@@ -239,7 +239,7 @@ type progressFunc func(sum Summary, outstanding int)
 // unsupported one before spawning rather than on a stream nobody is listening to yet.
 func supportedOperation(op Operation) bool {
 	switch op {
-	case OpDelete, OpCancel, OpForceCancel, OpRerun, OpRerunFailed, OpEnable, OpDisable:
+	case OpDelete, OpCancel, OpForceCancel, OpRerun, OpRerunFailed, OpRerunJob, OpEnable, OpDisable:
 		return true
 	default:
 		return false
@@ -615,7 +615,10 @@ func classifyLifecycle(op Operation, resp *http.Response) (disposition, string) 
 		default:
 			return dispFailed, failureReason(resp) // R20, R3
 		}
-	default: // OpRerun, OpRerunFailed
+	default: // OpRerun, OpRerunFailed, OpRerunJob
+		// The per-Job re-run is a third case under the same reading, not a new contract: a
+		// 404 means the Job cannot gain an Attempt, which is a failure here where it is a
+		// skip for a cancel (R22, AC13).
 		if code >= 200 && code < 300 {
 			return dispActed, "" // 201 created: an Attempt added (R8)
 		}
@@ -636,6 +639,13 @@ func lifecycleRequest(op Operation, item Item, debug bool) (method, path string,
 		return http.MethodPut, workflowPath(item) + "/enable", nil
 	case OpDisable:
 		return http.MethodPut, workflowPath(item) + "/disable", nil
+	case OpRerunJob:
+		// The path shape differs from the four Run operations: it addresses a Job id and
+		// never a Run id, so it cannot ride the shared base below, which builds a Run
+		// endpoint. It sits in this early switch for the same reason the two Workflow
+		// toggles do, rather than teaching base a second meaning (run-lifecycle R16).
+		// R14's enable_debug_logging extends to this re-run, so it carries the same body.
+		return http.MethodPost, jobPath(item) + "/rerun", rerunBody(debug)
 	}
 	base := fmt.Sprintf("repos/%s/%s/actions/runs/%d", item.Repo.Owner, item.Repo.Name, item.ID)
 	switch op {
@@ -657,6 +667,13 @@ func lifecycleRequest(op Operation, item Item, debug bool) (method, path string,
 // carried on the Item the WorkflowItem constructor froze.
 func workflowPath(item Item) string {
 	return fmt.Sprintf("repos/%s/%s/actions/workflows/%d", item.Repo.Owner, item.Repo.Name, item.ID)
+}
+
+// jobPath is the Job's Actions endpoint, addressed by id, that the per-Job re-run POST
+// extends with its verb (run-lifecycle R16). The id is the Job's, carried on the Item the
+// JobItem constructor froze, and the repository is the one stamped onto the Job at fetch.
+func jobPath(item Item) string {
+	return fmt.Sprintf("repos/%s/%s/actions/jobs/%d", item.Repo.Owner, item.Repo.Name, item.ID)
 }
 
 // rerunBody is R14's enable_debug_logging opt-in. On the default path it sends no body,

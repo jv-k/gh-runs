@@ -31,8 +31,13 @@ package ops
 
 import "github.com/jv-k/gh-runs/v2/internal/domain"
 
-// Kind is the class of object an Item names. The values are exactly purge R29's
-// kind column, so a deletion log line is a field copy (ADR-0019).
+// Kind is the class of object an Item names. Every Kind a deletion log line can carry
+// is exactly purge R29's kind column, so such a line stays a field copy (ADR-0019).
+//
+// Two Kinds here can never reach one. KindWorkflow was the first: enable and disable
+// are reversible PUTs and delete nothing. KindJob is the second, for the same reason,
+// a per-Job re-run. The claim that a log line is a field copy is unweakened, because it
+// still holds for every Kind that reaches one.
 type Kind string
 
 const (
@@ -41,6 +46,7 @@ const (
 	KindCache    Kind = "cache"
 	KindArtifact Kind = "artifact"
 	KindWorkflow Kind = "workflow"
+	KindJob      Kind = "job"
 )
 
 // Operation is the verb a Plan was built for. Delete resolves its endpoint per
@@ -56,6 +62,7 @@ const (
 	OpForceCancel Operation = "force-cancel"
 	OpRerun       Operation = "rerun"
 	OpRerunFailed Operation = "rerun-failed"
+	OpRerunJob    Operation = "rerun-job"
 	OpEnable      Operation = "enable"
 	OpDisable     Operation = "disable"
 )
@@ -87,6 +94,7 @@ type Item struct {
 	Cache    *domain.Cache
 	Artifact *domain.Artifact
 	Workflow *domain.Workflow
+	Job      *domain.Job
 
 	// Skip is stamped by Plan. A value a caller sets is overwritten (ADR-0019).
 	Skip SkipReason
@@ -117,6 +125,15 @@ func LogItem(r domain.Run) Item {
 // constructors make (ADR-0019).
 func WorkflowItem(w domain.Workflow) Item {
 	return Item{Repo: w.Repo, Kind: KindWorkflow, ID: w.ID, Workflow: &w}
+}
+
+// JobItem freezes a Job into an Item: Kind "job", carrying the Job's own id, which the
+// per-Job re-run endpoint addresses (run-lifecycle R16). The Job rides along as the
+// display row and carries its RunID, which Plan reads to refuse two Jobs of one Run.
+// Its Repo is stamped at fetch, so the tuple is derived from the object here as it is
+// in every other constructor and the pair cannot disagree (ADR-0019).
+func JobItem(j domain.Job) Item {
+	return Item{Repo: j.Repo, Kind: KindJob, ID: j.ID, Job: &j}
 }
 
 // CacheItem freezes a Cache into an Item (storage-reclamation R17).

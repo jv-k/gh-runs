@@ -119,6 +119,9 @@ func (p Plan) Skipped() int {
 // (ADR-0019, repo-discovery R8). The threshold is read here, so R7's pricing is a
 // property of the returned value (ADR-0019).
 func (o *Ops) Plan(op Operation, sel []Item, repos map[domain.RepoID]domain.Repo) (Plan, error) {
+	if err := checkOneJobPerRun(op, sel); err != nil {
+		return Plan{}, err
+	}
 	items := make([]Item, len(sel))
 	copy(items, sel)
 	for i := range items {
@@ -172,6 +175,32 @@ func skipFor(op Operation, it Item, repo domain.Repo) SkipReason {
 	return SkipNone
 }
 
+// checkOneJobPerRun refuses a per-Job re-run set holding two Jobs of the same Run. R12
+// makes the second id's fate unverifiable, and R28 bars the write that would verify it, so
+// the set is refused rather than half-attempted.
+//
+// It is an error rather than a skip because the operator's set came from a name that
+// matched twice, and no member of the pair is the one they meant. The message names the
+// Run, because that is where they would go to look.
+func checkOneJobPerRun(op Operation, sel []Item) error {
+	if op != OpRerunJob {
+		return nil
+	}
+	seen := make(map[int64]bool, len(sel))
+	for _, it := range sel {
+		if it.Kind != KindJob || it.Job == nil {
+			continue
+		}
+		if seen[it.Job.RunID] {
+			return fmt.Errorf("ops: the selection holds more than one Job of Run %d; a per-Job "+
+				"re-run supersedes the whole Attempt, so re-running two of its Jobs is not a thing "+
+				"the API can be asked for (run-lifecycle R12)", it.Job.RunID)
+		}
+		seen[it.Job.RunID] = true
+	}
+	return nil
+}
+
 // frictionFor prices the confirmation friction (ADR-0019's one table). A single re-run
 // prices at None (run-lifecycle R18). A set spanning repositories, or reaching the
 // threshold, prices at TypedCount (R7, R8). Everything else prices at YN, and
@@ -184,7 +213,7 @@ func frictionFor(op Operation, items []Item, threshold int) FrictionLevel {
 	if op == OpEnable || op == OpDisable {
 		return FrictionNone
 	}
-	if (op == OpRerun || op == OpRerunFailed) && len(items) == 1 {
+	if (op == OpRerun || op == OpRerunFailed || op == OpRerunJob) && len(items) == 1 {
 		return FrictionNone
 	}
 	if repoSpan(items) > 1 || len(items) >= threshold {

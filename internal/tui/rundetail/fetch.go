@@ -53,6 +53,11 @@ func ClientFetch(client Requester) Fetch {
 		if err := json.Unmarshal(body, &page); err != nil {
 			return nil, err
 		}
+		// Stamp the repository the request was made against. The payload does not carry
+		// it, and this is the one place both facts are in hand (ADR-0019).
+		for i := range page.Jobs {
+			page.Jobs[i].Repo = repo
+		}
 		return page.Jobs, nil
 	}
 }

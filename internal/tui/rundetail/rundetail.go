@@ -117,6 +117,16 @@ type Model struct {
 // the Run ID so a settle for a row the cursor has since left issues nothing (AC1). It is
 // unexported: only this package can name it, so the root's broadcast reaches every tab and
 // only this pane can act on it (ADR-0015's type-visibility targeting).
+// RerunJobMsg asks for a per-Job re-run of the Job under the cursor (run-lifecycle R16). It
+// is exported and carries the whole Job, because the pane does not own a planner or a write
+// path: the Feed does, and it is the surface that already turns a lifecycle key into a Plan,
+// a confirmation and a launch. Emitting rather than executing keeps ops's one write entry
+// reached from one place per tab (ADR-0011, ADR-0019).
+//
+// The Job carries its stamped Repo, so the Feed can freeze it into an Item without being told
+// which repository it came from.
+type RerunJobMsg struct{ Job domain.Job }
+
 type settleMsg struct{ runID int64 }
 
 // refreshMsg fires on the fast tier's tick for the Run it names (R13). Tagged with the Run
@@ -234,6 +244,8 @@ func (m Model) HandleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.active = false
 	case key.Matches(k, m.profile.OpenDetail): // enter opens the selected Job's log (log-viewer R1)
 		return m.openLog()
+	case key.Matches(k, m.profile.Rerun): // R re-runs the Job under the cursor (run-lifecycle R16)
+		return m.rerunJob()
 	case key.Matches(k, m.profile.RowUp):
 		m.moveJobCursor(-1)
 	case key.Matches(k, m.profile.RowDown):
@@ -249,6 +261,20 @@ func (m Model) HandleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.clampJobCursor()
 	}
 	return m, nil
+}
+
+// rerunJob asks the Feed to re-run the Job under the cursor (run-lifecycle R16). It is
+// reachable only from job-focus, because the whole switch above is gated on m.active, which
+// is the same rule R6a applies to the force-cancel escalation key: outside the sub-mode the
+// key means what it means everywhere else, a whole-Run re-run on the Feed's selection.
+//
+// With no Job under the cursor it is a no-op, as opening a log is.
+func (m Model) rerunJob() (Model, tea.Cmd) {
+	if m.jobCursor < 0 || m.jobCursor >= len(m.jobs) {
+		return m, nil
+	}
+	job := m.jobs[m.jobCursor]
+	return m, func() tea.Msg { return RerunJobMsg{Job: job} }
 }
 
 // openLog opens the log view over the Job under the cursor (log-viewer R1: "from Run detail").

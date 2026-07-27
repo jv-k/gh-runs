@@ -1,10 +1,12 @@
 package rundetail
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/lipgloss/v2"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
@@ -186,10 +188,20 @@ func (m Model) jobLines() []string {
 	}
 	if m.active {
 		out = append(out, "")
-		out = append(out, styleDim.Render("Select a Job and press enter to view its log."))
+		out = append(out, styleDim.Render(fmt.Sprintf(
+			"Select a Job and press enter to view its log, or %s to re-run it.", hint(m.profile.Rerun))))
+		// The note run-lifecycle R16 requires, and it is required here where open question 7
+		// only permitted it for the other two re-runs: the operator named one Job, and the
+		// rest of the superseded Attempt's Steps and logs go with it whether they meant that
+		// or not. Non-blocking means it renders. It does not gate and it does not confirm.
+		out = append(out, styleDim.Render(
+			"Re-running one Job supersedes the whole Attempt, taking every other Job's logs with it."))
 	}
 	return out
 }
+
+// hint renders a binding's key for a help line, the same one-liner every pane uses (R7a).
+func hint(b key.Binding) string { return b.Help().Key }
 
 // gutterWidth is the width the Job cursor gutter takes, two columns in job-focus and none
 // otherwise, so the stage-8 view is unchanged when the operator has not descended.

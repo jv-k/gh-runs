@@ -1,0 +1,10 @@
+[1mcli/cli · CI[m   [38;2;138;138;138mRun #4821[m
+[38;2;138;138;138mcompleted[m  [38;2;95;175;95msuccess[m
+
+  [1mJOB / STEP                                                   STATUS      CONCLUSION      ELAPSED  [m
+> build                                                        [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;138;138;138m1m4s     [m
+  [38;2;138;138;138m    1 Set up job                                            [m [38;2;138;138;138mcompleted  [m [38;2;95;175;95msuccess        [m [38;2;138;138;138m2s       [m
+  test                                                         [38;2;138;138;138mcompleted  [m [38;2;255;95;95mfailure        [m [38;2;138;138;138m58s      [m
+
+[38;2;138;138;138mSelect a Job and press enter to view its log, or R to re-run it.[m
+[38;2;138;138;138mRe-running one Job supersedes the whole Attempt, taking every other Job's logs with it.[m

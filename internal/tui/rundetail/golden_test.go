@@ -10,6 +10,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/governor"
+	"github.com/jv-k/gh-runs/v2/internal/keys"
 )
 
 // The goldens render the pane's frame from held state alone, at 100 columns, with no
@@ -126,4 +127,36 @@ func TestGoldenPaused(t *testing.T) {
 	m := goldenPane(r, jobs)
 	m, _ = m.Update(governor.Readout{Exhausted: true, Reset: time.Date(2026, 7, 15, 17, 9, 0, 0, time.UTC)})
 	goldie.New(t).Assert(t, "paused", []byte(m.View()))
+}
+
+// goldenFocusedPane is goldenPane descended into job-focus, with a resolved keybinding set so
+// the hints render their real keys (R7a). The plain goldenPane leaves Profile at its zero
+// value, which is right for the frames that carry no hint and wrong for these.
+func goldenFocusedPane(r domain.Run, jobs []domain.Job) Model {
+	m := New(Options{Clock: clockwork.NewFakeClockAt(t0), Profile: keys.Standard})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100})
+	m, _ = m.Open(r)
+	m, _ = m.Update(jobsMsg{runID: r.ID, jobs: jobs})
+	return m.Focus()
+}
+
+// TestGoldenJobFocusStatesTheRerunNote is the frame run-lifecycle R16 mandates, and it had no
+// golden at all before this one: no test rendered job-focus, so neither the cursor gutter nor
+// its hints were pinned by any frame.
+//
+// Two things are asserted by these bytes. The hint names the key that re-runs the Job under
+// the cursor, and the note states what the superseded Attempt takes with it. R16 requires that
+// note here where open question 7 only permitted it for the other two re-runs, because the
+// operator named one Job and the rest of the Attempt's Steps and logs go anyway. It is
+// non-blocking: it renders, it does not gate, and it does not confirm.
+func TestGoldenJobFocusStatesTheRerunNote(t *testing.T) {
+	r := gRun(29516338954, "cli", "cli", "CI", 4821, 1, completed, success)
+	jobs := []domain.Job{
+		gJob("build", completed, success, sec(-64), sec(0),
+			gStep(1, "Set up job", completed, success, sec(-64), sec(-62)),
+		),
+		gJob("test", completed, failure, sec(-60), sec(-2)),
+	}
+
+	goldie.New(t).Assert(t, "job_focus_rerun_note", []byte(goldenFocusedPane(r, jobs).View()))
 }

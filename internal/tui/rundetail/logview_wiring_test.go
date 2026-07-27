@@ -114,3 +114,47 @@ func TestCapturesInputPropagatesFromLog(t *testing.T) {
 		t.Error("the pane still captures input after the search was cancelled")
 	}
 }
+
+// TestRerunJobKeyIsInertOutsideJobFocus pins run-lifecycle R16's inertness rule, the same one
+// R6a applies to the force-cancel escalation key. Outside job-focus the key means what it
+// means everywhere else, a whole-Run re-run on the Feed's selection, and the pane must not
+// steal it. Inside job-focus it names the Job under the cursor.
+func TestRerunJobKeyIsInertOutsideJobFocus(t *testing.T) {
+	r := domain.Run{ID: 1, Repo: domain.RepoID{Host: domain.HostGitHub, Owner: "cli", Name: "cli"}}
+	jobs := []domain.Job{
+		{ID: 101, RunID: 1, Name: "build", Repo: r.Repo},
+		{ID: 102, RunID: 1, Name: "test", Repo: r.Repo},
+	}
+	build := func() Model {
+		m := New(Options{Profile: keys.Standard})
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 100})
+		m, _ = m.Open(r)
+		m, _ = m.Update(jobsMsg{runID: r.ID, jobs: jobs})
+		return m
+	}
+
+	t.Run("not in job-focus: the key is not consumed", func(t *testing.T) {
+		_, cmd := build().HandleKey(press("R"))
+		if cmd != nil {
+			t.Error("the pane consumed the re-run key outside job-focus; it belongs to the Feed there (R16, R6a)")
+		}
+	})
+
+	t.Run("in job-focus: it names the Job under the cursor", func(t *testing.T) {
+		m := build().Focus()
+		_, cmd := m.HandleKey(press("R"))
+		if cmd == nil {
+			t.Fatal("the re-run key did nothing in job-focus (R16)")
+		}
+		msg, ok := cmd().(RerunJobMsg)
+		if !ok {
+			t.Fatalf("the key produced %T, want RerunJobMsg", cmd())
+		}
+		if msg.Job.ID != 101 {
+			t.Errorf("re-ran Job %d, want the one under the cursor (101)", msg.Job.ID)
+		}
+		if msg.Job.Repo != r.Repo {
+			t.Errorf("the Job carries Repo %v, want %v stamped at fetch: the Feed derives the Item's tuple from it", msg.Job.Repo, r.Repo)
+		}
+	})
+}
