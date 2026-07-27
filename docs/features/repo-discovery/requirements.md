@@ -80,6 +80,8 @@ R14 is where go-gh's `repository.Current()` trap lands, so it must not be met by
 
 R23 amends neither R3 nor R8. A failure still classifies nothing, so it still never changes R3's `has_runs`, and it still never moves R8's recorded capability. Retirement is a separate authority, over membership alone.
 
+A 403 the governor never classified is **not** definitive either, and R23's wording above says only that the verdict must report not-rate-limiting. Absence of a verdict is not that verdict: the governor's headers-only reader answers false for both, so the check is that a verdict exists and that it says not-rate-limiting. [ADR-0020](../../adr/0020-discovery-scope-adoption-and-refresh.md) carries the correction.
+
 On a fine-grained PAT the 403 signal does not fire, and R23 degrades to 404 alone. The governor's verdict rests on a `documentation_url` corresponding to the endpoint requested, and GitHub answers that token class with the general fine-grained-permissions page, which names no resource, so the response classifies as rate limiting ([rate-governor](../rate-governor/requirements.md) open question 1). That is the safe direction and not a gap to close: the alternative is guessing toward the reading that keeps issuing. A deleted or private repository answers 404 and retires on every token class.
 
 A retired repository returns only through R11's on-demand full refresh, which re-enumerates and re-admits it. A warm start skips its pass, so nothing else re-admits one. That makes R11 load-bearing rather than convenient, and it is the reason retirement must not ship before it.
