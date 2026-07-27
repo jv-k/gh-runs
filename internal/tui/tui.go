@@ -183,7 +183,9 @@ type Options struct {
 	DispatchStore dispatch.DocStore
 	// LogFetch reads one Job's log and LogExport downloads the whole-Run archive, both for the
 	// log view the Feed's detail pane opens over a Job (log-viewer R1, R11). main.go wires them
-	// over the shared client; the log-deletion planner reuses Ops, the one mutation entry.
+	// over the blob client, since each arrives from a signed URL behind a redirect and the
+	// local-store must not be in its path (R13); the log-deletion planner reuses Ops, the one
+	// mutation entry.
 	LogFetch  logview.Fetch
 	LogExport logview.Exporter
 	// The approvals decision pane the Feed opens over an awaiting Run runs its two writes through

@@ -614,9 +614,10 @@ func (c clients) logExport(dir string) logview.Exporter {
 // yields "" for that path, so no repository invalidation reclaims it either. Nothing revalidates
 // it, and R13 says nothing should persist per signed fetch at all.
 //
-// logview's 25 MiB ceiling does not make this safe. It is applied by the consumer, downstream of
-// persist's unconditional read of the whole body, so it bounds what the pane renders rather than
-// what the process resides, and a Job log has no upper bound (R21).
+// The store's own 8 MiB ceiling (local-store R25) does not close this, and #153 says so at
+// length: it bounds the read, so a log above it costs a bounded buffer and writes nothing, but
+// a log below it still writes an entry that is unreachable forever and still carries Repo "".
+// A store-side rule and a client-side choice are defence in depth, not alternatives.
 func (c clients) logFetch() logview.Fetch {
 	return logview.ClientFetch(c.blob)
 }
