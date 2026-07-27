@@ -1,8 +1,11 @@
 package cli_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 )
 
 // TestUnsupportedHostRejectedOffline pins AC7: an unsupported host is rejected by
@@ -221,5 +224,40 @@ func TestExcludedRepositoryDeleteNamesTheRealCause(t *testing.T) {
 	}
 	if h.logExists() {
 		t.Error("a refused plan wrote a deletion log")
+	}
+}
+
+// TestUnrecognisedRemoteCarriesTheGHTokenInstruction is repo-discovery R14 on the CLI
+// surface. On a machine where gh was never installed, go-gh's resolver fails even though
+// git works and the remote is plainly github.com, and setting GH_TOKEN fixes it in one
+// step. Scope resolution treats every resolver failure as cli-surface R22's fan-out
+// trigger, which is right, but silence is not: the operator sees the command scope itself
+// to the whole account and has nothing telling them why it did not scope to the repository
+// they are standing in.
+//
+// It stays a note rather than a failure. Fanning out is a legitimate answer, so the command
+// runs; the line only says why the scope is what it is.
+func TestUnrecognisedRemoteCarriesTheGHTokenInstruction(t *testing.T) {
+	h := newHarnessOffline(t).withCurrentErr(
+		fmt.Errorf("%w: probing remotes", ghclient.ErrRemoteHostUnrecognised))
+
+	_ = h.run("list")
+
+	if got := h.stderr.String(); !strings.Contains(got, "GH_TOKEN") {
+		t.Errorf("stderr = %q, want R14's GH_TOKEN instruction: the operator has no other way to learn why the scope is not this repository", got)
+	}
+}
+
+// TestBeingOutsideARepositoryStaysSilent is the other half, and the reason the case above
+// needs a condition rather than a blanket report. Running outside a git repository is the
+// ordinary way to use the fan-out, and a GH_TOKEN instruction there would name a problem
+// the operator does not have.
+func TestBeingOutsideARepositoryStaysSilent(t *testing.T) {
+	h := newHarnessOffline(t) // its default resolver reports no current repository
+
+	_ = h.run("list")
+
+	if got := h.stderr.String(); strings.Contains(got, "GH_TOKEN") {
+		t.Errorf("stderr = %q, want no GH_TOKEN instruction outside a repository", got)
 	}
 }

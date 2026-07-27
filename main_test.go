@@ -24,7 +24,7 @@ func TestFastPathRepo(t *testing.T) {
 	local := domain.RepoID{Host: domain.HostGitHub, Owner: "jv-k", Name: "gh-runs"}
 
 	t.Run("foreign host is rejected", func(t *testing.T) {
-		_, _, err := fastPathRepo(func() (domain.RepoID, error) {
+		_, err := fastPathRepo(func() (domain.RepoID, error) {
 			return domain.RepoID{}, &domain.UnsupportedHostError{Host: "ghe.example.com"}
 		}, nil)
 		if err == nil {
@@ -37,7 +37,7 @@ func TestFastPathRepo(t *testing.T) {
 	})
 
 	t.Run("wrapped foreign host is still rejected", func(t *testing.T) {
-		_, _, err := fastPathRepo(func() (domain.RepoID, error) {
+		_, err := fastPathRepo(func() (domain.RepoID, error) {
 			return domain.RepoID{}, fmt.Errorf("resolve current: %w", &domain.UnsupportedHostError{Host: "tenant.ghe.com"})
 		}, nil)
 		if err == nil {
@@ -46,12 +46,12 @@ func TestFastPathRepo(t *testing.T) {
 	})
 
 	t.Run("github.com repository is the fast path", func(t *testing.T) {
-		id, _, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, nil)
+		got, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, nil)
 		if err != nil {
 			t.Fatalf("a github.com repository was rejected: %v", err)
 		}
-		if id != local {
-			t.Fatalf("fast path = %v, want %v: this is the repository the engine polls first (R32)", id, local)
+		if got.repo != local {
+			t.Fatalf("fast path = %v, want %v: this is the repository the engine polls first (R32)", got.repo, local)
 		}
 	})
 
@@ -59,39 +59,39 @@ func TestFastPathRepo(t *testing.T) {
 		// settings R7: exclusion removes a repository from discovery, the Feed and all
 		// polling. Options.First is a polling path that bypasses discovery, so it has to
 		// honour the list too, on the same ground discovery.FastPath already refuses one.
-		id, _, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, []domain.RepoID{local})
+		got, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, []domain.RepoID{local})
 		if err != nil {
 			t.Fatalf("an excluded repository was treated as a rejection: %v", err)
 		}
-		if id != (domain.RepoID{}) {
-			t.Fatalf("fast path = %v, want none: an excluded repository is removed from all polling (settings R7)", id)
+		if got.repo != (domain.RepoID{}) {
+			t.Fatalf("fast path = %v, want none: an excluded repository is removed from all polling (settings R7)", got.repo)
 		}
 	})
 
 	t.Run("exclusion does not catch a different repository", func(t *testing.T) {
 		other := domain.RepoID{Host: domain.HostGitHub, Owner: "jv-k", Name: "deslopper"}
-		id, _, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, []domain.RepoID{other})
+		got, err := fastPathRepo(func() (domain.RepoID, error) { return local, nil }, []domain.RepoID{other})
 		if err != nil {
 			t.Fatalf("unexpected rejection: %v", err)
 		}
-		if id != local {
-			t.Fatalf("fast path = %v, want %v: only the excluded identity is removed", id, local)
+		if got.repo != local {
+			t.Fatalf("fast path = %v, want %v: only the excluded identity is removed", got.repo, local)
 		}
 	})
 
 	t.Run("outside a repository there is no fast path", func(t *testing.T) {
 		// R34: an unresolvable remote is not a rejection; the Feed reveals the account.
-		id, advice, err := fastPathRepo(func() (domain.RepoID, error) {
+		got, err := fastPathRepo(func() (domain.RepoID, error) {
 			return domain.RepoID{}, errors.New("not launched inside a github.com repository")
 		}, nil)
 		if err != nil {
 			t.Fatalf("an unresolvable remote was treated as a rejection: %v", err)
 		}
-		if advice != nil {
-			t.Errorf("advice = %v, want none: a launch outside any repository is an ordinary session, and an instruction here would name a problem the operator does not have", advice)
+		if got.advice != nil {
+			t.Errorf("advice = %v, want none: a launch outside any repository is an ordinary session, and an instruction here would name a problem the operator does not have", got.advice)
 		}
-		if id != (domain.RepoID{}) {
-			t.Fatalf("fast path = %v, want none (R34: progressive reveal across the account)", id)
+		if got.repo != (domain.RepoID{}) {
+			t.Fatalf("fast path = %v, want none (R34: progressive reveal across the account)", got.repo)
 		}
 	})
 
@@ -101,20 +101,20 @@ func TestFastPathRepo(t *testing.T) {
 		// github.com. Setting GH_TOKEN fixes it in one step, so the instruction is worth
 		// showing. It is not a rejection: the dashboard still opens and reveals whatever the
 		// token can see, which is R34's fallback.
-		id, advice, err := fastPathRepo(func() (domain.RepoID, error) {
+		got, err := fastPathRepo(func() (domain.RepoID, error) {
 			return domain.RepoID{}, fmt.Errorf("%w: probing remotes", ghclient.ErrRemoteHostUnrecognised)
 		}, nil)
 		if err != nil {
 			t.Fatalf("an unrecognised remote was treated as a rejection: %v", err)
 		}
-		if advice == nil {
+		if got.advice == nil {
 			t.Fatal("no advice returned: R14's GH_TOKEN instruction never reaches the user")
 		}
-		if !errors.Is(advice, ghclient.ErrRemoteHostUnrecognised) {
-			t.Errorf("advice = %v, want the resolver's own condition surfaced", advice)
+		if !errors.Is(got.advice, ghclient.ErrRemoteHostUnrecognised) {
+			t.Errorf("advice = %v, want the resolver's own condition surfaced", got.advice)
 		}
-		if id != (domain.RepoID{}) {
-			t.Fatalf("fast path = %v, want none: the remote did not resolve", id)
+		if got.repo != (domain.RepoID{}) {
+			t.Fatalf("fast path = %v, want none: the remote did not resolve", got.repo)
 		}
 	})
 }

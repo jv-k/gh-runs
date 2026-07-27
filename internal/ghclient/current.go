@@ -26,7 +26,15 @@ const hostGitHub = "github.com"
 //
 // It is a sentinel rather than a string match because the message exists once already, and
 // a caller re-deriving the condition from its text would be a second copy that drifts.
-var ErrRemoteHostUnrecognised = errors.New("the repository's git remote was not recognised as GitHub")
+//
+// **It carries the instruction, not just the condition.** R14's whole point is that the
+// operator is told what to do, and putting the instruction at the wrapping site instead
+// would make that a property of one call path: a caller that unwrapped, or wrapped
+// differently, would print a condition with no remedy. Here every caller that prints this
+// error prints the remedy with it.
+var ErrRemoteHostUnrecognised = errors.New(
+	"could not recognise this repository's git remote as GitHub; " +
+		"if gh is not installed, set GH_TOKEN so the remote's host is known")
 
 // CurrentRepo resolves the repository the tool was launched inside, host-qualified
 // (repo-discovery R14). main.go passes it to discovery as the fast-path resolver,
@@ -56,9 +64,7 @@ func CurrentRepo() (domain.RepoID, error) {
 func resolveCurrent(repo repository.Repository, err error) (domain.RepoID, error) {
 	if err != nil {
 		if strings.Contains(err.Error(), "known GitHub host") {
-			return domain.RepoID{}, fmt.Errorf(
-				"%w: %w; if gh is not installed, set GH_TOKEN so the remote's host is known",
-				ErrRemoteHostUnrecognised, err)
+			return domain.RepoID{}, fmt.Errorf("%w: %w", ErrRemoteHostUnrecognised, err)
 		}
 		return domain.RepoID{}, fmt.Errorf("not launched inside a github.com repository: %w", err)
 	}

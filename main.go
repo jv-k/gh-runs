@@ -246,12 +246,13 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 	// attributed to github.com (R35, AC17). Being outside a git repository, or an
 	// unresolvable remote, is not a rejection: there is simply no fast path, and the Feed
 	// falls back to progressive reveal across the discovered account (R34).
-	first, advice, err := fastPathRepo(ghclient.CurrentRepo, cfg.Exclude)
+	launched, err := fastPathRepo(ghclient.CurrentRepo, cfg.Exclude)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gh-runs:", err)
 		return 1
 	}
-	if advice != nil {
+	first := launched.repo
+	if advice := launched.advice; advice != nil {
 		// R14's instruction, printed before the alt screen is entered and therefore still on
 		// the scrollback the operator returns to. It is not fatal: the dashboard opens and
 		// shows whatever the token can reach, which without one is nothing, and this line is
@@ -367,10 +368,10 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 // to git, and one launch needs the answer three times: as the engine's Options.First, as
 // R35's host gate, and as the identity R22's adoption admits. It is resolved once here and
 // used for all three. discovery.Options.Current names the same resolver and nothing on this
-// path calls it: adoption takes the resolved identity through AdoptLaunch precisely so it
+// path calls it: adoption takes the resolved identity through AdoptLaunchRepo precisely so it
 // does not, and the FastPath and Discover entrypoints that would are for a caller holding no
-// answer of its own. Reaching for the resolver again would be a second git subprocess per
-// launch.
+// answer of its own, which this is not. Reaching for the resolver again would be a second git
+// subprocess per launch.
 //
 // An excluded repository is never the fast path. settings R7 removes an excluded repository
 // from "discovery, the Feed and all polling", and Options.First is a polling path that
@@ -401,24 +402,41 @@ func runTUI(cfg config.Config, clk clock.Clock, cl clients, gov *governor.Govern
 // is no fast path, the Feed falls back to progressive reveal across the account (R34), and
 // an instruction here would name a problem they do not have. An excluded launch repository
 // takes the same silent path, because it is a configured choice rather than a failure.
-func fastPathRepo(current func() (domain.RepoID, error), exclude []domain.RepoID) (id domain.RepoID, advice error, reject error) {
+func fastPathRepo(current func() (domain.RepoID, error), exclude []domain.RepoID) (launch, error) {
 	id, err := current()
 	var unsupported *domain.UnsupportedHostError
 	if errors.As(err, &unsupported) {
-		return domain.RepoID{}, nil, unsupported
+		return launch{}, unsupported
 	}
 	if errors.Is(err, ghclient.ErrRemoteHostUnrecognised) {
-		return domain.RepoID{}, err, nil
+		return launch{advice: err}, nil
 	}
 	if err != nil {
-		return domain.RepoID{}, nil, nil
+		return launch{}, nil
 	}
 	for _, ex := range exclude {
 		if ex == id {
-			return domain.RepoID{}, nil, nil
+			return launch{}, nil
 		}
 	}
-	return id, nil, nil
+	return launch{repo: id}, nil
+}
+
+// launch is what resolving the launch repository yielded, short of a rejection. The two
+// fields travel together because they are one answer to one question, and because the
+// alternative shape returns two errors from one call, where a caller can transpose them
+// silently and still compile.
+//
+// The zero value is a complete answer: no fast path and nothing to say about it, which is
+// every session launched outside a git repository and every one whose launch repository the
+// operator excluded.
+type launch struct {
+	// repo is the repository the engine polls first and alone (R32), or the zero value when
+	// there is no fast path.
+	repo domain.RepoID
+	// advice is a resolution failure the operator can act on, to be reported without
+	// stopping anything (R14). Nil unless there is something worth their attention.
+	advice error
 }
 
 // classifiedBy is the engine's Classified seam over discovery's record set: whether
@@ -504,7 +522,15 @@ func discoverBehind(ctx context.Context, sched *scheduler.Scheduler, disc *disco
 	// per repository as each is classified (repo-discovery R15, live-run-feed R33). The wakes
 	// coalesce, so ~163 of them cost a handful of re-evaluations and no extra request.
 	if seeded == 0 {
-		_ = disc.Pass(ctx, tellEngine)
+		if err := disc.Pass(ctx, tellEngine); err != nil {
+			// R22 adopts "when enumeration completes". A pass that failed has not completed,
+			// and its record set is partial, so a repository missing from it is not evidence
+			// that enumeration would never return it. Adopting on that evidence would mark an
+			// ordinary member Adopted, which is a session-scoped membership the next launch
+			// would not re-admit. Declining leaves the capability not-yet-known, the safe
+			// state, and the next launch tries again.
+			return
+		}
 	}
 
 	// R22: the launch repository is adopted for the session when enumeration did not return
@@ -513,7 +539,7 @@ func discoverBehind(ctx context.Context, sched *scheduler.Scheduler, disc *disco
 	// Runs and its capability not-yet-known, which is the safe state (R8, AC8). Both launches
 	// reach this, warm and cold, because a warm store no more contains a repository
 	// enumeration never returned than a fresh pass does.
-	_ = disc.AdoptLaunch(ctx, first, tellEngine)
+	_ = disc.AdoptLaunchRepo(ctx, first, tellEngine)
 }
 
 // clients is the pair of request surfaces the tool dials one assembled chain with.

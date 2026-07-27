@@ -125,8 +125,21 @@ func TestAdoptLaunchAdmitsARepositoryEnumerationDidNotReturn(t *testing.T) {
 		t.Fatalf("precondition: capability = %v, want not-yet-known", got)
 	}
 
-	if err := h.disc.AdoptLaunch(context.Background(), local, nil); err != nil {
-		t.Fatalf("AdoptLaunch: %v", err)
+	before := h.counting.count()
+	if err := h.disc.AdoptLaunchRepo(context.Background(), local, nil); err != nil {
+		t.Fatalf("AdoptLaunchRepo: %v", err)
+	}
+
+	// The whole cost, pinned rather than left to grow. R22 and ADR-0020 price the escape at
+	// one request and that is the capability request, still exactly one. The second is R14's
+	// classification listing, which discovery spends in FastPath and does not spend on this
+	// path, because here the fast path belongs to the scheduler. Naming the total is what
+	// stops a third from arriving unnoticed.
+	if got := h.counting.count() - before; got != 2 {
+		t.Errorf("adoption issued %d requests, want 2 (R22's capability GET and R14's classification listing)", got)
+	}
+	if got := h.counting.countExact("https://api.github.com/repos/jv-k/local"); got != 1 {
+		t.Errorf("capability requests = %d, want exactly 1 (R22, ADR-0020)", got)
 	}
 
 	if got := h.disc.Capability(local); got != domain.CapabilityPermitted {
@@ -157,8 +170,8 @@ func TestAdoptLaunchSpendsNothingOnAnEnumeratedMember(t *testing.T) {
 	}
 	before := h.counting.count()
 
-	if err := h.disc.AdoptLaunch(context.Background(), member, nil); err != nil {
-		t.Fatalf("AdoptLaunch: %v", err)
+	if err := h.disc.AdoptLaunchRepo(context.Background(), member, nil); err != nil {
+		t.Fatalf("AdoptLaunchRepo: %v", err)
 	}
 
 	if got := h.counting.count() - before; got != 0 {
@@ -173,8 +186,8 @@ func TestAdoptLaunchSpendsNothingOnAnEnumeratedMember(t *testing.T) {
 func TestAdoptLaunchIsANoOpOutsideAnyRepository(t *testing.T) {
 	h := newHarness(t, "fastpath", "")
 
-	if err := h.disc.AdoptLaunch(context.Background(), domain.RepoID{}, nil); err != nil {
-		t.Fatalf("AdoptLaunch for the zero repository: %v", err)
+	if err := h.disc.AdoptLaunchRepo(context.Background(), domain.RepoID{}, nil); err != nil {
+		t.Fatalf("AdoptLaunchRepo for the zero repository: %v", err)
 	}
 	if got := h.counting.count(); got != 0 {
 		t.Errorf("adoption outside any repository issued %d requests, want 0", got)
@@ -189,8 +202,8 @@ func TestAdoptLaunchRefusesAnExcludedRepository(t *testing.T) {
 	local := gh("jv-k", "local")
 	h := newHarness(t, "fastpath", "", withExclude(local))
 
-	if err := h.disc.AdoptLaunch(context.Background(), local, nil); err != nil {
-		t.Fatalf("AdoptLaunch for an excluded repository: %v", err)
+	if err := h.disc.AdoptLaunchRepo(context.Background(), local, nil); err != nil {
+		t.Fatalf("AdoptLaunchRepo for an excluded repository: %v", err)
 	}
 	if got := h.counting.count(); got != 0 {
 		t.Errorf("adoption of an excluded repository issued %d requests, want 0 (settings R7, AC5)", got)

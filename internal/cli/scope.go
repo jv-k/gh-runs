@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/ghclient"
 )
 
 // hostGitHub is the one host 2.0.0 serves (ADR-0009). Every other host is
@@ -85,12 +87,24 @@ func resolveScope(deps Deps, f *listFlags) (scope, error) {
 	}
 
 	if deps.Current != nil {
-		if id, err := deps.Current(); err == nil {
+		id, err := deps.Current()
+		if err == nil {
 			return scope{repos: []domain.RepoID{id}}, nil
 		}
 		// A resolver error means the tool was not launched inside a repository (or
 		// its remote is not recognised). That is R22's fan-out trigger, not a
 		// failure: no repository means all repositories.
+		//
+		// One of those two is worth a word, though (repo-discovery R14). A remote git
+		// resolves but go-gh does not recognise is one step from working, and setting
+		// GH_TOKEN is that step. Fanning out silently leaves the operator watching a
+		// command scope itself to the whole account with nothing saying why it did not
+		// scope to the repository they are standing in. Being outside a repository is
+		// the ordinary way to reach the fan-out and says nothing, because an
+		// instruction there would name a problem they do not have.
+		if errors.Is(err, ghclient.ErrRemoteHostUnrecognised) {
+			_, _ = fmt.Fprintln(deps.Stderr, "gh-runs:", err)
+		}
 	}
 	return fanOutScope(deps)
 }

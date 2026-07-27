@@ -102,12 +102,12 @@ func (d *Discovery) Discover(ctx context.Context, emit func(Record)) error {
 		// Adoption is a single-request convenience (R22). Its failure leaves the
 		// repository painted with its Runs and its capability not-yet-known, which is
 		// the safe state: destructive actions stay disabled.
-		_ = d.AdoptLaunch(ctx, fastID, emit)
+		_ = d.AdoptLaunchRepo(ctx, fastID, emit)
 	}
 	return nil
 }
 
-// AdoptLaunch is R22's session adoption for a launch repository the caller has already
+// AdoptLaunchRepo is R22's session adoption for a launch repository the caller has already
 // resolved. When enumeration did not return it, discovery spends one
 // GET /repos/{owner}/{repo} to learn its permissions, archived and disabled, and admits
 // it for the session.
@@ -116,20 +116,34 @@ func (d *Discovery) Discover(ctx context.Context, emit func(Record)) error {
 // the answer.** main.go resolves the launch repository once before the engine exists: the
 // resolver shells out to git, and one launch needs the answer twice, as the scheduler's
 // Options.First and as the host gate. Driving adoption through Discover instead would
-// resolve it a second time and re-probe its Run listing, and the root would have to spend
-// a whole enumeration pass it may already have loaded from the local-store.
+// resolve it a second time, a second git subprocess per launch, and would oblige the root
+// to spend a whole enumeration pass it may already have loaded from the local-store. What
+// it would not save is the Run listing: see below, this spends one too.
 //
-// It classifies the repository first when it holds no record for it, which is the case
-// whenever the caller is not Discover. R22 admits the repository "to the poll set if it
-// has Runs", and that flag comes from a Run listing, not from the capability request. A
-// record carrying capability alone would read as having no Runs, and the launch
-// repository would drop out of the poll set at the moment the scheduler stopped treating
-// it as a special case, which is the opposite of what adoption is for.
+// **It classifies the repository first when it holds no record for it, and that is a
+// second request.** R22 and ADR-0020 both price the escape at exactly one request, and
+// the capability request is still exactly one: the classification listing is R14's, which
+// discovery spends in FastPath and did not spend here, because on this path the fast path
+// belongs to the scheduler rather than to discovery. It is conditional, so a launch whose
+// Runs the scheduler has just listed revalidates against the local-store and costs no
+// primary-limit points.
+//
+// Handing the classification in from the caller instead would be cheaper by one round trip
+// and wrong. The probe records more than the has-Runs flag: putProbed stamps the probe
+// instant and whether an ETag came back, and the two-tier refresh cadence reads both (R11,
+// R12). The scheduler's poll is a different resource with a different ETag, so a record
+// built from it would carry refresh bookkeeping that describes a listing discovery never
+// made.
+//
+// The flag itself is load-bearing either way. R22 admits the repository "to the poll set
+// if it has Runs", and a record carrying capability alone would read as having none, so
+// the launch repository would drop out of the poll set at the moment the scheduler stopped
+// treating it as a special case, which is the opposite of what adoption is for.
 //
 // The zero identity is a launch outside any git repository, or one whose remote did not
 // resolve, and is a no-op rather than an error: there is no repository to adopt, which is
 // an ordinary session rather than a failure.
-func (d *Discovery) AdoptLaunch(ctx context.Context, id domain.RepoID, emit func(Record)) error {
+func (d *Discovery) AdoptLaunchRepo(ctx context.Context, id domain.RepoID, emit func(Record)) error {
 	if id == (domain.RepoID{}) {
 		return nil
 	}
