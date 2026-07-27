@@ -1,5 +1,5 @@
 [1mSettings[m
-[38;2;138;138;138mChanges are saved to your config file.[m
+[38;2;158;158;158mChanges are saved to your config file.[m
 
   Budget                    [1;38;2;0;175;255mnormal[m
   Keybinding profile        [1;38;2;0;175;255mstandard[m
@@ -7,12 +7,12 @@
   Timestamps                [1;38;2;0;175;255mabsolute[m
   Workflows scope           [1;38;2;0;175;255mall-repos[m
   Storage scope             [1;38;2;0;175;255mall-repos[m
-[1m> [m[1mLaunch filter             [m[1;38;2;0;175;255mbranch:main status:queued status:failure[m  [38;2;138;138;138m(enter to edit)[m
+[1m> [m[1mLaunch filter             [m[1;38;2;0;175;255mbranch:main status:queued status:failure[m  [38;2;158;158;158m(enter to edit)[m
   Excluded repositories     [1;38;2;0;175;255mnone[m
   Pinned repositories       [1;38;2;0;175;255mnone[m
   Confirmation threshold    [1;38;2;0;175;255m50[m
   Purge breaker threshold   [1;38;2;0;175;255m50[m
   Discovery refresh         [1;38;2;0;175;255m5 min[m
 
-[38;2;138;138;138mThe Runs feed starts filtered by this. Same syntax as its / filter.[m
-[38;2;138;138;138m↑/↓ move   enter edit filter   esc close[m
+[38;2;158;158;158mThe Runs feed starts filtered by this. Same syntax as its / filter.[m
+[38;2;158;158;158m↑/↓ move   enter edit filter   esc close[m
