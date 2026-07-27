@@ -164,6 +164,8 @@ The Feed is gh-runs' default view and primary surface: one live list of Runs spa
 
 **R37.** The Feed must learn that a repository has left discovery's set from a **membership set of its own**, carrying every record discovery still holds whether or not its capability is known, and never from absence in the capability set R18 gates on. Both prunes that drop what a departing repository stranded, the failed-poll indicator and [run-lifecycle](../run-lifecycle/requirements.md) R4's cancellation-requested mark, must read the membership set alone.
 
+An empty membership set must prune nothing. Before discovery has returned, every set is empty, and a prune reading that as an account with no repositories would clear a failure the poll set still holds. Emptiness is a cold start and carries no information about membership at all.
+
 The two cannot be one message. R18 requires that a repository whose permission data has not arrived be absent from the capability set, so absence there already means not-yet-known. A prune reading it would drop the failure indicator of a live fast-path repository (R32) while its failure is real, which is the mirror image of the leak the prunes exist to close. The membership set carries that repository from its first paint, and R18's gate and the set it reads are unchanged. Discovery retires a repository under [repo-discovery](../repo-discovery/requirements.md) R23, and until it does, neither set ever shrinks and neither prune can fire.
 
 ## Acceptance criteria
