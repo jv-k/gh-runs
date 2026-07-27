@@ -4,15 +4,15 @@
 
 ## Purpose
 
-Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations that act on a Run's execution rather than its existence, invoked from the Feed, from Run detail, or across a multi-selection. A re-run never creates a Run. It adds an Attempt to the Run that already exists, and the Feed row mutates in place.
+Cancel, force-cancel, re-run, re-run failed Jobs and re-run one Job are the five operations that act on execution rather than existence, invoked from the Feed, from Run detail, or across a multi-selection. Four address a Run and the fifth addresses a Job, and all five land on the Run: a re-run never creates a Run. It adds an Attempt to the Run that already exists, and the Feed row mutates in place.
 
 ## Requirements
 
 ### The operations
 
-**R1.** The tool MUST offer exactly four lifecycle operations on a Run: cancel, force-cancel, re-run, and re-run failed Jobs.
+**R1.** The tool MUST offer exactly five lifecycle operations: cancel, force-cancel, re-run, re-run failed Jobs, and re-run one Job. The first four address a Run. The fifth addresses a Job and is specified in R14a.
 
-**R2.** All four MUST be gated per repository on `permissions.push && !archived`, using the permission and `archived` fields repository discovery already carries. Where the gate fails, each operation MUST be visibly unavailable with its reason shown, and MUST issue no request. An archived repository MUST be distinguished from one merely lacking push, because archived is permanent.
+**R2.** All five MUST be gated per repository on `permissions.push && !archived`, using the permission and `archived` fields repository discovery already carries. Where the gate fails, each operation MUST be visibly unavailable with its reason shown, and MUST issue no request. An archived repository MUST be distinguished from one merely lacking push, because archived is permanent. For re-run one Job the gate is keyed on the Job's own repository, which R14a requires the Job to carry.
 
 **R3.** The gate is advisory, not a guarantee. A 403 arriving despite `push: true` MUST be handled as an expected outcome and MUST NOT be presented as a defect: fine-grained PATs expose no scopes, so the API is always the final authority.
 
@@ -48,17 +48,23 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **R14.** Re-run and re-run failed Jobs MUST each offer a debug-logging option at the point of invocation, defaulting to off. Both endpoints accept `enable_debug_logging`, and `gh run rerun` exposes `--debug` alongside `--failed`.
 
-**Re-running one Job is a fifth operation and is not in 2.0.0 scope ([#106](https://github.com/jv-k/gh-runs/issues/106)).** gh offers `gh run rerun --job <id>` against a Job endpoint, and R1 fixes this feature at exactly four operations, all of which act on a Run. The non-interactive surface therefore mirrors every `gh run rerun` flag except `-j/--job`, which is left off rather than accepted and widened to the whole Run: re-running a Run when the operator named one Job spends Actions minutes they did not ask to spend, and R12 makes the prior Attempt's Jobs unreachable in the process. What it would cost is recorded on the issue.
+**R14a.** Re-run one Job MUST be a distinct operation against `POST /repos/{owner}/{repo}/actions/jobs/{job_id}/rerun`, the fifth operation R1 names. It MUST obey R8 through R12 as both other re-runs do, and MUST offer R14's debug-logging option, which that endpoint accepts. It MUST NOT be silently widened to the whole Run: re-running a Run when the operator named one Job spends Actions minutes they did not ask to spend.
+
+A frozen set for this operation MUST hold at most one Job per Run, and a set holding two Jobs of one Run MUST be refused before any request is issued. A re-run adds an Attempt, and R12's measured constraint is that prior Attempts' Jobs are not served, so the second Job id in such a set was read from the Attempt the first request has just superseded. Whether that id still addresses anything is unverified, and R28 bars the live write that would settle it. Across Runs the interference does not arise, because each Run gains its own Attempt independently.
+
+The multi-Run form MUST select the Job by name rather than by id, because a Job id names one Job of one Run and cannot express "this Job in each of these Runs". A name matching no Job in a given Run MUST be recorded as a skip with its reason stated, never as a failure, which is R19's shape for an ineligible member of a frozen set.
+
+**R14b.** Where the Run detail pane offers this operation, it MUST render a one-line non-blocking note stating that the other Jobs of the current Attempt lose their Steps and their logs. Resolved open question 7 permits such a note for the other two re-runs and does not require it, on the reasoning that "those are the failed Jobs you are re-running". That reasoning does not hold here: the operator names one Job and the rest of the Attempt goes anyway. The note MUST NOT block, MUST NOT confirm, and MUST NOT be read as reopening R18.
 
 **R15.** The tool MUST NOT hide, disable, or pre-emptively reject a re-run based on the Run's age. If the API rejects a re-run, the tool MUST surface the API's own reason. This follows R3: the API is the authority, and the age limit described in open question 1 is unverified.
 
 ### Multi-selection
 
-**R16.** All four operations MUST be invocable on a multi-selection, using the Purge's Run-ID-keyed selection and frozen set: the set freezes when the confirm modal opens, and Feed activity after that moment MUST NOT change it.
+**R16.** All five operations MUST be invocable on a multi-selection, using the Purge's frozen set: the set freezes when the confirm modal opens, and Feed activity after that moment MUST NOT change it. The four Run operations use the Purge's Run-ID-keyed selection. Re-run one Job is Job-ID-keyed, bounded by R14a to one Job per Run, and the multi-Run form is reached by naming the Job rather than by selecting Job rows.
 
 **R17.** Every multi-selection lifecycle operation MUST open a confirm modal showing the frozen count and a per-repository breakdown summing to it, and MUST apply the Purge's graduated friction unchanged: `y`/`N` for a small single-repository set, typing the exact count when the set is large or spans repositories. Cancelled work cannot be recovered, an Attempt cannot be un-added, and every re-run spends Actions minutes.
 
-**R18.** Single-Run cancel and force-cancel MUST take a `y`/`N` confirmation. Single-Run re-run and re-run failed Jobs MUST NOT, since neither destroys a Run and correcting a failed Run is the Feed's most common action.
+**R18.** Single-Run cancel and force-cancel MUST take a `y`/`N` confirmation. Single-Run re-run and re-run failed Jobs MUST NOT, since neither destroys a Run and correcting a failed Run is the Feed's most common action. A single-Job re-run MUST NOT either, on the same reasoning applied one level down: one Job is smaller than one Run, and R18 already exempts one Run. R14b's note is what that operation carries instead, and a note is not a confirmation.
 
 **R19.** The confirm modal MUST report Runs in the frozen set that are ineligible for the chosen operation (by repository permission under R2, and by Status for the operation at hand) in the shape "3 of 47 selected Runs are in read-only repos and will be skipped". Ineligible Runs MUST be skipped, not attempted. For cancel and force-cancel, whose cancelable-Status set is unmeasured (open question 5), no Status pre-filter is applied and a request-time 409 skips the Run (R20). The permission pre-filter is exact and always applied.
 
@@ -68,25 +74,25 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **R21.** A bulk lifecycle operation MUST reuse the Purge's failure contract: rate-limit responses feed the throttle's backoff and are not failures. Permission and unexpected errors skip the Run, record the reason, and continue. 50 consecutive failures circuit-break. The summary groups failures by reason and offers a one-key retry of the recorded failures only.
 
-**R22.** A 404 MUST NOT be interpreted uniformly across operations. For cancel and force-cancel, a 404 means the Run no longer exists and therefore is not running, so the requested end state holds and it MUST be recorded as a skip rather than a failure. For re-run and re-run failed Jobs, a 404 means the Run cannot gain an Attempt, and it MUST be recorded as a failure. The Purge's "404 counts as success" rule reasons from the requested end state. Only deletion has "gone" as its goal.
+**R22.** A 404 MUST NOT be interpreted uniformly across operations. For cancel and force-cancel, a 404 means the Run no longer exists and therefore is not running, so the requested end state holds and it MUST be recorded as a skip rather than a failure. For all three re-runs, a 404 means the target cannot gain an Attempt, and it MUST be recorded as a failure. The Purge's "404 counts as success" rule reasons from the requested end state. Only deletion has "gone" as its goal.
 
 **R23.** Bulk lifecycle operations are writes and MUST be paced by the same adaptive throttle as a Purge. Rate MUST NOT be exposed as a setting.
 
 **R24.** Bulk lifecycle operations MUST be stateless in the same sense as a Purge: no job record, no progress file, and re-invoking the same selection is the only resume. That sense is a rule about reading, not about writing ([ADR-0006](../../adr/0006-stateless-bulk-jobs.md), amended, and [purge](../purge/requirements.md) R23): what is forbidden is anything this tool reads back on a later pass.
 
-**None of the four operations here is a deletion, so [purge](../purge/requirements.md) R29's deletion log MUST NOT record them.** R29 logs what no later action recreates. Cancel and force-cancel change a Run's Status, and the Run, its logs and its metadata all survive. Re-run adds an Attempt. Each leaves an object standing on GitHub that carries its own record, and that record is better than ours.
+**None of the five operations here is a deletion, so [purge](../purge/requirements.md) R29's deletion log MUST NOT record them.** R29 logs what no later action recreates. Cancel and force-cancel change a Run's Status, and the Run, its logs and its metadata all survive. Re-run adds an Attempt. Each leaves an object standing on GitHub that carries its own record, and that record is better than ours.
 
 **Re-run is the closest call, and it still falls outside.** R12's constraint means a new Attempt makes the prior Attempt's Jobs permanently unreachable, which open question 7 already flags as a one-way door. It is not logged, for two reasons. The Run survives carrying `run_attempt`, which is GitHub's own record that the door was opened. And there is no id for the thing that was lost, so R29's line has nothing to put in its id column. A record that cannot name what it lost is not the record R29 is.
 
 ### Seams
 
-**R25.** All four operations MUST be exercisable end-to-end against recorded HTTP fixtures, with no live network. The fixtures MUST include cancel's 202 and its 409, force-cancel against its own endpoint, a 403 arriving on a repository whose recorded permission is `push: true` (R3), a 404 under both readings R22 draws, and a re-run followed by a poll showing `run_attempt` incremented, Status back to `queued` and Conclusion back to null (R8). They MUST also include `/runs/{id}/attempts/1/jobs` returning `total_count: 0`, because R12's whole case rests on that one response and a fake would return whatever we expected to see. Cassettes replay what the API actually said. Every row of the constraints table above was learned that way, including that a re-run's `created_at` and `run_started_at` disagree by 3 hours.
+**R25.** All five operations MUST be exercisable end-to-end against recorded HTTP fixtures, with no live network. The fixtures MUST include cancel's 202 and its 409, force-cancel against its own endpoint, a 403 arriving on a repository whose recorded permission is `push: true` (R3), a 404 under both readings R22 draws, a re-run followed by a poll showing `run_attempt` incremented, Status back to `queued` and Conclusion back to null (R8), and the Job endpoint R14a addresses under both a success and a 404. They MUST also include `/runs/{id}/attempts/1/jobs` returning `total_count: 0`, because R12's whole case rests on that one response and a fake would return whatever we expected to see. Cassettes replay what the API actually said. Every row of the constraints table above was learned that way, including that a re-run's `created_at` and `run_started_at` disagree by 3 hours.
 
 **R26.** A bulk lifecycle operation's timing MUST come from the same injected clock the throttle uses, so that R21's backoffs, R23's pacing and a run across a large frozen set are deterministic and instant. AC5 depends on the clock for a second reason: proving that a 202 shows no Conclusion until a poll observes the transition means advancing to that poll, and a test that waits for a real one is slow, then flaky, then deleted.
 
 **R27.** The Feed row a re-run mutates MUST render to a frame from held state alone, with no live terminal and no network, and that frame MUST be verified by golden-file tests covering AC1, AC2 and AC3. **AC5's frame MUST be goldened on the same terms**, because R4a's whole claim is about what the row does and does not say: a test over the model can assert that the mark is held, and only a golden proves the Status cell still reads the API's value and the Conclusion cell is still empty beside it. R8 calls the Attempt model the most confusable behaviour in the product, and its three observable consequences are each a property of the painted frame: a row count that does not change, a Conclusion cell that empties, and an Attempt badge reading 2 against the Run ID it read 1 against. A test over the model can assert Conclusion is null. Only a golden proves the row stopped saying `failure`. See [live-run-feed](../live-run-feed/requirements.md) R36, which owns the Feed's goldens, and [run-detail](../run-detail/requirements.md) R19, which owns the badge's.
 
-**R28.** No test may issue a live DELETE. This tool deletes irreversibly at a scale of tens of thousands, and the reference measurements were taken against real third-party repositories. Deletion is exercised against cassettes, never against an account. The four operations here inherit that rule and extend it: no test may issue a live cancel, force-cancel or re-run either. A live cancel kills work somebody is waiting on, a live re-run spends their Actions minutes, and neither can be undone. Every one of AC1 to AC17 is assertable against R25's fixtures, so no test here needs an account.
+**R28.** No test may issue a live DELETE. This tool deletes irreversibly at a scale of tens of thousands, and the reference measurements were taken against real third-party repositories. Deletion is exercised against cassettes, never against an account. The five operations here inherit that rule and extend it: no test may issue a live cancel, force-cancel or re-run of any kind either. A live cancel kills work somebody is waiting on, a live re-run spends their Actions minutes, and neither can be undone. Every one of AC1 to AC17 is assertable against R25's fixtures, so no test here needs an account. R14a's refusal of two Jobs from one Run exists partly because the write that would justify the alternative is one this rule forbids.
 
 ## Acceptance criteria
 
@@ -102,7 +108,7 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **AC6: A 409 offers force-cancel, and so does the modal.** Given a cancel returning 409, no error dialog is raised, the message states the Run is not cancelable, and force-cancel is offered. Given a cancel confirmation over a frozen set, the modal names force-cancel and the key that reaches it, and pressing that key leaves the modal open on a force-cancel Plan over the same Items, having issued nothing. The same key on a Purge, a re-run or a force-cancel modal does nothing.
 
-**AC7: The gate states its reason.** Given a Run in a repository with `push: false`, all four operations are unavailable, a reason is shown, and no request is issued. The same holds with `archived: true`, and the reason distinguishes the two.
+**AC7: The gate states its reason.** Given a Run in a repository with `push: false`, all five operations are unavailable, a reason is shown, and no request is issued. The same holds with `archived: true`, and the reason distinguishes the two.
 
 **AC8: The breakdown sums and the skips are stated.** Given a multi-selection of 47 Runs across 3 repositories, of which 3 are in read-only repositories, the modal states that 3 of 47 will be skipped and shows three per-repository rows summing to 47, and 44 requests are issued.
 
@@ -116,7 +122,13 @@ Cancel, force-cancel, re-run, and re-run failed Jobs are the four operations tha
 
 **AC13: A 404 reads by the requested end state.** Given a re-run against a Run that has been deleted, the 404 is recorded as a failure. Given a cancel against the same Run, the 404 is recorded as a skip.
 
-**AC14: Debug logging is opt-in.** Given a re-run or a re-run failed Jobs invoked with the debug-logging option enabled, the issued request carries `enable_debug_logging`. Given the default path, it does not.
+**AC14: Debug logging is opt-in.** Given any of the three re-runs invoked with the debug-logging option enabled, the issued request carries `enable_debug_logging`. Given the default path, it does not.
+
+**AC14a: One Job is re-run, and only one Job.** Given a single-Job re-run, exactly one request is issued, it addresses the Job endpoint with that Job's id, and no request addresses the Run endpoint. No confirmation prompt appears (R18), and where the Run detail pane offered the operation, R14b's note was on screen at the point of invocation.
+
+**AC14b: Two Jobs of one Run are refused before the wire.** Given a frozen set holding two Jobs that share a `run_id`, the operation is refused, the message names the Run, and zero requests are issued. Given two Jobs belonging to two different Runs, the set is accepted.
+
+**AC14c: An unmatched name is a skip.** Given a by-name re-run across 12 Runs of which 9 have a Job of that name, 9 requests are issued, the other 3 appear under skips with a reason naming the absent Job, none appears under failures, and the command exits 0.
 
 **AC15: Age does not pre-gate a re-run.** Given a Run old enough to fall outside any suspected age limit, re-run is still offered, a request is still issued, and any rejection is reported using the API's stated reason.
 
@@ -163,4 +175,4 @@ Measured against the live API. Numbers are from the [PRD](../../PRD.md) unless m
 - [run-detail](../run-detail/requirements.md) owns the Attempt badge and the Jobs view a re-run replaces
 - [log-viewer](../log-viewer/requirements.md) consumes R14's debug logging
 - [rate-governor](../rate-governor/requirements.md) paces R23
-- [cli-surface](../cli-surface/requirements.md). The non-interactive form of these four operations
+- [cli-surface](../cli-surface/requirements.md). The non-interactive form of these five operations
