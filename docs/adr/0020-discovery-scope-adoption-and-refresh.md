@@ -4,7 +4,16 @@
 
 ## Enumeration keeps the API default affiliations
 
-`GET /user/repos` defaults to `affiliation=owner,collaborator,organization_member` with `type=all`, forks included. Enumeration keeps that default, and repo-discovery R1 now names the set explicitly rather than inheriting whatever the default happens to return.
+`GET /user/repos` defaults to `affiliation=owner,collaborator,organization_member`, forks included. Enumeration keeps that default, and repo-discovery R1 now names the set explicitly rather than inheriting whatever the default happens to return.
+
+**Amended 2026-07-27 (#154): the request names the affiliations and nothing else.** This section first read "with `type=all`", and the enumeration path was built to match. Measured, that combination is not a request the API serves:
+
+```sh
+$ gh api "user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all"
+{"message":"If you specify visibility or affiliation, you cannot specify type.","status":"422"}
+```
+
+`type` is mutually exclusive with both `affiliation` and `visibility`. It is the parameter that selects among the affiliations when you have named none, so naming them is what makes it redundant, and `type=all` is only the default in the sense that it is what an unnamed set falls back to. The decision below is unchanged, because the three affiliations are the full set the endpoint offers and `type=all` selected nothing they do not already cover. What changes is that the requirement no longer instructs anyone to send a parameter the API rejects.
 
 Three reasons. It is what was measured: the reference 163, its two-page cost, and the ~26-with-Runs ratio were all observed under this default, so keeping it keeps the constraints table honest. It is everything the token can see, which is the spirit of the auto-discovery override the product owner chose knowingly (repo-discovery Constraints). And narrowing it fails silently: an organization repository the user works in daily would simply never appear in the Feed, with nothing to say why.
 
