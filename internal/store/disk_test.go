@@ -56,6 +56,12 @@ func (f stubRoundTrip) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // ok200 builds a 200 carrying an ETag and body, the shape the store persists.
 func ok200(etag, body string) *http.Response {
+	return ok200Body(etag, io.NopCloser(strings.NewReader(body)))
+}
+
+// ok200Body is ok200 over an arbitrary body, for the ceiling tests, whose body is
+// the instrument rather than a string.
+func ok200Body(etag string, body io.ReadCloser) *http.Response {
 	h := make(http.Header)
 	h.Set("ETag", etag)
 	h.Set("Content-Type", "application/json; charset=utf-8")
@@ -66,7 +72,7 @@ func ok200(etag, body string) *http.Response {
 		ProtoMajor: 1,
 		ProtoMinor: 1,
 		Header:     h,
-		Body:       io.NopCloser(strings.NewReader(body)),
+		Body:       body,
 	}
 }
 
