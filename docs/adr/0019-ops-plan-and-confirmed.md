@@ -84,6 +84,66 @@ This is the same move run-lifecycle's resolved open question 5 made for cancel: 
 
 **The friction row is `FrictionNone` on a single Item.** `OpRerunJob` joins `OpRerun` and `OpRerunFailed` in the table's first line, on R18's reasoning applied unchanged: one Job is smaller than one Run, and R18 already exempts one Run. A multi-Item set prices under the existing rules with no special case. What this ADR does not carry is the note the Run detail pane must render alongside the exemption, because a mandated pane element is a requirement rather than a type property, and it lives in run-lifecycle where the operation does.
 
+## Amendment: a frozen set may hold a member that has no Item
+
+[cli-surface](../features/cli-surface/requirements.md) R28b and AC14c fix `--job-name` exactly: one request per Run holding a Job of that name, every other Run reported as a skip naming the absent Job, exit 0. None of the observable behaviour was ever open. What had no owner was the layer that carries a Run which matched nothing, because three things stated above are each right and jointly leave it no seat (issue #161).
+
+`Summary`'s skips are stamped by `Plan` onto Items, so a skip wants an Item. The amendment above makes `Plan` refuse any non-Job Item under `OpRerunJob`, so the Run cannot borrow a `RunItem` to ride in on. And `skipFor` derives every `SkipReason` from the operation, the Item and the repository alone, whereas "no Job of that name in this Run" is derivable from none of the three: it is knowledge only the by-name resolver holds.
+
+**One premise that framed this was narrower than it looked.** The closed vocabulary is the planning one, not the reported one. `Summary.Skips` groups by a free-form `string`, `addSkip` takes a `string`, and `Execute` already records skips whose reasons are in no `SkipReason` constant, including the API's verbatim 403 under a retry bound. So a skip reaching the operator needs no new `SkipReason`. What is closed, and stays closed, is the vocabulary `Plan` stamps onto an `Item`.
+
+**`Plan` gains a second kind of member, and it is not an Item.**
+
+```go
+// Unmatched is a member of a frozen set that resolved to no object: R28b's Run
+// holding no Job of the named name. It carries the tuple and the reason it will
+// be reported under, and no Item, because no Item of a Kind this Operation
+// accepts exists for it.
+type Unmatched struct {
+	Repo   domain.RepoID
+	RunID  int64
+	Reason string
+}
+
+func (o *Ops) Plan(op Operation, sel []Item,
+	repos map[domain.RepoID]domain.Repo, unmatched ...Unmatched) (Plan, error)
+
+func (p Plan) Unmatched() []Unmatched // a copy, in resolution order
+```
+
+`Plan` returns an error for a non-empty `unmatched` under any operation but `OpRerunJob`. The second kind of member is bounded at the one operation whose resolution can fail to produce an Item, so it cannot spread by being available.
+
+**What this preserves is four invariants, and each of them is one another shape spends.**
+
+1. The `Kind` refusal in `checkOneJobPerRun` stays total. `lifecycleRequest` builds the Job endpoint from `item.ID` without consulting `Kind`, and it keeps relying on `Plan` having refused. A `RunItem` under `OpRerunJob` would POST `/actions/jobs/{runID}/rerun`, a write against whatever Job happens to carry that number, and no path to one exists.
+2. `SkipReason` stays closed, because an `Unmatched` rides the free-form reason string `Summary.Skips` already takes.
+3. "A value a caller sets is overwritten" stays true of every `Item`. An `Unmatched` is the one member whose reason the caller does author, and it is not an Item, so the rule that makes `Plan`'s stamping worth anything is not weakened by an exception to it.
+4. No Item of the wrong Kind exists anywhere in the tree, so there is no path by which one reaches the request builder.
+
+**The accessors count them, and that is what makes the CLI's summary line add up.** `Total` includes them, on the same reading it already takes for the ineligible: purge AC15 counts the skipped inside the 47, and ADR-0019's own "the stamp is per Item, and the set stays one slice" refused dropping a member at Plan time. `Breakdown` includes them, in `RepoCount.Skipped`, because they carry a repository and R6's per-repository split is over the whole set. `Skipped` includes them. `Items` does not, because there is no Item.
+
+**Friction prices them in, and the consequence is stated here rather than left to be rediscovered.** R7's typed count is `Total`, so an operator confirming a by-name set types a number larger than the writes that follow. That is already true of every skipped Item today and C changes nothing about it. Saying so is what stops it being read as a defect the first time somebody counts the requests.
+
+**AC22's claim narrows, exactly as the log line's claim narrowed for `KindWorkflow`.** AC22 requires the inspect view's rows to be "the same tuples `Execute` is handed", and an `Unmatched` row is rendered and never handed to anything. The claim the types actually make is narrower and still exact: every row that names a write is a tuple `Execute` is handed. An `Unmatched` row names the absence of one. This is the same narrowing `KindJob` arrived inside rather than a fresh exception.
+
+**One reason string per invocation, because grouping is what reports them.** `groupByReason` collapses identical reasons into one group with a count, so the resolver builds the reason once from the Job name and stamps every `Unmatched` with it. AC14c's "reports the rest as skips naming the absent Job" is then one group reading `no job named "build" in this run`, with a count, rather than one line per Run.
+
+**`executeSet` seeds the Summary before the walk.** `Summary.Skipped` and `Summary.Skips` take the `Unmatched` through the existing `addSkip` before the first request. The two reporting surfaces that already read `Plan.Items()` and `plan.Skipped()` fold the carrier into what they iterate, rather than merging a second channel into what they print, so `printLifecycleSummary`'s totals sum and `printLifecycleDryRun` renders the unmatched as skipped rows with no second implementation.
+
+**The parameter is variadic, and that is a deliberate small ugliness.** Every existing `Plan` call compiles unchanged, and the one caller that has unmatched members passes them. A fourth positional parameter would put an empty slice at seven call sites that can never have one. A `WithUnmatched` method in `WithDebugLogging`'s shape would have to recompute the friction after pricing, which is the one thing that ADR's unexported fields exist to prevent.
+
+## Amendment: by-name resolution prices what it resolved
+
+The TUI's by-name form must resolve a name to Items before `Plan` can price R17's frozen count, which costs one Jobs request per selected Run, drawn from the Budget, in front of a modal that may be declined. No other lifecycle operation has a request before the frozen count. Issue #148's open point 7 asked what happens when that resolution is rate-limited midway, and this is the ruling.
+
+**The frozen set is what resolution resolved.** A Run resolution never reached is not a member of it. The count the pane shows and the count R7 makes the operator type are both over the resolved portion, and the writes that follow are exactly that number, so R17's guarantee that the number confirmed is the number attempted holds literally.
+
+**Unreached is not `Unmatched`, and the two must not be merged.** An `Unmatched` is a definite answer: this Run was probed and holds no Job of that name. An unreached Run is the absence of an answer. Folding the unreached into `Unmatched` would put them in `Total`, which would price a set larger than the one the operator confirms and undo the ruling above by the back door.
+
+**What this costs is stated plainly, because it is the reason the question was raised.** An operator who selected 40 Runs confirms 12. The set is smaller than the one they named, R7's ladder has no rung that expresses "this count is a lower bound", and nothing in the friction machinery would tell them. So the surface tells them: the pane MUST render a one-line non-blocking note naming how many selected Runs resolution did not reach and why, on R14b's precedent for a mandated note that neither blocks nor confirms. [cli-surface](../features/cli-surface/requirements.md) R16 is what makes the note mandatory rather than a courtesy, because 12 presented unqualified is a count the output cannot stand behind.
+
+**On the CLI the same resolution stopping early exits 1.** R28b's exit 0 covers a name that matched nothing, which is a definite answer and a skip. It does not cover a resolution that stopped early, which is R17's one bit of "not everything happened". The writes for the resolved portion still happen under `--yes`, the summary carries the detail, and no new exit code is minted.
+
 ## Plan is unforgeable, and Confirm would launder anything less
 
 ```go
@@ -195,6 +255,14 @@ A `Confirmed` in a caller's hands proves:
 
 **A consumed-set on `*Ops`.** `Ops` remembers which `Confirmed`s have run, keyed by a nonce each carries. It works and keeps `Execute` by value, but it moves the guarantee off the type built to carry it and grows unbounded state on `Ops` for what one pointer already gives. Single use stays on `Confirmed`, where the confirmation it proves already lives.
 
+**A `SkipReason` for the Run that matched no Job, carried on an Item.** The obvious shape, and the one issue #161 named first. It keeps the report in one place, which is where AC14c writes it, and it costs three invariants rather than the two the issue charged it: the `Kind` refusal stops being total, `SkipReason` stops being closed, and the caller would have to stamp a `Skip` that `Plan` then has to agree to keep, which is the rule that makes `Plan`'s stamping worth anything. `lifecycleRequest` would have to consult `Kind` rather than rely on a refusal that no longer holds.
+
+**By-name resolution reporting its own skips outside the Summary.** Keeps the `Kind` refusal total and the vocabulary closed, and splits the reporting AC14c puts in one place. It costs four surfaces rather than one merge: `printLifecycleSummary`'s line, whose `%d of %d Runs` trailer is `Total` and would stop summing, the skip groups, `printLifecycleDryRun`'s listing, and that listing's trailer of `Total() - Skipped()`. Then the same four again for the TUI's by-name form. It is also "drop them at Plan time" and "split into two slices", which this ADR's own per-Item stamping paragraph refused for the ineligible.
+
+**Refusing a by-name set whose resolution was rate-limited midway.** Safe, and a large by-name re-run is then defeated by ordinary rate-limit pressure with no partial progress available. Rejected in favour of pricing what resolved and mandating the note, which keeps the partial visible without making the operator's only recourse a retry of the whole set.
+
+**A friction rung for "this count is a lower bound".** The third answer open point 7 offered. It needs a confirm-pane state no other operation has and a fourth `FrictionLevel`, to express something a one-line note expresses without touching the table every write in the product prices against.
+
 **Dispatch, and Workflow enable and disable, in `Operation` now.** Both are stage 11's, their confirmation shape is that fog's to decide, and both are additive when it does: a new `Operation` value, and for the Workflow pair a fourth object pointer on Item. [ADR-0014](./0014-domain-types-and-the-budget-readout.md)'s rule prices that as a diff.
 
 ## Consequences
@@ -206,5 +274,7 @@ A `Confirmed` in a caller's hands proves:
 **The confirm pane renders accessors.** `Total`, `Breakdown`, `Friction` and the skip counts are the modal, and R30's viewport is a viewport over `Items()`. The only type switch in `tui/confirm` is row-cell rendering, which is the one per-kind fact a shared component legitimately owns.
 
 **The CLI is the same three calls.** `--dry-run` stops after `Plan` and prints its Items, resolving through the same code path as the real operation with no second implementation ([cli-surface](../features/cli-surface/requirements.md) R10, R20). `--yes` is `Confirm(plan, NonInteractiveYes())`. One resolution, two presentations, exactly as purge R30 words it.
+
+**A frozen set is no longer a slice of Items alone.** Anything that renders a Plan renders two collections, and anything that counts one counts both. `Total`, `Breakdown` and `Skipped` already do it behind their existing signatures, so the surfaces that read those numbers are unaffected. The two that iterate `Items()` directly, the confirm pane's inspect viewport and the CLI's dry-run listing, gain the second collection in what they walk.
 
 **The friction table is one table-driven test.** Operation, set size, repository span and threshold in, level out, with [settings](../features/settings/requirements.md) R12's clamp exercised at the same seam. Laundering attempts are compile errors rather than review comments, which is this tree's usual trade.
