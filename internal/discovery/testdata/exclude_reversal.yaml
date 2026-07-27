@@ -12,7 +12,7 @@ interactions:
     - id: 0
       request:
         method: GET
-        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member
       response:
         status: 200 OK
         code: 200
@@ -32,7 +32,7 @@ interactions:
     - id: 1
       request:
         method: GET
-        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member
         headers:
             If-None-Match:
                 - '"enum-1"'
