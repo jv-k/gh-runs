@@ -1242,6 +1242,14 @@ func (m Model) thisRepo() (domain.RepoID, bool) {
 // Where the marker resolves to nothing this returns the filter unchanged, so the axis widens.
 // filterLine is what says so.
 func (m Model) resolvedFilter() filter.Filter {
+	// The marker is checked before the resolver is called, not only inside Resolve. The
+	// resolver shells out to git through go-gh, and liveView runs on every frame, so
+	// evaluating the argument unconditionally would put a subprocess on the render path for
+	// every filter that has nothing to do with this-repo. Resolve returns early on an unset
+	// marker either way; this is about not paying to tell it so.
+	if !m.filter.ThisRepo {
+		return m.filter
+	}
 	return m.filter.Resolve(m.thisRepo())
 }
 

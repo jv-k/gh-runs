@@ -322,9 +322,13 @@ func (m Model) narrowed() bool {
 	// An unresolved this-repo marker hides nothing, so it must not count here. Otherwise an
 	// empty Feed would claim on one line that a filter is hiding Runs while the next line says
 	// the pin fell back and everything is showing (ADR-0016).
+	// Guarded before the resolver runs, for the reason resolvedFilter records: it shells out
+	// to git, and this is evaluated per frame.
 	f := m.filter
-	if _, ok := m.thisRepo(); !ok {
-		f.ThisRepo = false
+	if f.ThisRepo {
+		if _, ok := m.thisRepo(); !ok {
+			f.ThisRepo = false
+		}
 	}
 	return f.QueryString() != "" || m.approvalsFilter
 }
