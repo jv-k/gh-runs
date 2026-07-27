@@ -53,6 +53,11 @@ func TestQueryStringRoundTrips(t *testing.T) {
 		{"a status", filter.Filter{Statuses: []domain.Status{domain.StatusCompleted}}},
 		{"a conclusion", filter.Filter{Conclusions: []domain.Conclusion{domain.ConclusionFailure}}},
 		{"a repository", filter.Filter{Repos: []domain.RepoID{{Host: domain.HostGitHub, Owner: "cli", Name: "cli"}}}},
+		{"the this-repo marker alone", filter.Filter{ThisRepo: true}},
+		{"the marker beside a named repository", filter.Filter{
+			ThisRepo: true,
+			Repos:    []domain.RepoID{{Host: domain.HostGitHub, Owner: "cli", Name: "cli"}},
+		}},
 		{"repositories beside other axes", filter.Filter{
 			Branch: "main",
 			Repos: []domain.RepoID{
@@ -114,6 +119,11 @@ func TestGrammarSpellsEveryAxis(t *testing.T) {
 		Statuses:    []domain.Status{domain.StatusCompleted},
 		Conclusions: []domain.Conclusion{domain.ConclusionFailure},
 		Repos:       []domain.RepoID{{Host: domain.HostGitHub, Owner: "cli", Name: "cli"}},
+		// The marker rides inside the repository axis rather than beside it, so the
+		// fixture carries both forms at once. That is also the round trip worth pinning:
+		// repo:this-repo and repo:cli/cli are OR members of one axis, and the grammar
+		// must return both rather than collapsing one into the other (ADR-0016).
+		ThisRepo: true,
 	}
 
 	v := reflect.ValueOf(full)
@@ -216,5 +226,43 @@ func TestQueryEmitsNoRepositoryParameter(t *testing.T) {
 	f := filter.Filter{Repos: []domain.RepoID{{Host: domain.HostGitHub, Owner: "cli", Name: "cli"}}}
 	if got := f.Query().Encode(); got != "" {
 		t.Errorf("Query() = %q, want no parameter: the repository axis has no server-side form", got)
+	}
+}
+
+// TestThisRepoMarkerTakesTheShortAxisAlias pins that the marker is reachable through the
+// same r: alias every other repository token takes. The alias is resolved before the value
+// is read, so this is a property of the axis rather than of the token, and a test is what
+// stops a future special case in the repo arm from breaking one spelling and not the other.
+func TestThisRepoMarkerTakesTheShortAxisAlias(t *testing.T) {
+	for _, line := range []string{"repo:this-repo", "r:this-repo"} {
+		t.Run(line, func(t *testing.T) {
+			f, err := filter.ParseQuery(line)
+			if err != nil {
+				t.Fatalf("ParseQuery(%q): %v", line, err)
+			}
+			if !f.ThisRepo {
+				t.Errorf("ParseQuery(%q) did not set the marker", line)
+			}
+			if len(f.Repos) != 0 {
+				t.Errorf("ParseQuery(%q) put %v in Repos: the marker is not an identity", line, f.Repos)
+			}
+			// Both spellings render back in the long form, which is the one QueryString emits
+			// for a named repository too, so the grammar has one canonical output.
+			if got, want := f.QueryString(), "repo:this-repo"; got != want {
+				t.Errorf("QueryString() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestRepeatedThisRepoMarkerIsNotAnError pins that stating the marker twice is a set with one
+// member, the same rule a repeated named repository already follows.
+func TestRepeatedThisRepoMarkerIsNotAnError(t *testing.T) {
+	f, err := filter.ParseQuery("repo:this-repo r:this-repo")
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	if got, want := f.QueryString(), "repo:this-repo"; got != want {
+		t.Errorf("QueryString() = %q, want %q", got, want)
 	}
 }

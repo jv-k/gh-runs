@@ -8,11 +8,18 @@
 // promote this angle-bracket walk to an exported helper on a leaf package, rather
 // than copy it a third time." This is that helper, and the three now share it.
 //
-// The parse is bracket-aware rather than a comma split, because a GitHub Actions
-// or /user/repos listing URL carries commas of its own in a query
-// (affiliation=owner,collaborator,organization_member). A naive split on the
-// header's entry separator would tear that query apart and never find the next
-// page.
+// The parse is bracket-aware rather than a comma split, because the header's entry
+// separator is a comma and a listing URL may carry commas of its own in a query. A
+// naive split would tear such a query apart and never find the next page.
+//
+// This note once named affiliation=owner,collaborator,organization_member as the
+// example. Measured 2026-07-27, /user/repos does not emit that: it percent-encodes
+// the commas it was sent, so its rel="next" reads
+// affiliation=owner%2Ccollaborator%2Corganization_member&page=2 (#154, and
+// discovery's pass_basic cassette now tapes the encoded form). The bracket-aware
+// walk stays, because it costs nothing and the guarantee that no listing URL will
+// ever carry a raw comma is one measurement of one endpoint, not a documented rule.
+// The example was believed rather than observed, which is the same error #154 was.
 package ghlink
 
 import "strings"

@@ -59,11 +59,21 @@ const docName = "discovery"
 const excludeDocName = "discovery-exclude"
 
 // enumeratePath is the first page of the account's repository list. R1 names the
-// affiliations and the type explicitly rather than inheriting the API default, so
-// the reference 163 and its two-page cost stay described by this string
-// (ADR-0020). The probe that classifies each repository is unfiltered and carries
-// no query at all (R4, AC5), so it is built per repository rather than here.
-const enumeratePath = "user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all"
+// affiliations explicitly rather than inheriting the API default, so the reference
+// 163 and its two-page cost stay described by this string (ADR-0020). The probe
+// that classifies each repository is unfiltered and carries no query at all (R4,
+// AC5), so it is built per repository rather than here.
+//
+// It carries no `type`. GET /user/repos rejects `type` alongside `affiliation` or
+// `visibility` with a 422, so the combination this once sent was never a request
+// the API served (#154). `affiliation` is the parameter R1's requirement is written
+// in, and its three values are the full set the endpoint offers, so dropping
+// `type=all` narrows the result set for nobody. The rule is held by
+// TestEnumeratePathDoesNotCombineTypeWithAffiliation, because no cassette can: a
+// fixture proves only what the API said to the request we taped, and this
+// package's five fixtures taped a 200 across seven enumeration requests for the
+// one the API rejects.
+const enumeratePath = "user/repos?per_page=100&affiliation=owner,collaborator,organization_member"
 
 // hourlyTier is the fixed re-probe cadence for a repository with no persisted
 // ETag (R11, ADR-0020). It is a constant no setting alters, which bounds the

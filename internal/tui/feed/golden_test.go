@@ -259,3 +259,39 @@ func TestGoldenNavigatedToWorkflowWithNoRuns(t *testing.T) {
 
 	goldie.New(t).Assert(t, "navigated_no_runs", []byte(m.View()))
 }
+
+// twoRepoFeed seeds Runs from two repositories, so a repository axis has something to exclude
+// and a frame proves the narrowing rather than assuming it.
+func twoRepoFeed(m Model) Model {
+	m = discovered(m, repo("jv-k", "gh-runs", true, false), repo("cli", "cli", true, false))
+	m = feedRuns(m, repoID("jv-k", "gh-runs"),
+		mkRun(29516338954, "jv-k", "gh-runs", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0))
+	m = feedRuns(m, repoID("cli", "cli"),
+		mkRun(29516338001, "cli", "cli", "Release", domain.StatusCompleted, domain.ConclusionFailure, t0.Add(-time.Hour)))
+	return m
+}
+
+// TestGoldenThisRepoPinInForce fixes the frame when repo:this-repo resolves: the Feed shows
+// only the working directory's repository, and the filter line still reads the marker the
+// operator stated rather than the name it resolved to. Holding the stated filter is the whole
+// of ADR-0016's "resolution is the consumer's, and the stored value stays unresolved", and a
+// frame is where that is visible.
+func TestGoldenThisRepoPinInForce(t *testing.T) {
+	m := twoRepoFeed(newFeedIn(100, 8, repoID("jv-k", "gh-runs"), true))
+
+	m = m.Update2(ShowRuns(filter.Filter{ThisRepo: true}))
+
+	goldie.New(t).Assert(t, "this_repo_pin_in_force", []byte(m.View()))
+}
+
+// TestGoldenThisRepoPinFallenBack fixes the frame when it resolves to nothing: every Run is
+// shown, because an unresolved marker widens rather than narrowing to nothing, and the filter
+// line states the fallback. settings R19 requires the fallback be said rather than answered
+// with an empty view, and a pin that is not in force must not read the same as one that is.
+func TestGoldenThisRepoPinFallenBack(t *testing.T) {
+	m := twoRepoFeed(newFeedIn(100, 8, domain.RepoID{}, false))
+
+	m = m.Update2(ShowRuns(filter.Filter{ThisRepo: true}))
+
+	goldie.New(t).Assert(t, "this_repo_pin_fallen_back", []byte(m.View()))
+}

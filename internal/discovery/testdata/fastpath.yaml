@@ -1,6 +1,10 @@
 ---
 version: 2
 interactions:
+    # See PROVENANCE.md: the repositories and the ETags here are composed to
+    # exercise named criteria, and the enumeration request URL was measured
+    # against the live API (#154). Measure before editing a request line.
+    #
     # Interaction 0: the fast path's Run listing for the repository the tool was
     # launched inside. One request paints its Runs before enumeration or any other
     # probe (R14, AC11). It has Runs, so it enters the poll set.
@@ -25,7 +29,7 @@ interactions:
     - id: 1
       request:
         method: GET
-        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&type=all
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member
       response:
         status: 200 OK
         code: 200

@@ -1,0 +1,4 @@
+[38;2;158;158;158mfilter repo:this-repo  (/ edit, then esc clears)                                                    [m
+[1m  REPOSITORY           WORKFLOW         STATUS      CONCLUSION      RUN ID      STARTED             [m
+  [7mjv-k/gh-runs        [m [7mCI              [m [7;38;2;158;158;158mcompleted  [m [7;38;2;95;175;95msuccess        [m [7m29516338954[m [7m2026-07-15T16:39:00Z[m
+[38;2;158;158;158m↓/↑ move  space select  / filter  r refresh  ? help  q quit[m  [38;2;158;158;158mStandard[m

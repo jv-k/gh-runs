@@ -67,6 +67,18 @@ func newFeed(width, height int) Model {
 	return m
 }
 
+// newFeedIn builds a Feed whose working-directory resolver reports the given repository, or
+// none when ok is false. The nil-seam case is already the whole existing suite, so the
+// this-repo goldens are what cover the wired one.
+func newFeedIn(width, height int, id domain.RepoID, ok bool) Model {
+	m := New(Options{
+		Profile:     keys.Standard,
+		CurrentRepo: func() (domain.RepoID, bool) { return id, ok },
+	})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	return m
+}
+
 // feedRuns sends one repository's Runs as a RunsFetched, the unit ADR-0015 fixes.
 func feedRuns(m Model, id domain.RepoID, runs ...domain.Run) Model {
 	m, _ = m.Update(scheduler.Update{Repo: id, Runs: runs})
@@ -650,4 +662,45 @@ func sameKeys(got map[int64]bool, want map[int64]bool) bool {
 		}
 	}
 	return true
+}
+
+// TestFilteringWithoutTheMarkerNeverResolvesTheWorkingDirectory pins that a filter with no
+// this-repo marker never calls the working-directory resolver.
+//
+// It is a cost test, not a correctness one. main.go wires that seam to ghclient.CurrentRepo,
+// which shells out to git through go-gh and caches nothing, and the paths that resolve run on
+// every frame: liveView for the rows and narrowed for the empty-state message. Evaluating the
+// resolver unconditionally put a subprocess on the render path for every filter in the tool,
+// which is what this counts.
+func TestFilteringWithoutTheMarkerNeverResolvesTheWorkingDirectory(t *testing.T) {
+	calls := 0
+	m := New(Options{
+		Profile: keys.Standard,
+		CurrentRepo: func() (domain.RepoID, bool) {
+			calls++
+			return repoID("jv-k", "gh-runs"), true
+		},
+	})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
+	m = discovered(m, repo("cli", "cli", true, false))
+	m = feedRuns(m, repoID("cli", "cli"),
+		mkRun(29516338954, "cli", "cli", "CI", domain.StatusCompleted, domain.ConclusionSuccess, t0))
+
+	m = m.Update2(ShowRuns(filter.Filter{Branch: "main"}))
+	_ = m.View()
+
+	if calls != 0 {
+		t.Errorf("a filter carrying no this-repo marker resolved the working directory %d times; "+
+			"the resolver shells out to git and this runs every frame", calls)
+	}
+
+	// The control: with the marker stated, it must resolve, or the guard above would be
+	// satisfied by never resolving at all.
+	m = m.Update2(ShowRuns(filter.Filter{ThisRepo: true}))
+	_ = m.View()
+
+	if calls == 0 {
+		t.Error("a stated this-repo marker never resolved the working directory, so the guard " +
+			"above proves nothing")
+	}
 }

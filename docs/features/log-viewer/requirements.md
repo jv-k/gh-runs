@@ -86,7 +86,7 @@ Every fact below was measured against the live API. Each one removed an option.
 
 | Fact | Measured | Consequence |
 |---|---|---|
-| Per-Job log | `GET /repos/{o}/{r}/actions/jobs/{id}/logs` → 303 → `200 text/plain`. **4,153 bytes** for a trivial Job | One small request per Job opened → R1 |
+| Per-Job log | `GET /repos/{o}/{r}/actions/jobs/{id}/logs` → **302** → `200 text/plain`. **4,153 bytes** for a trivial Job | One small request per Job opened → R1 |
 | Byte-order mark | The first line carries a UTF-8 BOM | R3 |
 | Timestamp prefix | **Every** line prefixed with a 29-char ISO timestamp (`2026-07-15T03:11:52.0835958Z `). **29% of the 100-column minimum** ([live-run-feed](../live-run-feed/requirements.md) R4a) | R4 |
 | Marker density | One small Job's log: **12** `##[group]`, **12** `##[endgroup]`, **2** `##[warning]` | Markers are the norm, not an edge case → R5–R8 |

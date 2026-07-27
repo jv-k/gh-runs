@@ -114,6 +114,15 @@ const (
 type Options struct {
 	Profile     keys.Profile
 	SetViewport func([]domain.RepoID)
+	// CurrentRepo resolves the working directory's repository, which is what the filter's
+	// repo:this-repo marker means (ADR-0016). It is the same name and signature the Workflows
+	// and Storage tabs carry for their scope keys, wired by main.go to the same resolver.
+	//
+	// It reports false where there is no such repository, and the marker then contributes
+	// nothing, so the axis widens rather than matching nothing and the filter label says so
+	// (settings R19). A nil resolver behaves as no repository, which is the headless and
+	// golden-test case and matches how the other two tabs treat it.
+	CurrentRepo func() (domain.RepoID, bool)
 	// SetFilter publishes the Feed's active filter to the scheduler, which pushes its
 	// Query() server-side (R22, ADR-0016). main.go wires it to scheduler.SetFilter; a
 	// golden test leaves it nil, and the filter then narrows client-side only.
@@ -155,6 +164,7 @@ type Model struct {
 
 	profile     keys.Profile
 	setViewport func([]domain.RepoID)
+	currentRepo func() (domain.RepoID, bool)
 
 	// timestamp is the STARTED column's rendering and clk is what the relative form measures
 	// an age from ([settings] R10). The clock is the same one the detail pane takes, injected
@@ -324,6 +334,7 @@ func New(opts Options) Model {
 		profile:         opts.Profile,
 		clk:             opts.Clock,
 		setViewport:     opts.SetViewport,
+		currentRepo:     opts.CurrentRepo,
 		setFilter:       opts.SetFilter,
 		filter:          opts.Filter,
 		live:            make(map[string][]domain.Run),
@@ -1242,10 +1253,45 @@ func (m *Model) clearObservedCancellations() {
 	}
 }
 
+// thisRepo reads the working-directory resolver, reporting false where there is none and
+// where no resolver was wired at all. A nil seam behaving as "no repository" is what lets a
+// golden test and a headless run take the widening path rather than panicking, and it is the
+// same treatment the Workflows and Storage tabs give theirs (settings R19).
+func (m Model) thisRepo() (domain.RepoID, bool) {
+	if m.currentRepo == nil {
+		return domain.RepoID{}, false
+	}
+	return m.currentRepo()
+}
+
+// resolvedFilter is the held filter with the this-repo marker turned into a real entry, which
+// is the only form Match should ever see. The held filter stays stated: m.filter keeps the
+// operator's repo:this-repo, and the input line and the filter label keep reading it, because
+// resolving into the held value would rewrite what they typed under them (ADR-0016).
+//
+// Where the marker resolves to nothing this returns the filter unchanged, so the axis widens.
+// filterLine is what says so.
+func (m Model) resolvedFilter() filter.Filter {
+	// The marker is checked before the resolver is called, not only inside Resolve. The
+	// resolver shells out to git through go-gh, and liveView runs on every frame, so
+	// evaluating the argument unconditionally would put a subprocess on the render path for
+	// every filter that has nothing to do with this-repo. Resolve returns early on an unset
+	// marker either way; this is about not paying to tell it so.
+	if !m.filter.ThisRepo {
+		return m.filter
+	}
+	return m.filter.Resolve(m.thisRepo())
+}
+
 // liveView is the interleaved, filtered, sorted truth across every live repository:
 // sorted by EffectiveStart descending, Run ID descending on a tie for determinism
 // (R8). The filter is client-side over held Runs (R22, R23).
 func (m Model) liveView() []domain.Run {
+	// Resolution happens here, on the match path, and once rather than per Run. The Feed holds
+	// the stated filter so its input line and its filter label keep reading repo:this-repo:
+	// resolving into the held value would rewrite the operator's marker into a name under them
+	// (ADR-0016).
+	matcher := m.resolvedFilter()
 	var all []domain.Run
 	for _, runs := range m.live {
 		for i := range runs {
@@ -1255,7 +1301,7 @@ func (m Model) liveView() []domain.Run {
 			if m.approvalsFilter && !approvals.Awaiting(runs[i]) {
 				continue
 			}
-			if m.filter.Match(runs[i]) {
+			if matcher.Match(runs[i]) {
 				all = append(all, runs[i])
 			}
 		}
