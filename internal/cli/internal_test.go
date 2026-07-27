@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/jonboulle/clockwork"
 
 	"github.com/jv-k/gh-runs/v2/internal/clock"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/timefmt"
 )
 
 // TestRenderTableSanitisesControlBytes pins the human-table hardening: untrusted run
@@ -74,6 +76,70 @@ func TestPrintSummarySanitisesControlBytes(t *testing.T) {
 	if !strings.Contains(got, "Forbidden") {
 		t.Errorf("visible failure reason text was lost to the escape strip: %q", got)
 	}
+}
+
+// TestTableAgeColumnReadsTheSharedLadder covers the human table's age column at the level
+// that proves what matters: the cell carries what timefmt.Age renders for the same two
+// instants, measured from the injected clock. The buckets are asserted in internal/timefmt,
+// against an injected now and no table at all, so a boundary is pinned once and this test
+// pins the wiring to it. Without this the column had no coverage of its own, because the
+// assertions followed the function to its new consumer in the Feed rather than staying with
+// the surface that had always called it.
+func TestTableAgeColumnReadsTheSharedLadder(t *testing.T) {
+	now := time.Date(2026, 7, 15, 16, 39, 0, 0, time.UTC)
+	const day = 24 * time.Hour
+	for _, ago := range []time.Duration{0, 90 * time.Second, 5 * time.Hour, 3 * day, 400 * day} {
+		var out bytes.Buffer
+		deps := Deps{Stdout: &out, Stderr: &out, Clock: clockwork.NewFakeClockAt(now)}
+		created := now.Add(-ago)
+		runs := []domain.Run{{
+			ID:           31415926535,
+			DisplayTitle: "one",
+			Status:       domain.StatusCompleted,
+			Conclusion:   domain.ConclusionSuccess,
+			CreatedAt:    created,
+		}}
+		if err := renderTable(deps, scope{}, runs); err != nil {
+			t.Fatalf("renderTable: %v", err)
+		}
+		want := timefmt.Age(now, created)
+		if want == "" {
+			t.Fatalf("the fixture at %s renders no age; the case proves nothing", ago)
+		}
+		if got := ageCell(t, out.String()); got != want {
+			t.Errorf("a Run created %s ago put %q in the age column, want timefmt's %q", ago, got, want)
+		}
+	}
+}
+
+// TestTableAgeColumnIsBlankWithoutAnInstant pins the one case that is not a bucket: a Run the
+// API returned with no created_at has no age, so the column is empty rather than measured
+// from the zero time.
+func TestTableAgeColumnIsBlankWithoutAnInstant(t *testing.T) {
+	var out bytes.Buffer
+	deps := Deps{Stdout: &out, Stderr: &out, Clock: clockwork.NewFakeClockAt(time.Date(2026, 7, 15, 16, 39, 0, 0, time.UTC))}
+	runs := []domain.Run{{ID: 31415926535, DisplayTitle: "one", Status: domain.StatusQueued}}
+	if err := renderTable(deps, scope{}, runs); err != nil {
+		t.Fatalf("renderTable: %v", err)
+	}
+	if got := ageCell(t, out.String()); got != "" {
+		t.Errorf("a Run with no created_at put %q in the age column, want it blank", got)
+	}
+}
+
+// ageCell returns the text of the one rendered row's age column, which is the last cell in
+// the table's fixed column order. It reads the cell rather than searching the whole frame, so
+// an age of "1m" cannot be matched inside a Run ID or a title.
+func ageCell(t *testing.T, table string) string {
+	t.Helper()
+	const marker = "31415926535" // the Run ID every case carries, the cell before the age
+	for _, line := range strings.Split(table, "\n") {
+		if i := strings.Index(line, marker); i >= 0 {
+			return strings.TrimSpace(line[i+len(marker):])
+		}
+	}
+	t.Fatalf("no row for Run %s in the table:\n%s", marker, table)
+	return ""
 }
 
 // TestTimeAgoBuckets pins -t's timeago wording bucket by bucket, on gh's own
