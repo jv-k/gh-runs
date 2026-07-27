@@ -1,5 +1,5 @@
 [1mSettings[m
-[38;2;138;138;138mChanges are saved to your config file.[m
+[38;2;158;158;158mChanges are saved to your config file.[m
 
   Budget                    [1;38;2;0;175;255mnormal[m
   Keybinding profile        [1;38;2;0;175;255mstandard[m
@@ -8,11 +8,11 @@
   Workflows scope           [1;38;2;0;175;255mall-repos[m
   Storage scope             [1;38;2;0;175;255mall-repos[m
   Launch filter             [1;38;2;0;175;255mnone[m
-[1m> [m[1mExcluded repositories     [m[1;38;2;0;175;255mjv-k/dotfiles, jv-k/scratch, acme/vendored-fork, and 2 more[m  [38;2;138;138;138m(enter to edit, comma separated)[m
+[1m> [m[1mExcluded repositories     [m[1;38;2;0;175;255mjv-k/dotfiles, jv-k/scratch, acme/vendored-fork, and 2 more[m  [38;2;158;158;158m(enter to edit, comma separated)[m
   Pinned repositories       [1;38;2;0;175;255mnone[m
   Confirmation threshold    [1;38;2;0;175;255m50[m
   Purge breaker threshold   [1;38;2;0;175;255m50[m
   Discovery refresh         [1;38;2;0;175;255m5 min[m
 
-[38;2;138;138;138mKept out of discovery and never polled. Naming one with -R still works.[m
-[38;2;138;138;138m↑/↓ move   enter edit list   esc close[m
+[38;2;158;158;158mKept out of discovery and never polled. Naming one with -R still works.[m
+[38;2;158;158;158m↑/↓ move   enter edit list   esc close[m

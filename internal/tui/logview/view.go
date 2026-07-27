@@ -42,8 +42,8 @@ var (
 	styleDebug   = lipgloss.NewStyle().Foreground(palette.Muted)
 	stylePrompt  = lipgloss.NewStyle().Bold(true)
 	styleWarn    = lipgloss.NewStyle().Bold(true).Foreground(palette.Warn)
-	cursorBg     = palette.CursorBackground
-	matchBg      = palette.MatchBackground
+	cursorHL     = palette.Cursor
+	matchHL      = palette.Match
 )
 
 // visKind distinguishes a fold header, which the cursor toggles, from an ordinary content
@@ -150,18 +150,26 @@ func (m Model) body() string {
 	return strings.Join(rows, "\n")
 }
 
-// renderVisLine wraps one visible line to the content width and paints each physical row in
-// the line's style (R22). NO_COLOR drops the style to plain, leaving R9's text labels to
-// carry the meaning (R10). The cursor line and a search match get a background, so the
+// renderVisLine wraps one visible line to the content width (log-viewer R22) and paints each
+// physical row in the line's style, which the marker family sets (R7, R8). NO_COLOR drops the
+// style to plain, leaving R9's text labels to carry the meaning (R10). The cursor line and a search match get a highlight, so the
 // fold-toggle target and the matches are visible without shifting the layout.
+//
+// A highlight applies its foreground WITH its background, replacing the line's severity
+// colour rather than sitting behind it. That is what makes the contrast exactly these two
+// values instead of a cross product: applying only the background left whatever colour the
+// line carried on top of it, and a Muted line on a search match painted at 1.95:1, the worst
+// contrast in the tool (settings R22, ADR-0024). The line loses its severity colour for as
+// long as it is highlighted, which costs nothing R16 requires, because a text label carries
+// the distinction either way.
 func (m Model) renderVisLine(l visLine, isCursor, isMatch bool) []string {
 	st := l.style
 	if m.noColor {
 		st = styleDefault
 	} else if isCursor {
-		st = st.Background(cursorBg)
+		st = st.Foreground(cursorHL.Foreground()).Background(cursorHL.Background())
 	} else if isMatch {
-		st = st.Background(matchBg)
+		st = st.Foreground(matchHL.Foreground()).Background(matchHL.Background())
 	}
 	frags := wrapPlain(l.text, m.contentWidth())
 	rows := make([]string, len(frags))
