@@ -643,7 +643,7 @@ func lifecycleRequest(op Operation, item Item, debug bool) (method, path string,
 		// The path shape differs from the four Run operations: it addresses a Job id and
 		// never a Run id, so it cannot ride the shared base below, which builds a Run
 		// endpoint. It sits in this early switch for the same reason the two Workflow
-		// toggles do, rather than teaching base a second meaning (run-lifecycle R16).
+		// toggles do, rather than teaching base a second meaning (run-lifecycle R14a).
 		// R14's enable_debug_logging extends to this re-run, so it carries the same body.
 		return http.MethodPost, jobPath(item) + "/rerun", rerunBody(debug)
 	}

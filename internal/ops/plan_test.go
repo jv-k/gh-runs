@@ -65,7 +65,9 @@ func TestFrictionTable(t *testing.T) {
 		{"single re-run is None", ops.OpRerun, runItems("o", "a", 1, 1), 50, oneRepo, ops.FrictionNone},
 		{"single-repo 500 at a clamped-500 threshold types the count", ops.OpDelete, runItems("o", "a", 500, 1), 500, oneRepo, ops.FrictionTypedCount},
 		// The fifth operation takes the same row the other two re-runs do: None on a
-		// single-Item set, the existing rules otherwise (run-lifecycle R16, R18).
+		// single-Item set, the existing rules otherwise (run-lifecycle R17, R18). R18 names this
+		// operation outright: a single-Job re-run takes no confirmation, on the same reasoning
+		// that exempts a single Run, and R14b's note is what it carries instead.
 		{"single per-Job re-run is None", ops.OpRerunJob, []ops.Item{jobIn("o", "a", 101, 555)}, 50, oneRepo, ops.FrictionNone},
 		{"two per-Job re-runs below the threshold is y/N", ops.OpRerunJob, []ops.Item{jobIn("o", "a", 101, 555), jobIn("o", "a", 102, 556)}, 50, oneRepo, ops.FrictionYN},
 		{"cross-repo per-Job re-run types the count at any size", ops.OpRerunJob, []ops.Item{jobIn("o", "a", 101, 555), jobIn("o", "b", 102, 556)}, 50, twoRepos, ops.FrictionTypedCount},
