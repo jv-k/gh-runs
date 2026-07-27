@@ -838,3 +838,11 @@ func (m Model) pageSize() int {
 	}
 	return 1
 }
+
+// SetProfile adopts the keybinding profile the operator chose in Settings, and passes it to
+// the confirmation this tab opens over a reclamation (settings R5, R17).
+func (m Model) SetProfile(p keys.Profile) Model {
+	m.profile = p
+	m.confirm = m.confirm.SetProfile(p)
+	return m
+}

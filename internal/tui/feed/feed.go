@@ -1367,3 +1367,17 @@ func (m Model) visibleRepos() []domain.RepoID {
 	}
 	return ids
 }
+
+// SetProfile adopts the keybinding profile the operator chose in Settings, and passes it to
+// every pane this tab owns. Motion keys change only which keystroke a held frame answers,
+// which by the rule stated beside the Settings view's descriptions makes them a setting that
+// applies from the next keystroke rather than at the next launch (settings R5, R17). The
+// root pushes it here after every key it routes to the pane, the way it pushes the timestamp
+// format, so no message class carries it and live-run-feed R33's routing is untouched.
+func (m Model) SetProfile(p keys.Profile) Model {
+	m.profile = p
+	m.detail = m.detail.SetProfile(p)
+	m.confirm = m.confirm.SetProfile(p)
+	m.approval = m.approval.SetProfile(p)
+	return m
+}

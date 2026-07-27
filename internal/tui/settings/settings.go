@@ -431,7 +431,10 @@ func (m Model) commitFilter() Model {
 // applyCycle advances the selector under the cursor to the next value in its set, wrapping
 // at the end (settings R5, R8, R19). Cycling the keybinding profile re-seeds the pane's own
 // motion at once, so Vim's j and Standard's arrows take effect live for the very next
-// keystroke, the one setting a running view can apply to itself without reaching a tab.
+// keystroke inside the pane. That is this pane applying the change to itself and nothing
+// more: the root reads the profile back off this pane after the key and pushes it to every
+// tab, the running surface and its own global keys, which is what makes the change live
+// everywhere rather than here alone (#127).
 func (m Model) applyCycle() Model {
 	switch m.cursor {
 	case rowBudget:

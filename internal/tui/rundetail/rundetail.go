@@ -473,3 +473,11 @@ func debounceCmd(runID int64) tea.Cmd {
 func refreshTick(runID int64) tea.Cmd {
 	return tea.Tick(refreshInterval, func(time.Time) tea.Msg { return refreshMsg{runID: runID} })
 }
+
+// SetProfile adopts the keybinding profile the operator chose in Settings and passes it to
+// the log view this pane opens, which passes it on again (settings R5, R17).
+func (m Model) SetProfile(p keys.Profile) Model {
+	m.profile = p
+	m.log = m.log.SetProfile(p)
+	return m
+}

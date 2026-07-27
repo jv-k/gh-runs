@@ -663,3 +663,11 @@ func (m Model) pageSize() int {
 	}
 	return 1
 }
+
+// SetProfile adopts the keybinding profile the operator chose in Settings, and passes it to
+// the dispatch pane this tab owns (settings R5, R17).
+func (m Model) SetProfile(p keys.Profile) Model {
+	m.profile = p
+	m.dispatch = m.dispatch.SetProfile(p)
+	return m
+}

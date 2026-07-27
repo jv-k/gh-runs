@@ -911,3 +911,10 @@ func cycle(options []string, current string) string {
 	}
 	return options[0]
 }
+
+// SetProfile adopts the keybinding profile the operator chose in Settings, pushed down from
+// the root through the Workflows tab that owns this pane (settings R5, R17).
+func (m Model) SetProfile(p keys.Profile) Model {
+	m.profile = p
+	return m
+}
