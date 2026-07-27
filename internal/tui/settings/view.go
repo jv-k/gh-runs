@@ -6,7 +6,6 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/jv-k/gh-runs/v2/internal/config"
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/palette"
@@ -55,8 +54,10 @@ func (m Model) View() string {
 		lines = append(lines, styleWarn.Render(textsan.Sanitize(m.editErr)))
 	}
 	lines = append(lines, "")
-	for r := row(0); r < rowCount; r++ {
-		lines = append(lines, m.rowLine(r))
+	// The table is what the frame is built from, so a row added there appears here with no
+	// second list to keep in step.
+	for r := range rows {
+		lines = append(lines, m.rowLine(row(r)))
 	}
 	lines = append(lines, "")
 	lines = append(lines, styleDim.Render(m.description(m.cursor)))
@@ -130,70 +131,20 @@ func (m Model) valueRoom() int {
 	return m.width - markerCol - labelWidth - 1
 }
 
-// rawValue is the plain text of a row's current value, before styling.
+// rawValue is the plain text of a row's current value, before styling. The renderer is the
+// row's own, from the rows table, so a row added there needs no arm here.
 func (m Model) rawValue(r row) string {
-	switch r {
-	case rowBudget:
-		return string(m.cfg.Budget)
-	case rowProfile:
-		return string(m.cfg.KeybindingProfile)
-	case rowTheme:
-		return string(m.cfg.Theme)
-	case rowTimestamp:
-		return string(m.cfg.Timestamp)
-	case rowWorkflowsScope:
-		return string(m.cfg.WorkflowsScope)
-	case rowStorageScope:
-		return string(m.cfg.StorageScope)
-	case rowLaunchFilter:
-		return filterLine(m.cfg.LaunchFilter)
-	case rowExclude:
-		return repoList(m.cfg.Exclude, m.valueRoom())
-	case rowPin:
-		return repoList(m.cfg.Pin, m.valueRoom())
-	case rowConfirmThreshold:
-		return strconv.Itoa(m.cfg.ConfirmThreshold)
-	case rowBreakerFailures:
-		return strconv.Itoa(m.cfg.BreakerFailures)
-	case rowDiscoveryRefresh:
-		return strconv.Itoa(m.cfg.DiscoveryRefreshMinutes) + " min"
-	default:
+	value := r.spec().value
+	if value == nil {
 		return ""
 	}
+	return value(m)
 }
 
 // label is the human name of a setting, expressed at the level of intent (Purpose): a
-// person deciding it answers from their own context, without the mechanism behind it.
-func (m Model) label(r row) string {
-	switch r {
-	case rowBudget:
-		return "Budget"
-	case rowProfile:
-		return "Keybinding profile"
-	case rowTheme:
-		return "Theme"
-	case rowTimestamp:
-		return "Timestamps"
-	case rowWorkflowsScope:
-		return "Workflows scope"
-	case rowStorageScope:
-		return "Storage scope"
-	case rowLaunchFilter:
-		return "Launch filter"
-	case rowExclude:
-		return "Excluded repositories"
-	case rowPin:
-		return "Pinned repositories"
-	case rowConfirmThreshold:
-		return "Confirmation threshold"
-	case rowBreakerFailures:
-		return "Purge breaker threshold"
-	case rowDiscoveryRefresh:
-		return "Discovery refresh"
-	default:
-		return ""
-	}
-}
+// person deciding it answers from their own context, without the mechanism behind it. The
+// text is the row's own, from the rows table, which is also where the goldens pin it.
+func (m Model) label(r row) string { return r.spec().label }
 
 // description is the one-line help for the focused setting, intent-level and free of the
 // mechanism R13 keeps out of the view: none names a poll interval, a delete rate, a cache
@@ -205,81 +156,24 @@ func (m Model) label(r row) string {
 // "starts". The theme, the timestamp format and the keybinding profile are the first kind,
 // and they carry no timing wording because they have no delay to warn about. The two tab
 // scopes and the launch filter are the second kind, because narrowing one also means
-// dropping the held state, so the change cannot happen without a relaunch.
-func (m Model) description(r row) string {
-	switch r {
-	case rowBudget:
-		return "Share of your API allowance the background refresh may spend."
-	case rowProfile:
-		return "Motion keys: Vim (k/j) or Standard (arrows)."
-	case rowTheme:
-		return "Palette: auto follows your terminal background. NO_COLOR overrides all three."
-	case rowTimestamp:
-		return "When a run started: the instant itself, or how long ago it was."
-	// Both scope rows say "starts" for the reason R9's launch filter does, and it is the
-	// requirement rather than a hedge: each tab chooses its scope at construction, because
-	// narrowing it also means dropping the held state, so a toggle takes effect at the next
-	// launch. The present tense would state something a person would test by pressing refresh.
-	case rowWorkflowsScope:
-		return "The Workflows tab starts covering these repositories."
-	case rowStorageScope:
-		return "The Storage tab starts covering these repositories."
-	case rowLaunchFilter:
-		// It says "starts" rather than "now", and that is the requirement rather than a
-		// hedge: R9 settles the filter the Feed opens with, and a running Feed keeps
-		// whatever filter it is showing until its own / input changes it.
-		return "The Runs feed starts filtered by this. Same syntax as its / filter."
-	case rowExclude:
-		return "Kept out of discovery and never polled. Naming one with -R still works."
-	case rowPin:
-		// The description states what the code does and no more (#97): the promotion is to
-		// the medium tier, which is the cadence an on-screen repository already gets, and
-		// exclusion wins because it applies at discovery before any tier is chosen.
-		return "Polled as often as an on-screen one, even when scrolled away. Excluding wins."
-	case rowConfirmThreshold:
-		return "Deletions at or above this many make you type the count."
-	case rowBreakerFailures:
-		return "Consecutive failures before a Purge stops itself."
-	case rowDiscoveryRefresh:
-		return "How quickly a newly active repository shows up, in minutes."
-	default:
-		return ""
-	}
-}
+// dropping the held state, so the change cannot happen without a relaunch. Each row's text
+// and the reason behind its wording sit together in the rows table.
+func (m Model) description(r row) string { return r.spec().desc }
 
 // optionsHint lists the members a focused selector cycles through, drawn from the exported
-// valid set so it matches what the loader accepts (R5, R8, R19).
+// valid set so it matches what the loader accepts (R5, R8, R19). A row with no options
+// function is not a selector and shows none.
 func (m Model) optionsHint(r row) string {
-	switch r {
-	case rowBudget:
-		return config.ListSet(config.Tiers(), " / ")
-	case rowProfile:
-		return config.ListSet(config.KeybindingProfiles(), " / ")
-	case rowTheme:
-		return config.ListSet(config.Themes(), " / ")
-	case rowTimestamp:
-		return config.ListSet(config.TimestampFormats(), " / ")
-	case rowWorkflowsScope, rowStorageScope:
-		return config.ListSet(config.Scopes(), " / ")
-	default:
+	options := r.spec().options
+	if options == nil {
 		return ""
 	}
+	return options()
 }
 
 // boundHint states a numeric setting's range, so a focused number row shows what a commit
 // will clamp to (R12, R20, R21).
-func (m Model) boundHint(r row) string {
-	switch r {
-	case rowConfirmThreshold:
-		return "up to 500, type the count above it"
-	case rowBreakerFailures:
-		return "1 to 500"
-	case rowDiscoveryRefresh:
-		return "1 or more minutes"
-	default:
-		return ""
-	}
-}
+func (m Model) boundHint(r row) string { return r.spec().bound }
 
 // helpLine names the keys the pane uses, drawn from the profile's own help so it reflects
 // the selected motion set rather than a hardcoded literal (R7a).
