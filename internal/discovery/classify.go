@@ -3,13 +3,17 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"slices"
 	"sync"
 
+	"github.com/cli/go-gh/v2/pkg/api"
+
 	"github.com/jv-k/gh-runs/v2/internal/domain"
+	"github.com/jv-k/gh-runs/v2/internal/governor"
 )
 
 // apiRunsPage is the fragment of an actions/runs listing discovery reads. It
@@ -32,6 +36,13 @@ type probeResult struct {
 	hasETag bool
 	runs    []domain.Run
 	err     error
+
+	// definitive reports that this failure is evidence the repository is gone or
+	// unreachable for good, which is the only thing R23 counts. It is meaningful only
+	// alongside a non-nil err. A transport error, a 5xx, a timeout, a decode failure
+	// and a rate-limited 403 all leave it false, so none of them can retire a
+	// repository and none of them can postpone a retirement either.
+	definitive bool
 }
 
 // probe issues one unfiltered Run-listing request for a repository and classifies
@@ -50,10 +61,19 @@ func (d *Discovery) probe(ctx context.Context, id domain.RepoID) probeResult {
 	path := fmt.Sprintf("repos/%s/%s/actions/runs", id.Owner, id.Name)
 	resp, err := d.opts.Client.Request(http.MethodGet, path, nil)
 	if err != nil {
-		return probeResult{id: id, err: fmt.Errorf("probe %s: %w", id, err)}
+		// Every non-2xx arrives here, as an *api.HTTPError with a nil response, so
+		// this is the branch R23's verdict is taken on and the status check below is
+		// not (ADR-0012).
+		return probeResult{
+			id:         id,
+			err:        fmt.Errorf("probe %s: %w", id, err),
+			definitive: definitiveFailure(err),
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// Defence only. A non-2xx never reaches here, and a 2xx that is not 200 (a 204,
+	// say) is not evidence about the repository, so it is not definitive.
 	if resp.StatusCode != http.StatusOK {
 		return probeResult{id: id, err: fmt.Errorf("probe %s: status %d", id, resp.StatusCode)}
 	}
@@ -70,6 +90,48 @@ func (d *Discovery) probe(ctx context.Context, id domain.RepoID) probeResult {
 		hasRuns: len(page.WorkflowRuns) > 0,
 		hasETag: resp.Header.Get("ETag") != "",
 		runs:    page.WorkflowRuns,
+	}
+}
+
+// definitiveFailure reports whether a failed probe is evidence R23 may count: a 404,
+// or a 403 the governor reports as not rate limiting.
+//
+// It reads the error rather than a response because go-gh's RESTClient turns every
+// non-2xx into an *api.HTTPError carrying a copy of the response headers and returns
+// a nil response (ADR-0012). The status and the governor's stamp are both on the
+// error, and nowhere else, so the errors.As read here is the same one the scheduler's
+// rate-limit check and the CLI's exit-code mapping already make.
+//
+// An error that is not an *api.HTTPError carries no status and no headers: a
+// transport error, a timeout, a decode failure. None of them is evidence about the
+// repository, so none of them is definitive, and R23 requires each to leave the count
+// untouched rather than reset it.
+//
+// The 403 is read through the governor's stamp and never off the status code. A
+// secondary-limit 403 arrives with a healthy x-ratelimit-remaining, so the status
+// cannot tell rate limiting from authorization, and only the governor has looked at
+// the body. The check requires the stamp to be present and to say false, rather than
+// merely not to say true, because RateLimitedHeaders reports false for headers that
+// were never classified at all and that reading would retire a repository on a 403
+// nobody looked at. Unclassified is not definitive, which is the safe direction.
+//
+// On a fine-grained PAT the 403 signal does not fire at all. GitHub answers that
+// token class with the general fine-grained-permissions page, which names no
+// resource, so the governor classifies it as rate limiting and R23 degrades to 404
+// alone. That is correct rather than a gap: a deleted or private repository answers
+// 404 and retires on every token class (ADR-0020).
+func definitiveFailure(err error) bool {
+	var he *api.HTTPError
+	if !errors.As(err, &he) {
+		return false
+	}
+	switch he.StatusCode {
+	case http.StatusNotFound:
+		return true
+	case http.StatusForbidden:
+		return governor.Classified(he.Headers) && !governor.RateLimitedHeaders(he.Headers)
+	default:
+		return false
 	}
 }
 
@@ -152,6 +214,12 @@ func (d *Discovery) fanOut(ctx context.Context, ids []domain.RepoID, build func(
 			if res.err != nil {
 				// A probe failure classifies nothing: the repository keeps whatever a
 				// prior pass or a reload recorded, and the next re-probe retries it.
+				// R23 is the one thing a failure does move, and only a definitive one:
+				// the count lives on the record, so it is taken here on the failure
+				// path rather than in putProbed, which this return never reaches.
+				if res.definitive {
+					d.countDefinitiveFailure(id)
+				}
 				return
 			}
 			rec := build(res)

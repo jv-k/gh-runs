@@ -1,0 +1,110 @@
+---
+version: 2
+interactions:
+    # AC16, fourth sequence: a 403 carrying the governor's rate-limited verdict retires
+    # nothing however many consecutive times it arrives. The body names a rate-limit
+    # page, which names no resource of ours, so the governor classifies it as rate
+    # limiting rather than as authorization. A bare 403 would classify the same way by
+    # default and would pass this criterion for the wrong reason, so the body is the
+    # load-bearing part of this fixture.
+    # Interaction 0: enumeration, one page, no rel="next", so the walk stops here.
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member
+      response:
+        status: 200 OK
+        code: 200
+        body: '[{"name":"alpha","full_name":"jv-k/alpha","owner":{"login":"jv-k"},"permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true},"archived":false,"disabled":false,"default_branch":"main"}]'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"
+    # Interaction 1: alpha's first probe. 200 and NO ETag, so every later probe of it
+    # is unconditional and the sequence below is matched in request order.
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":1,"workflow_runs":[{"id":1,"status":"completed","conclusion":"success"}]}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"
+    # Interaction 2: a rate-limited 403. Not definitive, so it retires nothing.
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"You have exceeded a secondary rate limit","documentation_url":"https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"
+    # Interaction 3: a second rate-limited 403. Still nothing.
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"You have exceeded a secondary rate limit","documentation_url":"https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"
+    # Interaction 4: a third. However many arrive, none of them counts.
+    - id: 4
+      request:
+        method: GET
+        url: https://api.github.com/repos/jv-k/alpha/actions/runs
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"You have exceeded a secondary rate limit","documentation_url":"https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api"}'
+        headers:
+            Content-Type:
+                - application/json; charset=utf-8
+            X-Ratelimit-Limit:
+                - "5000"
+            X-Ratelimit-Remaining:
+                - "4900"
+            X-Ratelimit-Reset:
+                - "1789000000"
+            X-Ratelimit-Used:
+                - "100"

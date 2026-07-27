@@ -127,24 +127,45 @@ func newDocStore(t *testing.T, dir string) *store.Transport {
 	return store.NewTransport(nil, dir, clockwork.NewFakeClock())
 }
 
+// harnessConfig is what a harnessOption may set: discovery's own options, and the
+// one recorder setting a test needs to choose. It exists so an option can reach the
+// cassette's replay mode as well as the Discovery under it.
+type harnessConfig struct {
+	opts discovery.Options
+	// replayable leaves an interaction available after it has been played, so a
+	// cassette answers the same request identically however many times it arrives.
+	// It is the right default for the fixtures that assert a steady state, and the
+	// wrong one for R23's sequences: retirement is defined over *consecutive*
+	// answers, so those cassettes tape one interaction per answer and need each
+	// played exactly once, in order.
+	replayable bool
+}
+
 // harnessOption customises a harness before its Discovery is built.
-type harnessOption func(*discovery.Options)
+type harnessOption func(*harnessConfig)
 
 // withRefresh sets the fast-tier interval.
 func withRefresh(d time.Duration) harnessOption {
-	return func(o *discovery.Options) { o.Refresh = d }
+	return func(c *harnessConfig) { c.opts.Refresh = d }
 }
 
 // withCurrent sets the fast-path resolver seam (R14).
 func withCurrent(f func() (domain.RepoID, error)) harnessOption {
-	return func(o *discovery.Options) { o.Current = f }
+	return func(c *harnessConfig) { c.opts.Current = f }
 }
 
 // withExclude sets settings R7's resolved exclude list, which main.go fills from the
 // loaded config (discovery may not import config, ADR-0011, so it takes the resolved
 // identities).
 func withExclude(ids ...domain.RepoID) harnessOption {
-	return func(o *discovery.Options) { o.Exclude = ids }
+	return func(c *harnessConfig) { c.opts.Exclude = ids }
+}
+
+// withSequentialReplay plays each taped interaction exactly once, so a cassette can
+// answer the same URL differently on consecutive requests. R23's four sequences are
+// all of this shape and none of them is expressible under replayable interactions.
+func withSequentialReplay() harnessOption {
+	return func(c *harnessConfig) { c.replayable = false }
 }
 
 // relaunch builds a second Discovery over the same transport chain and the same store,
@@ -168,10 +189,14 @@ func (h *harness) relaunch(exclude ...domain.RepoID) *discovery.Discovery {
 // a fresh temp dir unless the test reuses one to simulate a restart (AC7).
 func newHarness(t *testing.T, cassetteName string, dir string, opts ...harnessOption) *harness {
 	t.Helper()
+	cfg := harnessConfig{replayable: true}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	rec, err := recorder.New("testdata/"+cassetteName,
 		recorder.WithMode(recorder.ModeReplayOnly),
 		recorder.WithMatcher(discoveryMatcher),
-		recorder.WithReplayableInteractions(true),
+		recorder.WithReplayableInteractions(cfg.replayable),
 	)
 	if err != nil {
 		t.Fatalf("open cassette %s: %v", cassetteName, err)
@@ -197,15 +222,13 @@ func newHarness(t *testing.T, cassetteName string, dir string, opts ...harnessOp
 		t.Fatalf("build client: %v", err)
 	}
 
-	o := discovery.Options{
-		Client:  client,
-		Store:   transport,
-		Budget:  gov,
-		Clock:   clk,
-		Refresh: 5 * time.Minute,
-	}
-	for _, opt := range opts {
-		opt(&o)
+	o := cfg.opts
+	o.Client = client
+	o.Store = transport
+	o.Budget = gov
+	o.Clock = clk
+	if o.Refresh == 0 {
+		o.Refresh = 5 * time.Minute
 	}
 
 	return &harness{
