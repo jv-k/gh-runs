@@ -85,7 +85,7 @@ The two chords are chords deliberately. A long operation keeps running while you
 
 ## The CLI
 
-Every operation the dashboard performs has a non-interactive form, so the tool is scriptable and does not need the TUI to be useful.
+Four commands run without the TUI, so the Runs half of the tool is scriptable.
 
 ```sh
 gh runs list --status failure --limit 100
@@ -105,6 +105,8 @@ gh runs rerun --branch main --all --yes --job-name "build (ubuntu-latest)"
 
 Outside a repository the commands fan out across every discovered repository. Inside one they act on that repository, the way gh does, until you pass `--all-repos`.
 
+Those four cover the Runs. Dispatching a Workflow, enabling or disabling one, acting on an approval and reclaiming storage have no non-interactive form in 2.0.0, and happen in the dashboard.
+
 ## Deletion is irreversible, and treated that way
 
 A Purge cannot be undone, so four things stand in front of it.
@@ -123,14 +125,14 @@ Settings live in `config.yml`, under `$XDG_CONFIG_HOME/gh-runs` if that is set, 
 
 | Key | What it does |
 |---|---|
-| `budget` | The share of the rate limit polling may spend |
+| `budget` | The share of the rate limit polling may spend: `background`, `normal` or `greedy` |
 | `confirm_threshold` | The set size at which a destructive action starts demanding a typed count |
 | `purge_breaker_failures` | Consecutive failures at which a Purge stops itself |
 | `discovery_refresh_minutes` | How often discovery re-probes |
-| `keybinding_profile` | `Vim` or `Standard` |
-| `theme`, `timestamp` | `auto`, `dark` or `light`, and absolute or relative times |
+| `keybinding_profile` | `standard` or `vim` |
+| `theme`, `timestamp` | `auto`, `dark` or `light`, and `absolute` or `relative` times |
 | `exclude`, `pin` | Repositories to drop from discovery, and ones to poll harder |
-| `workflows_scope`, `storage_scope` | Each tab's repository scope, set independently |
+| `workflows_scope`, `storage_scope` | Each tab's repository scope, `all-repos` or `this-repo`, set independently |
 | `launch_filter` | The filter the Feed opens with |
 
 There is no stored setting that skips confirmation, and there will not be one.
