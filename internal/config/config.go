@@ -150,10 +150,17 @@ func (s Scope) valid() bool { return inSet(s, scopes) }
 // scopeList renders the valid scopes for a diagnostic (R19).
 func scopeList() string { return ListSet(scopes, ", ") }
 
-// Theme selects the palette. There are exactly three: auto derives it from the terminal
-// background as gh does, and dark and light state it outright (settings R6). The set is
-// small and fixed rather than a gallery, and NO_COLOR overrides every member of it (R15),
-// which ColorProfile enforces.
+// Theme selects the palette. Three members ship here: auto derives it from the terminal
+// background as gh does, and dark and light state it outright (settings R6).
+//
+// Three is what this version ships and not a ceiling. R6 bounds the set by R22's contrast
+// floor against the background a member paints, which a test enforces rather than a
+// reviewer counting, and clearing that floor admits a candidate for consideration without
+// selecting it: the set grows by decision and not by arithmetic. The named members that
+// decision admits arrive in 2.1 (ADR-0025), which is also when a member starts painting the
+// background it is measured against.
+//
+// NO_COLOR overrides every member (R15), which ColorProfile enforces.
 type Theme string
 
 const (
@@ -443,8 +450,10 @@ func resolveFile(cfg Config, data []byte, diags []Diagnostic) (Config, []Diagnos
 			} else if t.valid() {
 				cfg.Theme = t
 			} else {
-				// The set is small and fixed, so a fourth member is rejected rather than
-				// adopted, and the message names every valid one (R6, R14).
+				// A name outside the shipped set is rejected rather than adopted, and the
+				// message names every valid one (R6, R14). What admits a member is R22's
+				// contrast floor and a decision to add it, neither of which a config file
+				// can supply, so naming one here cannot bring it into being.
 				diags = append(diags, Diagnostic{Message: fmt.Sprintf(
 					"theme: %q is not a valid theme; using %q. Valid themes: %s",
 					string(t), ThemeAuto, themeList())})
