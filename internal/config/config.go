@@ -157,8 +157,9 @@ func scopeList() string { return ListSet(scopes, ", ") }
 // floor against the background a member paints, which a test enforces rather than a
 // reviewer counting, and clearing that floor admits a candidate for consideration without
 // selecting it: the set grows by decision and not by arithmetic. The named members that
-// decision admits arrive in 2.1 (ADR-0025), which is also when a member starts painting the
-// background it is measured against.
+// decision selects arrive in 2.1 (ADR-0025), which is also when every member but auto
+// starts painting the background it is measured against. auto is the only member that does
+// not paint, so it stays measured against reference backgrounds.
 //
 // NO_COLOR overrides every member (R15), which ColorProfile enforces.
 type Theme string
@@ -451,9 +452,9 @@ func resolveFile(cfg Config, data []byte, diags []Diagnostic) (Config, []Diagnos
 				cfg.Theme = t
 			} else {
 				// A name outside the shipped set is rejected rather than adopted, and the
-				// message names every valid one (R6, R14). What admits a member is R22's
-				// contrast floor and a decision to add it, neither of which a config file
-				// can supply, so naming one here cannot bring it into being.
+				// message names every valid one (R6, R14). R22's contrast floor is what
+				// admits a candidate and a decision is what selects it, and a config file
+				// supplies neither, so naming a member here cannot bring it into being.
 				diags = append(diags, Diagnostic{Message: fmt.Sprintf(
 					"theme: %q is not a valid theme; using %q. Valid themes: %s",
 					string(t), ThemeAuto, themeList())})

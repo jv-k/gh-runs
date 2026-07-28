@@ -385,8 +385,9 @@ func TestThemeReadFromFile(t *testing.T) {
 // the auto default and produces one actionable diagnostic naming every valid member, the
 // shape AC4 fixes for the keybinding profile.
 //
-// What bounds the set is R22's contrast floor and a decision to add a member (R6), so a
-// name a config file invents is outside it however plausible the name looks. The value
+// R22's contrast floor is the whole of what bounds the set, and a decision is what selects
+// a member from what the floor admits (R6), so a name a config file invents is outside the
+// set however plausible the name looks. The value
 // used here stays outside it past 2.1, whose set names solarized-light and not solarized
 // (ADR-0025), so this assertion does not expire with the next member added.
 func TestInvalidThemeRejected(t *testing.T) {
