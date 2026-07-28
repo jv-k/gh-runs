@@ -381,9 +381,15 @@ func TestThemeReadFromFile(t *testing.T) {
 	}
 }
 
-// TestInvalidThemeRejected pins settings R6 and R14: the set is small and fixed, so a
-// value outside it keeps the auto default and produces one actionable diagnostic naming
-// every valid member, the shape AC4 fixes for the keybinding profile.
+// TestInvalidThemeRejected pins settings R6 and R14: a name outside the shipped set keeps
+// the auto default and produces one actionable diagnostic naming every valid member, the
+// shape AC4 fixes for the keybinding profile.
+//
+// R22's contrast floor is the whole of what bounds the set, and a decision is what selects
+// a member from what the floor admits (R6), so a name a config file invents is outside the
+// set however plausible the name looks. The value
+// used here stays outside it past 2.1, whose set names solarized-light and not solarized
+// (ADR-0025), so this assertion does not expire with the next member added.
 func TestInvalidThemeRejected(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, "theme: solarized\n")
