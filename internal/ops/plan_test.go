@@ -303,3 +303,80 @@ func TestPlanRefusesANonJobItemUnderTheJobRerun(t *testing.T) {
 		t.Errorf("the error does not name the offending Kind: %v", err)
 	}
 }
+
+// unmatchedIn builds an Item-less member for a Run that resolved to no Job of the named
+// name, the shape ADR-0019's amendment adds (cli-surface R28b).
+func unmatchedIn(owner, name string, runID int64, reason string) ops.Unmatched {
+	return ops.Unmatched{Repo: repoID(owner, name), RunID: runID, Reason: reason}
+}
+
+// TestUnmatchedIsCountedAndBoundedToTheByNameOperation pins ADR-0019's second kind of
+// member: it is accepted under OpRerunJob alone, it counts in Total, Breakdown and
+// Skipped, and it never enters Items, because there is no Item (cli-surface R28b,
+// run-lifecycle AC14c).
+func TestUnmatchedIsCountedAndBoundedToTheByNameOperation(t *testing.T) {
+	repos := snapshot(writableRepo("o", "a"))
+	const reason = `no job named "build" in this run`
+
+	t.Run("counted under a per-Job re-run", func(t *testing.T) {
+		p, err := newPlanOps(50).Plan(ops.OpRerunJob,
+			[]ops.Item{jobIn("o", "a", 101, 555), jobIn("o", "a", 102, 556)},
+			repos,
+			unmatchedIn("o", "a", 557, reason), unmatchedIn("o", "a", 558, reason))
+		if err != nil {
+			t.Fatalf("Plan: %v", err)
+		}
+		if got := p.Total(); got != 4 {
+			t.Errorf("Total() = %d, want 4: an unmatched member is inside the frozen count (AC14c)", got)
+		}
+		if got := p.Skipped(); got != 2 {
+			t.Errorf("Skipped() = %d, want 2", got)
+		}
+		if got := len(p.Items()); got != 2 {
+			t.Errorf("len(Items()) = %d, want 2: an unmatched member has no Item", got)
+		}
+		bd := p.Breakdown()
+		if len(bd) != 1 || bd[0].Count != 4 || bd[0].Skipped != 2 {
+			t.Errorf("Breakdown() = %+v, want one row counting 4 with 2 skipped (R6)", bd)
+		}
+		um := p.Unmatched()
+		if len(um) != 2 || um[0].RunID != 557 || um[1].RunID != 558 {
+			t.Errorf("Unmatched() = %+v, want the two members in resolution order", um)
+		}
+		um[0].RunID = 0
+		if p.Unmatched()[0].RunID != 557 {
+			t.Error("Unmatched() returned the held slice, not a copy")
+		}
+	})
+
+	t.Run("refused under any other operation", func(t *testing.T) {
+		for _, op := range []ops.Operation{ops.OpDelete, ops.OpCancel, ops.OpForceCancel, ops.OpRerun, ops.OpRerunFailed} {
+			_, err := newPlanOps(50).Plan(op, runItems("o", "a", 1, 1), repos, unmatchedIn("o", "a", 557, reason))
+			if err == nil {
+				t.Errorf("Plan(%s) accepted an unmatched member; only a by-name per-Job re-run has one", op)
+			}
+		}
+	})
+}
+
+// TestFrictionPricesUnmatchedMembers pins ADR-0019's consequence: friction is priced over
+// Total, so a by-name set of 9 Items and 3 unmatched prices against 12 (run-lifecycle R17).
+func TestFrictionPricesUnmatchedMembers(t *testing.T) {
+	repos := snapshot(writableRepo("o", "a"))
+	items := make([]ops.Item, 9)
+	for i := range items {
+		items[i] = jobIn("o", "a", int64(101+i), int64(555+i))
+	}
+	unmatched := []ops.Unmatched{
+		unmatchedIn("o", "a", 601, "r"), unmatchedIn("o", "a", 602, "r"), unmatchedIn("o", "a", 603, "r"),
+	}
+	// A threshold of 12 sits above the 9 Items and exactly at the frozen total, so the
+	// level moves only if the unmatched members are priced in.
+	p, err := newPlanOps(12).Plan(ops.OpRerunJob, items, repos, unmatched...)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := p.Friction(); got != ops.FrictionTypedCount {
+		t.Errorf("Friction() = %v, want FrictionTypedCount: 9 Items and 3 unmatched price against 12", got)
+	}
+}

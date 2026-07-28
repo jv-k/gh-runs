@@ -166,7 +166,9 @@ func (o *Ops) Retry(ctx context.Context, sum Summary) (Started, error) {
 		op:        sum.op,
 		items:     failed,
 		friction:  FrictionNone,
-		breakdown: breakdownOf(failed),
+		// No Item-less member rides the retry: an Unmatched is a skip by construction and
+		// never enters Failed(), so a re-attempt of the failures is over Items alone.
+		breakdown: breakdownOf(failed, nil),
 		debug:     sum.debug,
 	}
 	return o.start(ctx, plan), nil

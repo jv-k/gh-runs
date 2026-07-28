@@ -58,7 +58,7 @@ type Requester interface {
 // a live DELETE (purge R28).
 type Purger interface {
 	Crawl(ctx context.Context, repos []domain.RepoID, flt filter.Filter) ([]ops.Item, error)
-	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error)
+	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo, unmatched ...ops.Unmatched) (ops.Plan, error)
 	Confirm(p ops.Plan, in ops.Input) (ops.Confirmed, error)
 	Execute(ctx context.Context, c ops.Confirmed) (ops.Summary, error)
 }

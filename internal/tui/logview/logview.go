@@ -41,7 +41,7 @@ import (
 // inert (the destructive action stays disabled until the planner and the discovered
 // capability data are wired, repo-discovery R8).
 type Planner interface {
-	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error)
+	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo, unmatched ...ops.Unmatched) (ops.Plan, error)
 }
 
 // Options carries the pane's construction seams, filled by main.go through rundetail. Fetch
