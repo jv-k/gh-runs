@@ -168,16 +168,25 @@ type Profile struct {
 
 	// Navigation and actions. Identical in both profiles (R7a's "Everything
 	// else" table).
-	NextTab          key.Binding // tab: next tab (R2)
-	PrevTab          key.Binding // shift+tab: previous tab (R2)
-	SelectTab        key.Binding // 1/2/3: jump to a tab by position (R2)
-	Settings         key.Binding // ,: settings, reachable from any tab (R2)
-	ToggleSelect     key.Binding // space: toggle row selection (purge R4)
-	Delete           key.Binding // d: open the graduated confirmation over the selection (purge R4 to R9)
-	Cancel           key.Binding // c: cancel the selected Run(s) (run-lifecycle R1, R16)
-	ForceCancel      key.Binding // C: force-cancel, the escalation of cancel (run-lifecycle R6)
-	Rerun            key.Binding // R: re-run the selected Run(s), adding an Attempt (run-lifecycle R1, R8)
-	RerunFailed      key.Binding // F: re-run only the failed Jobs of the selected Run(s) (run-lifecycle R13)
+	NextTab      key.Binding // tab: next tab (R2)
+	PrevTab      key.Binding // shift+tab: previous tab (R2)
+	SelectTab    key.Binding // 1/2/3: jump to a tab by position (R2)
+	Settings     key.Binding // ,: settings, reachable from any tab (R2)
+	ToggleSelect key.Binding // space: toggle row selection (purge R4)
+	Delete       key.Binding // d: open the graduated confirmation over the selection (purge R4 to R9)
+	Cancel       key.Binding // c: cancel the selected Run(s) (run-lifecycle R1, R16)
+	ForceCancel  key.Binding // C: force-cancel, the escalation of cancel (run-lifecycle R6)
+	Rerun        key.Binding // R: re-run the selected Run(s), adding an Attempt (run-lifecycle R1, R8)
+	RerunFailed  key.Binding // F: re-run only the failed Jobs of the selected Run(s) (run-lifecycle R13)
+	// RerunJobName is the by-name per-Job re-run over a multi-selection (run-lifecycle
+	// R14a, R17a). It opens a text input for the Job name, because the operation names a
+	// Job the Feed's rows do not carry: a Run row has no Job column, so there is nothing to
+	// put a cursor on and no way to name one but to type it.
+	//
+	// J because the operation is about a Job and the shifted letter is free in both
+	// profiles: Vim binds j to move a row and neither profile binds J. It sits one shift
+	// from nothing destructive, which R, F and C above it do not.
+	RerunJobName     key.Binding // J: re-run the Job of a typed name in each selected Run (run-lifecycle R14a, R17a)
 	ArtifactsOnly    key.Binding // a: filter the Storage tab's list to Artifacts alone (storage-reclamation R8)
 	ArtifactDownload key.Binding // w: download the Artifact under the cursor to disk (storage-reclamation R13, R14)
 	ToggleWorkflow   key.Binding // s: enable a disabled Workflow, disable an active one (workflow-management R5)
@@ -250,6 +259,7 @@ func shared(name string) Profile {
 		ForceCancel:      key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "force-cancel")),
 		Rerun:            key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "re-run")),
 		RerunFailed:      key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "re-run failed")),
+		RerunJobName:     key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "re-run job by name")),
 		ArtifactsOnly:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "artifacts only")),
 		ArtifactDownload: key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "download")),
 		ToggleWorkflow:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "enable/disable")),
@@ -369,7 +379,7 @@ func (p Profile) Bindings() []key.Binding {
 	bindings := []key.Binding{
 		p.RowUp, p.RowDown, p.PageUp, p.PageDown, p.FirstRow, p.LastRow,
 		p.NextTab, p.PrevTab, p.SelectTab, p.Settings, p.ToggleSelect, p.Delete,
-		p.Cancel, p.ForceCancel, p.Rerun, p.RerunFailed, p.ArtifactsOnly, p.ArtifactDownload,
+		p.Cancel, p.ForceCancel, p.Rerun, p.RerunFailed, p.RerunJobName, p.ArtifactsOnly, p.ArtifactDownload,
 		p.ToggleWorkflow,
 		p.Dispatch,
 		p.LogTimestamps, p.LogDelete, p.LogExport, p.LogNextMatch, p.LogPrevMatch,

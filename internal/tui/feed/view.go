@@ -163,6 +163,13 @@ func (m Model) View() string {
 	if m.filterActive {
 		bottom = append(bottom, m.filterInput.View())
 	}
+	// The by-name form sits where the filter input sits, because it is the same kind of
+	// thing: a text input the tab captures keys for while it is open (run-lifecycle R14a).
+	// The two are mutually exclusive, since each is entered from the list and each captures
+	// every key while it holds focus.
+	if m.jobNameActive {
+		bottom = append(bottom, m.jobNameInput.View())
+	}
 	bottom = append(bottom, m.statusLine())
 	if m.showHelp {
 		bottom = append(bottom, m.helpLine())
