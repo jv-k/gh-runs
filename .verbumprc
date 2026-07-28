@@ -36,7 +36,14 @@ COMMIT_MSG_PREFIX="chore(release): "
 # guard rather than a prompt, so --yes does not bypass it.
 RELEASE_BRANCHES="main"
 
-# The checks CI runs on a pull request, run before anything mutates. CI re-runs them
-# on the pushed tag, but by then the tag exists and a failing build is already the
-# release everyone installs. Skip for a single run with --no-hooks.
-PRE_BUMP_CMD="make check"
+# The checks CI runs on a pull request, run before anything mutates. This is the
+# last gate rather than a preview of one: go-ci.yml triggers on pull requests and
+# on pushes to main, and a tag push triggers only release.yml, which builds the
+# binaries and runs no tests. Nothing re-checks the tree after this. Skip for a
+# single run with --no-hooks, knowing that is what it skips.
+#
+# The script rather than `make check`, though that target runs the same thing. This
+# hook fires on a maintainer's machine, and on macOS `make` is a shim through xcrun
+# that a broken Xcode install takes down with it. A gate that stops working because
+# the Command Line Tools moved is a gate that gets skipped with --no-hooks.
+PRE_BUMP_CMD="./scripts/check.sh"
