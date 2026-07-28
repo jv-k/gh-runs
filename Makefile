@@ -8,9 +8,6 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-# Kept in step with .github/workflows/go-ci.yml, which pins the same version.
-GOLANGCI_VERSION := v2.12.2
-
 DESLOPPER_VERSION := $(shell tr -d '[:space:]' < .deslopper-version)
 DESLOPPER := uvx --from "git+https://github.com/jv-k/deslopper@$(DESLOPPER_VERSION)" deslopper
 
@@ -31,22 +28,22 @@ test: ## Run the tests under the race detector, as CI does
 vet: ## Run go vet
 	go vet ./...
 
-# CI pins golangci-lint in .github/workflows/go-ci.yml. This target does not skip
-# when the binary is absent: `make check` is what PRE_BUMP_CMD gates a release on,
-# and a lint gate that quietly passes when the linter is missing is worse than one
-# that fails, because the release it lets through is the one nobody linted.
+# Bare, because scripts/check.sh owns the version check and the install guidance.
+# Two copies of that message drift, and the pinned version already lives in
+# .github/workflows/go-ci.yml, which the script reads.
 lint: ## Run golangci-lint, as CI does
-	@command -v golangci-lint >/dev/null || { \
-		echo "golangci-lint is not installed, and CI runs $(GOLANGCI_VERSION) on every pull request."; \
-		echo "  brew install golangci-lint"; \
-		echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)"; \
-		exit 1; }
 	golangci-lint run
 
 prose: ## Run the pinned deslopper over the Markdown, as CI does
 	$(DESLOPPER) lint
 
-check: vet test lint prose ## Everything CI runs on a pull request
+# The gate is defined once, in scripts/check.sh, and this delegates to it rather
+# than listing the targets again. VerBump runs the same script through
+# PRE_BUMP_CMD, so a release and a pull request cannot be held to different
+# standards, and neither depends on make being healthy. The targets above stay
+# for running one check at a time.
+check: ## Everything CI runs on a pull request
+	./scripts/check.sh
 
 # ---------------------------------------------------------------------------
 # Release
@@ -55,7 +52,14 @@ check: vet test lint prose ## Everything CI runs on a pull request
 # VerBump reads the Conventional Commits since the last tag, suggests the next
 # SemVer, writes CHANGELOG.md, bumps version.json and the version constant,
 # commits, and tags. .verbumprc holds the configuration, including the PRE_BUMP_CMD
-# that runs `make check` before anything mutates.
+# that runs ./scripts/check.sh before anything mutates.
+#
+# These targets are the short form. scripts/release.sh is the same path with the
+# preflight in front of it (right branch, clean tree, in step with origin, tag not
+# already taken), and it is what to reach for when actually cutting a release:
+#
+#   scripts/release.sh 2.0.0-alpha.0 --dry-run
+#   scripts/release.sh 2.0.0-alpha.0 --push
 #
 # Pass flags through ARGS, and an explicit version through VERSION:
 #

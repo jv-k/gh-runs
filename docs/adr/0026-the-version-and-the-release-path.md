@@ -45,9 +45,19 @@ Making it work needs a PAT or a GitHub App token held as a repository secret. Th
 
 So the split is: **VerBump owns the version, the changelog and the tag. The workflow owns the release and its binaries.** `make bump-release` pushes the tag that hands over between them, and `make release` exists only to say so and exit non-zero.
 
-## Why a Makefile
+## Why a Makefile, and why the release is a script under it
 
-Go has no `package.json` scripts. `make` is what a Go CLI reaches for, it is installed wherever this builds, and it keeps the release flags in one reviewed file rather than in a shell history. The targets are `bump`, `bump-release` and the disabled `release`, plus `check`, which runs what CI runs so `PRE_BUMP_CMD` can gate a release on it before anything mutates. Taskfile and a `scripts/` directory were the alternatives, and both add an install step or a second place to look for the same three commands.
+Go has no `package.json` scripts. `make` is what a Go CLI reaches for, it is installed wherever this builds, and it keeps the release flags in one reviewed file rather than in a shell history. The targets are `bump`, `bump-release` and the disabled `release`, plus the individual checks. Taskfile was the alternative and adds an install step for the same three commands.
+
+**Two things are scripts rather than targets, and the reason is that `make` is not dependable on the machine that cuts a release.** On macOS `make` is a shim through `xcrun`, and a mismatched Xcode or Command Line Tools install takes it down: measured on the maintainer's machine, `make help` fails with `unable to load libxcrun`, and the same broken toolchain also stops cgo, and with it the race detector and any `go install` that needs a C compiler.
+
+`scripts/check.sh` is the gate: the build, `go vet`, the tests, `golangci-lint`, and the pinned deslopper. `PRE_BUMP_CMD` runs it and `make check` delegates to it, so a release and a pull request are held to one standard defined in one place, and neither depends on `make` being healthy. A gate that stops working because the Command Line Tools moved is a gate that gets skipped with `--no-hooks`, which is the same as not having one.
+
+**It is the last gate, not a preview of one.** `go-ci.yml` triggers on pull requests and on pushes to `main`. A tag push triggers `release.yml` alone, which builds and uploads binaries and runs no tests. So nothing re-checks the tree between this hook and the published release, and the script says so where it matters: when it cannot build cgo it drops `-race` and reports that the only race coverage the release carries is whatever ran when those commits merged to `main`. It probes for a working compiler rather than trusting `CGO_ENABLED`, because that variable reports the setting and not whether the compiler behind it runs.
+
+`scripts/release.sh` is the preflight VerBump has no opinion about: on `main`, no uncommitted changes to tracked files, in step with `origin/main` in both directions, and the tag not already taken locally or on the remote. The last one matters here because this clone is shared between worktrees and sessions. It then states what the push sets in motion, including whether the version's hyphen makes it a prerelease, and hands over to VerBump.
+
+The version is its first argument and everything after it passes through untouched, so a flag taking a separate value (`--preid alpha`, `-m "message"`) survives. Parsing those here would mean keeping a list of which flags take a value in step with the tool that owns that list. Two exceptions earn their place: a second `-v` is refused, because VerBump's flags are last-wins and a version the preflight never checked for a collision would ship, and `--no-hooks` and `--allow-dirty` are warned about, because each discards something the step before it just established.
 
 ## Consequences
 
@@ -55,4 +65,4 @@ Go has no `package.json` scripts. `make` is what a Go CLI reaches for, it is ins
 
 **`--help` has the same defect and this does not fix it.** Measured with no token and no `gh` on `PATH`, `gh-runs --help`, `gh-runs list --help` and bare `gh-runs` all exit 1 with "authentication token not found for host github.com". The root cause is that `main.go` resolves clients eagerly, before cobra sees the arguments, and the fix is either lazy client construction or an earlier help path. Both are larger than this decision and are tracked separately.
 
-`CHANGELOG.md` stops being hand-written. Its existing entries are auto-generated commit dumps from the v1 npm era; from 2.0.0 VerBump writes it grouped by Conventional Commit type. The file is already excluded from deslopper in `deslopper.config.json`, so generated prose does not have to pass a style gate written for prose a person wrote.
+`CHANGELOG.md` stops being hand-written. Its existing entries are auto-generated commit dumps from the v1 npm era. From 2.0.0 VerBump writes it grouped by Conventional Commit type. The file is already excluded from deslopper in `deslopper.config.json`, so generated prose does not have to pass a style gate written for prose a person wrote.
