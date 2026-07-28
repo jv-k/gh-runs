@@ -58,7 +58,13 @@ import (
 // would let a surface be wired with the freeze and not the execution, which is precisely
 // the state this issue found the Feed in.
 type Planner interface {
-	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error)
+	// ResolveJobsByName turns a selection of Runs into the per-Job set a typed name
+	// selects, one Jobs request per Run (run-lifecycle R14a, R17a). It is the only call on
+	// this interface that issues a request before the frozen count exists, which is what
+	// R17a exists to rule on, and it is here rather than beside the chain's three because
+	// it feeds the chain rather than extending it.
+	ResolveJobsByName(ctx context.Context, sel []ops.Item, name string) (ops.Resolution, error)
+	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo, unmatched ...ops.Unmatched) (ops.Plan, error)
 	Confirm(p ops.Plan, in ops.Input) (ops.Confirmed, error)
 	Start(ctx context.Context, c ops.Confirmed) (ops.Started, error)
 }
@@ -253,6 +259,22 @@ type Model struct {
 	filterInput  textinput.Model
 	filterActive bool // the filter input holds focus, so the cursor is not in the list (R10)
 
+	// jobNameActive and jobNameInput are the by-name per-Job re-run's form (run-lifecycle
+	// R14a, R17a). The operation names a Job, and a Feed row is a Run and carries no Job
+	// column, so there is nothing to put a cursor on: the name is typed. jobNameSelection
+	// is the set frozen at the moment the form was accepted, held across the resolution so
+	// a poll landing mid-resolution cannot change what the name is resolved against (R5).
+	jobNameActive    bool
+	jobNameInput     textinput.Model
+	jobNameSelection []ops.Item
+
+	// jobNameNotice is R17a's fact on the one path with no modal to render it: a by-name
+	// resolution that stopped early and froze a set small enough that R18 forbids a
+	// confirmation. It is a line rather than a prompt, because R17a requires the note to be
+	// non-blocking in the same sentence that requires it at all. It clears on the next
+	// by-name form, so it names one resolution and never an older one.
+	jobNameNotice string
+
 	// repos is the capability gate's data, keyed by RepoID.String() (R17, R18, R21).
 	repos map[string]domain.Repo
 
@@ -347,6 +369,9 @@ func New(opts Options) Model {
 	// The launch filter states itself in the input, exactly as an arriving ShowRuns does, so
 	// the held filter and the line a person can edit are one state (R22, R23).
 	ti.SetValue(opts.Filter.QueryString())
+	jobName := textinput.New()
+	jobName.Prompt = "job: "
+	jobName.Placeholder = "the job name, exactly as the workflow declares it"
 	return Model{
 		active:          true,
 		profile:         opts.Profile,
@@ -363,6 +388,7 @@ func New(opts Options) Model {
 		totals:          make(map[string]capTotal),
 		failed:          make(map[string]repoFailure),
 		filterInput:     ti,
+		jobNameInput:    jobName,
 		detail: rundetail.New(rundetail.Options{
 			Fetch:      opts.DetailFetch,
 			Clock:      opts.Clock,
@@ -406,6 +432,10 @@ func (m Model) SetActive(active bool) Model {
 		// input never keeps focus across a tab switch.
 		m.filterActive = false
 		m.filterInput.Blur()
+		// The by-name form leaves with the filter input, and for the same reason: focus must
+		// not return to this tab with an input still holding keys. The selection it froze
+		// goes with it, so a form reopened later resolves against a fresh one.
+		m = m.closeJobNameForm()
 		m.applyView(m.liveView()) // idle: apply deferred (R10)
 	}
 	return m
@@ -418,7 +448,7 @@ func (m Model) SetActive(active bool) Model {
 // or a y that must confirm rather than switch context, is not stolen as a global
 // navigation key (ADR-0011, R7).
 func (m Model) CapturesInput() bool {
-	return m.filterActive || m.confirmOpen || m.approvalOpen || (m.detailOpen && m.detail.CapturesInput())
+	return m.filterActive || m.jobNameActive || m.confirmOpen || m.approvalOpen || (m.detailOpen && m.detail.CapturesInput())
 }
 
 // Update handles one message the root routed here. Size and data broadcasts reach it
@@ -429,6 +459,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.filterInput.SetWidth(max(msg.Width-2, 0))
+		m.jobNameInput.SetWidth(max(msg.Width-2, 0))
 		// Keep the panes laid out even while closed, so their first painted frame is
 		// already sized when they open (ADR-0011: width is a correctness property).
 		var cmd tea.Cmd
@@ -541,6 +572,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case rundetail.RerunJobMsg:
 		return m.rerunJob(msg.Job)
 
+	case jobNameResolved:
+		// The by-name resolution came back. It is a message rather than a return value
+		// because it issues one request per selected Run and so cannot run inside Update
+		// (run-lifecycle R17a).
+		return m.handleJobNameResolved(msg)
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -569,6 +606,9 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	if m.filterActive {
 		return m.handleFilterKey(k)
+	}
+	if m.jobNameActive {
+		return m.handleJobNameKey(k)
 	}
 	// Recursive focus: when the detail pane holds key focus (the operator has descended into its
 	// Job list or opened a Job's log), it gets the key and the Feed does not also act, so the log
@@ -599,6 +639,8 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.openRerun(ops.OpRerun)
 	case key.Matches(k, m.profile.RerunFailed):
 		return m.openRerun(ops.OpRerunFailed)
+	case key.Matches(k, m.profile.RerunJobName):
+		return m.openJobNameForm()
 	case key.Matches(k, m.profile.RowUp):
 		m.moveCursor(-1)
 	case key.Matches(k, m.profile.RowDown):

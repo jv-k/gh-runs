@@ -26,8 +26,8 @@ func newLaunchSpy() *launchSpy {
 	return &launchSpy{real: ops.New(ops.Options{ConfirmThreshold: 50, BreakerFailures: 50})}
 }
 
-func (s *launchSpy) Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error) {
-	return s.real.Plan(op, sel, repos)
+func (s *launchSpy) Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo, unmatched ...ops.Unmatched) (ops.Plan, error) {
+	return s.real.Plan(op, sel, repos, unmatched...)
 }
 
 func (s *launchSpy) Confirm(p ops.Plan, in ops.Input) (ops.Confirmed, error) {

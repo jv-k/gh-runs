@@ -1,9 +1,14 @@
 package cli_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
+
+// errNoRepo is the working-directory resolver failing, which is not a failure: it means the
+// invocation fans out across the discovered set (cli-surface R8, R22).
+var errNoRepo = errors.New("not inside a repository")
 
 // The non-interactive form of run-lifecycle's four operations (that feature's Related
 // section, ADR-0008's gh run cancel / gh run cancel --force / gh run rerun compatibility).
@@ -303,5 +308,212 @@ func TestRerunJobFlagIsRefusedWhereItNamesNothing(t *testing.T) {
 				t.Errorf("the refusal issued %d requests; it must issue zero", h.counting.count())
 			}
 		})
+	}
+}
+
+// TestRerunJobNameSkipsWhatItDidNotMatchAndExitsZero pins run-lifecycle AC14c and
+// cli-surface R28b at the figures the criterion names. A by-name re-run across 12 Runs of
+// which 9 have a Job of that name issues 9 re-run requests, reports the other 3 under skips
+// with a reason naming the absent Job, none under failures, and exits 0.
+//
+// The summing clauses are the point: the frozen count is 12 and not 9, the 3 group under one
+// reason rather than three, and the summary's accepted, skipped and failed figures sum to
+// the same 12.
+func TestRerunJobNameSkipsWhatItDidNotMatchAndExitsZero(t *testing.T) {
+	h := newHarness(t, "rerun_job_name").withCurrent(gh("o", "r"))
+
+	code := h.runDriven("rerun", "--all", "--job-name", "build", "--yes")
+
+	if code != 0 {
+		t.Fatalf("rerun --job-name exited %d, want 0: a name that matched nothing is a skip (R28b, AC14c). stderr: %s",
+			code, h.stderr.String())
+	}
+	posts := 0
+	for _, u := range h.counting.urls {
+		if strings.Contains(u, "/actions/jobs/") && strings.HasSuffix(u, "/rerun") {
+			posts++
+		}
+		if strings.Contains(u, "/actions/runs/") && strings.HasSuffix(u, "/rerun") {
+			t.Errorf("a by-name re-run POSTed the Run endpoint %q; it addresses the Job endpoint alone (R14a)", u)
+		}
+	}
+	if posts != 9 {
+		t.Errorf("issued %d per-Job re-runs, want 9: one per Run holding a Job of that name (AC14c)", posts)
+	}
+	out := h.stdout.String()
+	if !strings.Contains(out, "3 skipped") || !strings.Contains(out, "of 12 Runs") {
+		t.Errorf("summary does not report 3 skipped of a frozen 12 (AC14c):\n%s", out)
+	}
+	if !strings.Contains(out, "0 failed") {
+		t.Errorf("summary reports a failure; an unmatched name is a skip and never a failure (AC14c):\n%s", out)
+	}
+	if !strings.Contains(out, `no job named "build" in this run`) {
+		t.Errorf("summary does not name the absent Job (AC14c):\n%s", out)
+	}
+	// One group with a count, not one line per Run: the resolver builds the reason once from
+	// the name, so groupByReason collapses them (ADR-0019, AC14c).
+	if got := strings.Count(out, `no job named "build" in this run`); got != 1 {
+		t.Errorf("the absent-Job reason appears %d times, want one group (AC14c)", got)
+	}
+	if !strings.Contains(out, `3 x skipped: no job named "build" in this run`) {
+		t.Errorf("the one skip group carries no count; 3 Runs share it (AC14c):\n%s", out)
+	}
+}
+
+// TestRerunJobNameResolutionCutShortPricesWhatItResolvedAndExitsOne pins run-lifecycle
+// R17a and AC14d at the criterion's own figures: 40 selected Runs spanning two
+// repositories, whose resolution is rate-limited after 12 Runs of which every one holds the
+// named Job.
+//
+// Exactly 12 re-run requests follow, which is the whole of the frozen set because none of
+// the 12 was unmatched. The 28 appear in no count and under no skip reason, because they
+// were never answered. R28b's exit 0 covers a name that matched nothing, which this is not:
+// nothing failed, but not everything the operator asked for happened, and cli-surface R17's
+// one failure bit is what that exits under. The count is stated rather than only signalled,
+// because an exit code names no number (cli-surface R16).
+func TestRerunJobNameResolutionCutShortPricesWhatItResolvedAndExitsOne(t *testing.T) {
+	h := newHarness(t, "rerun_job_name_limited").
+		withCurrentErr(errNoRepo).
+		withDiscovered(gh("o", "a"), gh("o", "b")).
+		withWritable(gh("o", "a"), gh("o", "b"))
+
+	code := h.runDriven("rerun", "--all-repos", "--all", "--job-name", "build", "--yes")
+
+	if code != 1 {
+		t.Fatalf("a resolution that stopped early exited %d, want 1 (R17a, AC14d). stderr: %s",
+			code, h.stderr.String())
+	}
+	posts := 0
+	for _, u := range h.counting.urls {
+		if strings.Contains(u, "/actions/jobs/") && strings.HasSuffix(u, "/rerun") {
+			posts++
+		}
+	}
+	if posts != 12 {
+		t.Errorf("issued %d per-Job re-runs, want 12: the frozen set is what resolution resolved (R17a, AC14d)", posts)
+	}
+	out := h.stdout.String() + h.stderr.String()
+	if !strings.Contains(out, "28") {
+		t.Errorf("the output states no count for the 28 Runs the resolution never reached (R17a, AC14d):\n%s", out)
+	}
+	if strings.Contains(out, "of 40 Runs") {
+		t.Errorf("the summary priced the whole selection; the frozen set is the 12 that resolved (R17a):\n%s", out)
+	}
+	if !strings.Contains(out, "of 12 Runs") {
+		t.Errorf("the summary does not price the 12 that resolved (R17a, AC14d):\n%s", out)
+	}
+	// AC14d: "The 28 appear in no count and under no skip reason, because they were never
+	// answered." An unreached Run is the absence of an answer, so it is not a skip, and
+	// folding it into one would put it in Total and undo R17a's ruling by the back door.
+	if !strings.Contains(out, "0 skipped") {
+		t.Errorf("the summary counts a skip; none of the 12 was unmatched and the 28 were never answered (AC14d):\n%s", out)
+	}
+	if strings.Contains(out, "skipped: ") {
+		t.Errorf("the summary carries a skip reason; the 28 appear under none (AC14d):\n%s", out)
+	}
+	// AC14d: "the 12 resolution reads are not re-run requests and are counted as neither."
+	// The reads did travel, so the claim is about what the summary counts, not about the
+	// wire: 12 accepted over a frozen 12, with the 13 GETs outside both figures.
+	reads := 0
+	for _, u := range h.counting.urls {
+		if strings.HasSuffix(u, "/jobs?per_page=100") {
+			reads++
+		}
+	}
+	if reads != 13 {
+		t.Errorf("issued %d Jobs listings, want 13: 12 that answered and the one that did not", reads)
+	}
+	if !strings.Contains(out, "12 accepted") {
+		t.Errorf("the summary does not report the 12 accepted (AC14d):\n%s", out)
+	}
+}
+
+// TestRerunJobNameIsRefusedBesideTheJobIDFlag pins cli-surface R28c. The two flags are
+// separate and must also be refused together: they select one operation's target two ways,
+// and no reading of the pair is the operator's stated intent. Merging them into one flag
+// read by context is what R28c forbids, and this is the refusal that keeps them apart.
+func TestRerunJobNameIsRefusedBesideTheJobIDFlag(t *testing.T) {
+	h := newHarnessOffline(t).withCurrent(gh("o", "r"))
+
+	if code := h.run("rerun", "-j", "4242", "--job-name", "build"); code == 0 {
+		t.Error("-j beside --job-name exited 0, want a usage refusal (R28c)")
+	}
+	if h.counting.count() != 0 {
+		t.Errorf("the refusal issued %d requests; it must issue zero", h.counting.count())
+	}
+}
+
+// TestRerunJobNameIsRefusedUnderAFanOutWithNoRepository pins R29's rule applied to this
+// flag. --job-name resolves against a set of Runs, so it needs a repository to address the
+// listings against exactly as -j does, and a bare Run ID under a fan-out names nothing.
+func TestRerunJobNameIsRefusedUnderAFanOutWithNoRepository(t *testing.T) {
+	h := newHarnessOffline(t).withCurrentErr(errNoRepo).withDiscovered(gh("o", "a"), gh("o", "b"))
+
+	if code := h.run("rerun", "9", "--job-name", "build"); code == 0 {
+		t.Error("a bare Run ID under a fan-out exited 0, want a usage refusal (R29)")
+	}
+	if h.counting.count() != 0 {
+		t.Errorf("the refusal issued %d requests; it must issue zero", h.counting.count())
+	}
+}
+
+// TestRerunJobNameDryRunListsEveryMemberAndClaimsTheFrozenTotal pins cli-surface R10 over
+// the second kind of member. A dry run over 12 Runs of which 9 match prints 12 rows, 3 of
+// them marked skipped, and claims 12: the trailer reads Total and Skipped, which count the
+// Item-less members, so the listing and the claim cannot disagree.
+func TestRerunJobNameDryRunListsEveryMemberAndClaimsTheFrozenTotal(t *testing.T) {
+	h := newHarness(t, "rerun_job_name").withCurrent(gh("o", "r"))
+
+	code := h.runDriven("rerun", "--all", "--job-name", "build", "--dry-run")
+
+	if code != 0 {
+		t.Fatalf("--dry-run exited %d, want 0. stderr: %s", code, h.stderr.String())
+	}
+	for _, u := range h.counting.urls {
+		if strings.HasSuffix(u, "/rerun") {
+			t.Errorf("--dry-run issued a re-run POST to %q; it withholds the write (R10)", u)
+		}
+	}
+	rows := strings.Count(strings.TrimRight(h.stdout.String(), "\n"), "\n") + 1
+	if rows != 12 {
+		t.Errorf("--dry-run printed %d rows, want 12: every member of the frozen set gets one (R10)", rows)
+	}
+	if got := strings.Count(h.stdout.String(), "(skipped:"); got != 3 {
+		t.Errorf("--dry-run marked %d rows skipped, want 3 (R10)", got)
+	}
+	if !strings.Contains(h.stderr.String(), "3 skipped") {
+		t.Errorf("--dry-run trailer does not report the 3 skipped:\n%s", h.stderr.String())
+	}
+}
+
+// TestRerunJobNameDryRunOverATruncatedResolutionSaysSoAndExitsOne pins the dry run's own
+// reading of R17a. cli-surface R10 exits 0 for a dry run that "reports exactly what would be
+// deleted", and a resolution the API cut short could not: the listing is a partial set, so
+// R16 forbids presenting its count unqualified. The note goes to stderr with the trailer,
+// because R10's listing is one row per member so grep and wc -l answer questions about it,
+// and a note on stdout would be counted as a row.
+func TestRerunJobNameDryRunOverATruncatedResolutionSaysSoAndExitsOne(t *testing.T) {
+	h := newHarness(t, "rerun_job_name_limited").
+		withCurrentErr(errNoRepo).
+		withDiscovered(gh("o", "a"), gh("o", "b")).
+		withWritable(gh("o", "a"), gh("o", "b"))
+
+	code := h.runDriven("rerun", "--all-repos", "--all", "--job-name", "build", "--dry-run")
+
+	if code != 1 {
+		t.Fatalf("a dry run over a truncated resolution exited %d, want 1 (R17a, R16). stderr: %s",
+			code, h.stderr.String())
+	}
+	for _, u := range h.counting.urls {
+		if strings.HasSuffix(u, "/rerun") {
+			t.Errorf("--dry-run issued a re-run POST to %q; it withholds the write (R10)", u)
+		}
+	}
+	rows := strings.Count(strings.TrimRight(h.stdout.String(), "\n"), "\n") + 1
+	if rows != 12 {
+		t.Errorf("--dry-run printed %d rows on stdout, want 12: one per frozen member and nothing else (R10)", rows)
+	}
+	if !strings.Contains(h.stderr.String(), "28") {
+		t.Errorf("the trailer states no count for the 28 never reached (R16, R17a):\n%s", h.stderr.String())
 	}
 }

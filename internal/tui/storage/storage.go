@@ -52,7 +52,7 @@ import (
 // a surface be wired with the freeze and not the execution, which is precisely the state
 // this issue found the tab in.
 type Planner interface {
-	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error)
+	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo, unmatched ...ops.Unmatched) (ops.Plan, error)
 	Confirm(p ops.Plan, in ops.Input) (ops.Confirmed, error)
 	Start(ctx context.Context, c ops.Confirmed) (ops.Started, error)
 }

@@ -58,7 +58,12 @@ type Requester interface {
 // a live DELETE (purge R28).
 type Purger interface {
 	Crawl(ctx context.Context, repos []domain.RepoID, flt filter.Filter) ([]ops.Item, error)
-	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error)
+	// ResolveJobsByName turns a set of Runs into the per-Job set --job-name names: one
+	// Jobs request per Run, an Item where the name matched and an Item-less member where
+	// it did not (cli-surface R28b, run-lifecycle R17a). It is the one resolution that
+	// issues a request between the crawl and the Plan.
+	ResolveJobsByName(ctx context.Context, sel []ops.Item, name string) (ops.Resolution, error)
+	Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo, unmatched ...ops.Unmatched) (ops.Plan, error)
 	Confirm(p ops.Plan, in ops.Input) (ops.Confirmed, error)
 	Execute(ctx context.Context, c ops.Confirmed) (ops.Summary, error)
 }

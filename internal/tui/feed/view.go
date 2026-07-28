@@ -43,10 +43,15 @@ const (
 	// ASCII, so its display width is its rune count and the row arithmetic above holds on any
 	// terminal. blankMarker keeps an unmarked row's columns in the same places.
 	cancelRequestedMarker = "c"
-	blankMarker           = "  "
-	truncMarker           = "…"
-	startedLayout         = "2006-01-02T15:04:05Z"
-	clockLayout           = "15:04"
+	// unreachedMarker is R17a's note's own marker, and it is deliberately not the cancel
+	// one. That marker is the cancel key's own letter and names a cancellation-requested
+	// Run, so borrowing it here would label a rate-limited resolution as a cancellation.
+	// This condition has no keystroke behind it, so it takes a bare warning sign.
+	unreachedMarker = "!"
+	blankMarker     = "  "
+	truncMarker     = "…"
+	startedLayout   = "2006-01-02T15:04:05Z"
+	clockLayout     = "15:04"
 
 	// failedNamesShown bounds how many repository names the failed-poll indicator
 	// spells out before it falls back to a count. The poll set runs to roughly 26
@@ -81,6 +86,10 @@ var (
 	// the attention hue rather than the danger one: an accepted cancel is a request in flight
 	// and an expected state, not a failure, and the Run it marks is still running.
 	styleCancelRequested = lipgloss.NewStyle().Bold(true).Foreground(palette.Attention)
+	// styleUnreached is R17a's note. It takes the warning colour rather than the
+	// cancellation indicator's, because the two say different things and an operator reads
+	// the colour before the words.
+	styleUnreached = lipgloss.NewStyle().Bold(true).Foreground(palette.Warn)
 
 	// Action-state decoration on the repository cell, four visibly distinct renderings
 	// (R36's third golden). Offered is plain; the three refusals each differ.
@@ -146,6 +155,9 @@ func (m Model) View() string {
 	if c, ok := m.cancelRequestedLine(); ok {
 		top = append(top, c)
 	}
+	if j, ok := m.jobNameNoticeLine(); ok {
+		top = append(top, j)
+	}
 	if f, ok := m.filterLine(); ok {
 		top = append(top, f)
 	}
@@ -162,6 +174,13 @@ func (m Model) View() string {
 	}
 	if m.filterActive {
 		bottom = append(bottom, m.filterInput.View())
+	}
+	// The by-name form sits where the filter input sits, because it is the same kind of
+	// thing: a text input the tab captures keys for while it is open (run-lifecycle R14a).
+	// The two are mutually exclusive, since each is entered from the list and each captures
+	// every key while it holds focus.
+	if m.jobNameActive {
+		bottom = append(bottom, m.jobNameInput.View())
 	}
 	bottom = append(bottom, m.statusLine())
 	if m.showHelp {
@@ -606,6 +625,21 @@ func (m Model) cancelRequestedLine() (string, bool) {
 	label := fmt.Sprintf("%s  cancellation requested for %d %s, awaiting the poll that observes it",
 		cancelRequestedMarker, n, plural(n, "run", "runs"))
 	return styleCancelRequested.Render(label), true
+}
+
+// jobNameNoticeLine is run-lifecycle R17a's non-blocking note, rendered where the by-name
+// re-run launched with no modal to carry it (R18 forbids the confirmation, and R17a
+// forbids the note blocking). It sits with the other standing indicators rather than
+// replacing the list, which is what makes it a note.
+//
+// The reason carries the API's own words, which a hostile third-party repository can
+// influence, so it is sanitised at the terminal boundary like every other untrusted string
+// the Feed renders.
+func (m Model) jobNameNoticeLine() (string, bool) {
+	if m.jobNameNotice == "" {
+		return "", false
+	}
+	return styleUnreached.Render(unreachedMarker + " " + textsan.Sanitize(m.jobNameNotice)), true
 }
 
 // failedLine is the failed-repository indicator, from ADR-0015's RepoPollFailed. It

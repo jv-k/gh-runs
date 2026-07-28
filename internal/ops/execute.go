@@ -328,6 +328,19 @@ func (o *Ops) executeLifecycle(ctx context.Context, plan Plan, emit progressFunc
 func (o *Ops) executeSet(ctx context.Context, plan Plan, log logSink, emit progressFunc,
 	attempt func(context.Context, logSink, Item) (itemResult, error)) (Summary, error) {
 	sum := Summary{Total: plan.Total(), op: plan.op, debug: plan.debug, retry: &atomic.Bool{}}
+	// The Item-less members are seeded before the walk, because there is nothing in the walk
+	// for them to be reached by: they resolved to no Item, so no iteration visits them. Each
+	// is grouped through the same addSkip every other skip takes and counted into Skipped,
+	// which is two statements and not one. Seeding both is what makes the pass's accepted,
+	// skipped and failed sum to the frozen total (ADR-0019 amended, run-lifecycle AC14c).
+	//
+	// The resolver builds one reason per invocation, so groupByReason collapses them into one
+	// group with a count rather than one line per Run. No deletion-log line is written for
+	// them, on the same rule that writes none for the operation at all (run-lifecycle R24).
+	for _, um := range plan.unmatched {
+		sum.Skipped++
+		sum.addSkip(um.Reason)
+	}
 	failureStreak := 0
 	// Outstanding counts only the Items that will issue a request, because an Item stamped
 	// ineligible at Plan time concludes instantly and costs no wall clock: counting it

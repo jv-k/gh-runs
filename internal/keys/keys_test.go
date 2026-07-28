@@ -136,10 +136,11 @@ func TestSharedBindings(t *testing.T) {
 // drift from the documented choice fails here.
 func assertLifecycle(t *testing.T, name string, p keys.Profile) {
 	t.Helper()
-	assertKeys(t, name+".Cancel", p.Cancel, "c")           // run-lifecycle R1, R16
-	assertKeys(t, name+".ForceCancel", p.ForceCancel, "C") // run-lifecycle R6
-	assertKeys(t, name+".Rerun", p.Rerun, "R")             // run-lifecycle R1, R8
-	assertKeys(t, name+".RerunFailed", p.RerunFailed, "F") // run-lifecycle R13
+	assertKeys(t, name+".Cancel", p.Cancel, "c")             // run-lifecycle R1, R16
+	assertKeys(t, name+".ForceCancel", p.ForceCancel, "C")   // run-lifecycle R6
+	assertKeys(t, name+".Rerun", p.Rerun, "R")               // run-lifecycle R1, R8
+	assertKeys(t, name+".RerunFailed", p.RerunFailed, "F")   // run-lifecycle R13
+	assertKeys(t, name+".RerunJobName", p.RerunJobName, "J") // run-lifecycle R14a, R17a
 }
 
 // TestLifecycleBindings pins the stage-10 action keys over both profiles, and their
@@ -167,7 +168,7 @@ func TestNoDuplicateListKey(t *testing.T) {
 			{"FirstRow", p.FirstRow}, {"LastRow", p.LastRow},
 			{"NextTab", p.NextTab}, {"PrevTab", p.PrevTab}, {"SelectTab", p.SelectTab}, {"Settings", p.Settings},
 			{"ToggleSelect", p.ToggleSelect}, {"Delete", p.Delete},
-			{"Cancel", p.Cancel}, {"ForceCancel", p.ForceCancel}, {"Rerun", p.Rerun}, {"RerunFailed", p.RerunFailed},
+			{"Cancel", p.Cancel}, {"ForceCancel", p.ForceCancel}, {"Rerun", p.Rerun}, {"RerunFailed", p.RerunFailed}, {"RerunJobName", p.RerunJobName},
 			{"ArtifactsOnly", p.ArtifactsOnly}, {"ArtifactDownload", p.ArtifactDownload},
 			{"ToggleWorkflow", p.ToggleWorkflow},
 			{"Approve", p.Approve}, {"ApprovalsFilter", p.ApprovalsFilter},

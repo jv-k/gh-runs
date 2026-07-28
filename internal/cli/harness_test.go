@@ -240,6 +240,16 @@ func (h *harness) withDiscovered(ids ...domain.RepoID) *harness {
 	return h
 }
 
+// withWritable puts the named repositories in the eligibility snapshot, writable and not
+// archived, so a fan-out test's Plan gate reads the same data main.go's discovery would
+// hand it (purge R10).
+func (h *harness) withWritable(ids ...domain.RepoID) *harness {
+	for _, id := range ids {
+		h.snapshot[id] = domain.Repo{ID: id, Permissions: domain.Permissions{Push: true}}
+	}
+	return h
+}
+
 // withExclude sets settings R7's exclude list, which main.go fills from the loaded
 // config.
 func (h *harness) withExclude(ids ...domain.RepoID) *harness {

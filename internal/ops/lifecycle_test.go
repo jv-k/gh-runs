@@ -401,3 +401,50 @@ func TestRerunJob404IsAFailure(t *testing.T) {
 		t.Errorf("a 404 per-Job re-run = acted %d, failed %d; want 0/1 (R22, AC13)", sum.Acted, sum.FailedCount())
 	}
 }
+
+// TestUnmatchedMembersSeedTheSummary pins ADR-0019's amendment at Execute: the Item-less
+// members are grouped through the same addSkip everything else uses and counted into
+// Skipped before the walk issues its first request, so the pass's accepted, skipped and
+// failed figures sum to the frozen total (run-lifecycle AC14c).
+//
+// The resolver builds one reason per invocation, so groupByReason collapses three members
+// into one group with a count of 3 rather than three lines. Failed() is untouched: a member
+// that resolved to nothing was never attempted, so it is not in R22's retry set.
+func TestUnmatchedMembersSeedTheSummary(t *testing.T) {
+	h := newHarness(t, "rerun_job", 50, 50)
+	const reason = `no job named "build" in this run`
+	unmatched := []ops.Unmatched{
+		{Repo: repoID("o", "r"), RunID: 901, Reason: reason},
+		{Repo: repoID("o", "r"), RunID: 902, Reason: reason},
+		{Repo: repoID("o", "r"), RunID: 903, Reason: reason},
+	}
+	p, err := h.ops.Plan(ops.OpRerunJob, jobItems("o", "r", 101), snapshot(writableRepo("o", "r")), unmatched...)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	c, err := h.ops.Confirm(p, ops.NonInteractiveYes())
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	sum := runPurge(t, h, c)
+
+	if sum.Total != 4 {
+		t.Errorf("Summary.Total = %d, want 4: the frozen total includes the Item-less members", sum.Total)
+	}
+	if sum.Acted != 1 || sum.Skipped != 3 || sum.FailedCount() != 0 {
+		t.Errorf("summary = acted %d, skipped %d, failed %d; want 1/3/0 (AC14c)", sum.Acted, sum.Skipped, sum.FailedCount())
+	}
+	if sum.Acted+sum.Skipped+sum.FailedCount() != sum.Total {
+		t.Errorf("accepted %d + skipped %d + failed %d does not sum to the frozen total %d (AC14c)",
+			sum.Acted, sum.Skipped, sum.FailedCount(), sum.Total)
+	}
+	if len(sum.Skips) != 1 || sum.Skips[0].Reason != reason || sum.Skips[0].Count != 3 {
+		t.Errorf("Skips = %+v, want one group %q counting 3 (AC14c: one group, not one line per Run)", sum.Skips, reason)
+	}
+	if len(sum.Failed()) != 0 {
+		t.Errorf("Failed() = %d Items, want 0: an unmatched member was never attempted", len(sum.Failed()))
+	}
+	if got := h.counting.countMethod("POST"); got != 1 {
+		t.Errorf("issued %d POSTs, want 1: an Item-less member issues no request", got)
+	}
+}

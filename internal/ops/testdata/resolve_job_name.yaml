@@ -1,0 +1,73 @@
+---
+version: 2
+# The Jobs listing under the three readings a by-name resolution has (cli-surface R28b,
+# run-lifecycle R17a, AC14c, AC14d).
+#
+# Run 11 and Run 12 each hold a Job named build, so each resolves to an Item addressing
+# that Job's own id. Run 13 holds only a Job named test, which is a definite answer and
+# becomes an Item-less member: the name matched nothing here (R28b).
+#
+# Run 14's listing answers a 403 whose documentation_url points at the fine-grained-PAT
+# permissions page and not at this endpoint's own reference, so it fails the
+# authorization-shape correspondence and the governor classifies it as rate limiting, the
+# safe default (rate-governor open question 1). That is the third reading: no answer at
+# all. The resolution stops there, and Run 14 and everything after it is unreached rather
+# than unmatched, because those are a missing answer and a definite one (R17a).
+#
+# The 403 is the governor's classification and not a hand-made one, which is what the
+# ticket for this behaviour asked for: the tape carries the measured shape and the
+# classifier reads it, so the test exercises the real discriminator.
+#
+# The path carries per_page=100, the API's page ceiling, for the reason the Run detail
+# pane's own Jobs fetch carries it: one request per Run holds only at the full page.
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/runs/11/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":1101,"run_id":11,"name":"build","status":"completed","conclusion":"success"},{"id":1102,"run_id":11,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4900"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/runs/12/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":1,"jobs":[{"id":1201,"run_id":12,"name":"build","status":"completed","conclusion":"failure"}]}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4899"]
+            X-Ratelimit-Reset: ["1789000000"]
+    # No Job of that name. A definite answer, so an Item-less member (R28b).
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/runs/13/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":1,"jobs":[{"id":1301,"run_id":13,"name":"test","status":"completed","conclusion":"success"}]}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4898"]
+            X-Ratelimit-Reset: ["1789000000"]
+    # No answer at all. The resolution stops here (R17a).
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/r/actions/runs/14/jobs?per_page=100
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"You have exceeded a secondary rate limit","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            Content-Type: ["application/json; charset=utf-8"]
+            X-Ratelimit-Remaining: ["4897"]
+            X-Ratelimit-Reset: ["1789000000"]

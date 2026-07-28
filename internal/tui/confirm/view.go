@@ -66,6 +66,10 @@ func (m Model) modalView() string {
 		lines = append(lines, "")
 		lines = append(lines, split...)
 	}
+	if note, ok := m.unreachedLine(); ok {
+		lines = append(lines, "")
+		lines = append(lines, note)
+	}
 	lines = append(lines, "")
 	lines = append(lines, m.promptLine())
 	if offer, ok := m.escalationLine(); ok {
@@ -90,6 +94,33 @@ func (m Model) escalationLine() (string, bool) {
 	}
 	return styleDim.Render(indent + "A Run that is not cancelable needs force-cancel: press " +
 		m.profile.ForceCancel.Help().Key + " to escalate."), true
+}
+
+// unreachedLine is run-lifecycle R17a's one-line non-blocking note, shown where a by-name
+// resolution did not reach every selected Run. The frozen count above it is what resolution
+// resolved, which is smaller than the set the operator named, and R7's ladder has no rung
+// that expresses "this count is a lower bound". So the note names how many were not reached
+// and why, on R14b's precedent: it does not block and it does not confirm.
+//
+// It is a note rather than a refusal because the resolved portion is a real set the operator
+// can act on, and discarding it would throw away work the resolution already paid for.
+//
+// The reason carries the API's own words, which a hostile third-party repository can
+// influence, so it is sanitised at the terminal boundary like every other untrusted string
+// this pane renders.
+func (m Model) unreachedLine() (string, bool) {
+	if m.unreached <= 0 {
+		return "", false
+	}
+	noun := "runs"
+	if m.unreached == 1 {
+		noun = "run"
+	}
+	line := indent + strconv.Itoa(m.unreached) + " selected " + noun + " were not reached, so they are not in this set"
+	if m.unreachedWhy != "" {
+		line += ": " + textsan.Sanitize(m.unreachedWhy)
+	}
+	return styleWarn.Render(line), true
 }
 
 // headline is R6's count with the operation and the noun: "Delete 47 Runs across 3
@@ -147,6 +178,47 @@ func (m Model) eligibilityLines() []string {
 	if notCompleted > 0 {
 		out = append(out, styleWarn.Render(indent+strconv.Itoa(notCompleted)+" of "+strconv.Itoa(total)+" are still running and will be skipped"))
 	}
+	// The Item-less members get R11's treatment too, because they are the same thing to an
+	// operator reading this modal: members of the count above that nothing will be written
+	// for. Their reason is authored by the resolution rather than derived from the
+	// eligibility gate, so it is rendered rather than named by a constant.
+	//
+	// This is where the reason is stated in full. The inspect viewport's WORKFLOW cell
+	// carries it too, truncated to the column as any over-long cell is, so a row can be told
+	// apart without leaving the table.
+	//
+	// Grouped by reason rather than read off the first member. The resolver builds one
+	// reason per invocation, so this is one line in practice, but that is the resolver's
+	// property and not this pane's to assume: a Plan accepts whatever reasons it is handed,
+	// and rendering the first as though it spoke for all of them would mislabel the rest if
+	// that ever stopped holding.
+	for _, g := range groupUnmatched(m.plan.Unmatched()) {
+		out = append(out, styleWarn.Render(indent+strconv.Itoa(g.count)+" of "+strconv.Itoa(total)+
+			" will be skipped: "+textsan.Sanitize(g.reason)))
+	}
+	return out
+}
+
+// unmatchedGroup is a reason shared by some of the Item-less members, with its count.
+type unmatchedGroup struct {
+	reason string
+	count  int
+}
+
+// groupUnmatched collapses the Item-less members by reason in first-seen order, the same
+// shape Summary.Skips takes for the same members once Execute has seeded it.
+func groupUnmatched(um []ops.Unmatched) []unmatchedGroup {
+	var out []unmatchedGroup
+	index := make(map[string]int, len(um))
+	for _, u := range um {
+		at, ok := index[u.Reason]
+		if !ok {
+			index[u.Reason] = len(out)
+			out = append(out, unmatchedGroup{reason: u.Reason, count: 1})
+			continue
+		}
+		out[at].count++
+	}
 	return out
 }
 
@@ -176,21 +248,31 @@ func (m Model) inspectHint() string {
 // inspectView is R30's viewport over the frozen set: the Feed's columns and no new
 // ones, one row each, paged to reach both ends (R30, AC22). It issues no request; the
 // rows are the same tuples Execute is handed.
+// A set may hold a second kind of member that has no Item, and those rows append after the
+// Items in resolution order rather than interleaving by Run: interleaving would put a
+// member the operator cannot act on between two they can, and the Items keep the selection
+// order among themselves, which is the property R30's viewport shows (ADR-0019, amended).
 func (m Model) inspectView() string {
 	items := m.plan.Items()
+	unmatched := m.plan.Unmatched()
+	total := m.plan.Total()
 	var lines []string
-	lines = append(lines, styleTitle.Render("Frozen set: "+strconv.Itoa(len(items))+" "+pluralNoun(m.plan)))
+	lines = append(lines, styleTitle.Render("Frozen set: "+strconv.Itoa(total)+" "+pluralNoun(m.plan)))
 	lines = append(lines, styleHeader.Render(m.inspectHeader()))
 	rows := m.inspectPage()
 	end := m.top + rows
-	if end > len(items) {
-		end = len(items)
+	if end > total {
+		end = total
 	}
 	for i := m.top; i < end; i++ {
-		lines = append(lines, m.inspectRow(items[i], i == m.cursor))
+		if i < len(items) {
+			lines = append(lines, m.inspectRow(items[i], i == m.cursor))
+			continue
+		}
+		lines = append(lines, m.unmatchedRow(unmatched[i-len(items)], i == m.cursor))
 	}
 	lines = append(lines, "")
-	lines = append(lines, styleDim.Render(indent+"row "+strconv.Itoa(m.cursor+1)+" of "+strconv.Itoa(len(items))+".  "+
+	lines = append(lines, styleDim.Render(indent+"row "+strconv.Itoa(m.cursor+1)+" of "+strconv.Itoa(total)+".  "+
 		m.profile.ConfirmInspect.Help().Key+"/"+m.profile.ConfirmAbort.Help().Key+" to return."))
 	return strings.Join(lines, "\n")
 }
@@ -226,14 +308,48 @@ func (m Model) inspectRow(it ops.Item, cursor bool) string {
 		if !r.EffectiveStart().IsZero() {
 			started = r.EffectiveStart().UTC().Format(startLayout)
 		}
+	case it.Job != nil:
+		// A Job carries its own Status and Conclusion and its own name, and it is a row a
+		// by-name re-run fills the viewport with. Reading them off the Job is the same rule
+		// the Run arm follows one level down, and without it every Job row rendered as a
+		// repository and an id beside four empty cells.
+		j := it.Job
+		status = string(j.Status)
+		if j.Status == domain.StatusCompleted {
+			conclusion = string(j.Conclusion)
+		}
+		workflow = j.Name
+		if !j.StartedAt.IsZero() {
+			started = j.StartedAt.UTC().Format(startLayout)
+		}
 	case it.Cache != nil:
 		workflow = it.Cache.Key
 	case it.Artifact != nil:
 		workflow = it.Artifact.Name
 	}
+	return m.row(repo, rowID(it), status, conclusion, workflow, started, cursor)
+}
+
+// rowID is what the RUN ID column holds for an Item. It is the Item's own id for every
+// Kind but a Job, whose id addresses the Job endpoint and is not a Run ID at all: a Job
+// row would otherwise put a Job id under a RUN ID header, beside an Item-less row of the
+// same set putting a Run ID there. One column, one meaning (purge AC22, as amended).
+//
+// The Job's own id is not lost to the operator: the WORKFLOW cell carries its name, which
+// is what they typed to select it and what the endpoint was resolved from.
+func rowID(it ops.Item) int64 {
+	if it.Kind == ops.KindJob && it.Job != nil {
+		return it.Job.RunID
+	}
+	return it.ID
+}
+
+// row lays one viewport line out in the table's six columns, so the two kinds of member
+// cannot drift apart in width, order or cursor marker.
+func (m Model) row(repo string, id int64, status, conclusion, workflow, started string, cursor bool) string {
 	cells := []string{
 		truncPad(repo, repoW),
-		truncPad(strconv.FormatInt(it.ID, 10), idW),
+		truncPad(strconv.FormatInt(id, 10), idW),
 		truncPad(textsan.Sanitize(status), statusW),
 		truncPad(textsan.Sanitize(conclusion), conclusionW),
 		truncPad(textsan.Sanitize(workflow), m.workflowWidth()),
@@ -244,6 +360,23 @@ func (m Model) inspectRow(it ops.Item, cursor bool) string {
 		marker = "> "
 	}
 	return marker + strings.Join(cells, colSep)
+}
+
+// unmatchedRow renders one Item-less member, and purge AC22's claim narrows to admit it.
+// That criterion says every row carries its owning repository, its Run ID, and Status and
+// Conclusion in separate cells, and that the last row is the oldest Run in the set by
+// run_started_at. This row satisfies the first two cells and none of the rest: it is handed
+// to nothing, it holds no Run and so has neither a Status nor a Conclusion to put in a
+// cell, and it carries no run_started_at to sort on.
+//
+// The claim the types actually make is narrower and still exact: every row that names a
+// write is a tuple Execute is handed, carries all four cells, and sorts. This row names the
+// absence of a write. It leaves Status and Conclusion empty on the same reading that
+// already empties Conclusion for a Run that is not completed, and puts the reason in the
+// WORKFLOW cell, which is the flex column and the one every non-Run Kind already fills with
+// what it carries instead (ADR-0019, amended).
+func (m Model) unmatchedRow(um ops.Unmatched, cursor bool) string {
+	return m.row(textsan.Sanitize(um.Repo.Owner+"/"+um.Repo.Name), um.RunID, "", "", um.Reason, "", cursor)
 }
 
 // inspectPage is the number of Item rows the viewport shows, leaving lines for the

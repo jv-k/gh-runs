@@ -65,6 +65,14 @@ type Model struct {
 	inspecting bool
 	cursor     int
 	top        int
+
+	// unreached and unreachedWhy are run-lifecycle R17a's note: how many selected Runs a
+	// by-name resolution never reached, and why. They are not part of the Plan, because an
+	// unreached Run is not a member of the frozen set: folding it in would put it in Total
+	// and price a set larger than the one being confirmed. Zero means the resolution
+	// reached everything, or the operation had no resolution at all.
+	unreached    int
+	unreachedWhy string
 }
 
 // New returns a closed pane over the operator's keybinding profile. It holds no Plan
@@ -85,6 +93,27 @@ func (m Model) Open(p ops.Plan) Model {
 	m.inspecting = false
 	m.cursor = 0
 	m.top = 0
+	// The note belongs to one resolution. A pane reopened over a set that resolved cleanly
+	// must not still be claiming Runs went unreached, so it resets with the rest.
+	m.unreached = 0
+	m.unreachedWhy = ""
+	return m
+}
+
+// WithUnreached carries run-lifecycle R17a's fact into the pane: how many of the selected
+// Runs the by-name resolution never reached, and why. It is called after Open, which
+// resets it, and it returns a copy so the value stays immutable.
+//
+// It is a separate call rather than a field on the Plan because an unreached Run is not a
+// member of the frozen set. An Unmatched was asked and answered no; an unreached Run was
+// never asked, and counting the two together would price a set larger than the one the
+// operator confirms, which is the ruling R17a exists to make.
+//
+// The note it produces neither blocks nor confirms, on R14b's terms. A zero count renders
+// nothing, so every other operation is unaffected.
+func (m Model) WithUnreached(n int, why string) Model {
+	m.unreached = n
+	m.unreachedWhy = why
 	return m
 }
 

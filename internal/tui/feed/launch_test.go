@@ -23,14 +23,30 @@ type launchSpy struct {
 	startedOp   ops.Operation
 	startedSet  int
 	startErr    error
+
+	// The by-name resolution's record and its canned answer. Plan is delegated to a real
+	// Ops because a Plan cannot be forged, but a resolution is a network walk, so the spy
+	// answers it from a field and records what it was asked (run-lifecycle R17a).
+	resolved     int
+	resolvedName string
+	resolvedSet  []ops.Item
+	resolution   ops.Resolution
+	resolveErr   error
+}
+
+func (s *launchSpy) ResolveJobsByName(_ context.Context, sel []ops.Item, name string) (ops.Resolution, error) {
+	s.resolved++
+	s.resolvedName = name
+	s.resolvedSet = sel
+	return s.resolution, s.resolveErr
 }
 
 func newLaunchSpy() *launchSpy {
 	return &launchSpy{real: ops.New(ops.Options{ConfirmThreshold: 50, BreakerFailures: 50})}
 }
 
-func (s *launchSpy) Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo) (ops.Plan, error) {
-	return s.real.Plan(op, sel, repos)
+func (s *launchSpy) Plan(op ops.Operation, sel []ops.Item, repos map[domain.RepoID]domain.Repo, unmatched ...ops.Unmatched) (ops.Plan, error) {
+	return s.real.Plan(op, sel, repos, unmatched...)
 }
 
 func (s *launchSpy) Confirm(p ops.Plan, in ops.Input) (ops.Confirmed, error) {
