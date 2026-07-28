@@ -31,7 +31,7 @@ import (
 // alongside this one. Neither failure is visible until a release is already cut.
 // See TestVersionConstantMatchesTheVersionSource and
 // TestVersionConstantIsTheOnlyBumpTarget (ADR-0026).
-var Version = "0.0.0-dev"
+var Version = "2.0.0-alpha.0"
 
 // String returns the version to show a user.
 //
