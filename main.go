@@ -45,6 +45,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/tui/rundetail"
 	"github.com/jv-k/gh-runs/v2/internal/tui/storage"
 	"github.com/jv-k/gh-runs/v2/internal/tui/workflows"
+	"github.com/jv-k/gh-runs/v2/internal/version"
 	"github.com/jv-k/gh-runs/v2/internal/workflowlist"
 )
 
@@ -71,6 +72,12 @@ func main() {
 // R17). A setup failure before the command runs is a plain exit 1: nothing has
 // been issued yet, so there is no auth or cancellation state to report.
 func run() int {
+	// Which build this is, answered before anything is built. See asksVersion.
+	if asksVersion(os.Args[1:]) {
+		fmt.Println("gh-runs version " + version.String())
+		return 0
+	}
+
 	clk := clock.Real()
 
 	// Settings resolve first. The governor takes its Budget share from them at
@@ -964,4 +971,19 @@ func deletionLogPath() string {
 // where the delete command's guards apply (R26).
 func opensTUI(args []string) bool {
 	return len(args) == 0 || (len(args) == 1 && args[0] == "delete")
+}
+
+// asksVersion reports whether the invocation is asking only which build this is.
+//
+// It is answered here, before the transport chain and before a client exists,
+// because reporting a version needs no token, no network and no store, and
+// building the clients fails outright when no token resolves. That failure is
+// the one a person meeting this tool for the first time would hit, and it would
+// hit them on the exact command a bug report asks them to run (ADR-0026).
+//
+// cobra owns the flag itself, from the root's Version field, so the spelling is
+// checked in one more place rather than two: TestAsksVersionCoversCobrasFlag
+// asserts this accepts exactly what the root command would have.
+func asksVersion(args []string) bool {
+	return len(args) == 1 && (args[0] == "--version" || args[0] == "-v")
 }
