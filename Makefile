@@ -16,8 +16,11 @@ DESLOPPER := uvx --from "git+https://github.com/jv-k/deslopper@$(DESLOPPER_VERSI
 
 .PHONY: help build test vet lint prose check bump bump-release release clean
 
+# Plain .* rather than the .*? the usual copy of this idiom carries: *? is a PCRE
+# lazy quantifier with no meaning in POSIX ERE, which is what grep -E and awk parse.
+# One "## " per line makes greedy matching correct anyway.
 help: ## List the targets
-	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[1m%-14s\033[0m %s\n", $$1, $$2}'
+	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[1m%-14s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build the binary into ./gh-runs
 	go build -o gh-runs .

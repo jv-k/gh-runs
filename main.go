@@ -982,8 +982,8 @@ func opensTUI(args []string) bool {
 // hit them on the exact command a bug report asks them to run (ADR-0026).
 //
 // cobra owns the flag itself, from the root's Version field, so the spelling is
-// checked in one more place rather than two: TestAsksVersionCoversCobrasFlag
-// asserts this accepts exactly what the root command would have.
+// checked in one more place rather than two: TestAsksVersionAgreesWithCobra
+// asserts this accepts exactly what the root command answers.
 func asksVersion(args []string) bool {
 	return len(args) == 1 && (args[0] == "--version" || args[0] == "-v")
 }
