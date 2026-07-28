@@ -30,6 +30,7 @@ import (
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/filter"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/version"
 )
 
 // Requester issues a request through the transport chain and returns the response
@@ -168,8 +169,13 @@ func classify(err error) int {
 // subcommand is the read half this stage delivers.
 func newRootCmd(deps Deps) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "gh-runs",
-		Short:         "A live GitHub Actions dashboard across your repositories, where deletion is one operation.",
+		Use:   "gh-runs",
+		Short: "A live GitHub Actions dashboard across your repositories, where deletion is one operation.",
+		// Setting Version is what gives cobra its --version flag. This tool deletes
+		// Runs, Caches and Artifacts irreversibly, so "which build did that" has to
+		// be answerable from the binary itself rather than from whatever the
+		// reporter believes they installed (ADR-0026).
+		Version:       version.String(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

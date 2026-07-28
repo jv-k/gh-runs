@@ -1,0 +1,42 @@
+# VerBump's configuration for this repository (ADR-0026).
+#
+# Run a release with `make bump`, never by hand, so the flags stay in one place.
+
+# The tag prefix is load-bearing rather than cosmetic. .github/workflows/release.yml
+# fires on "v[2-9]*" and "v[1-9][0-9]*", so a tag cut without the v ships nothing.
+TAG_PREFIX="v"
+
+# The version source, and the reason it is not package.json (ADR-0002 rejected the
+# npm channel, and delete-workflow-runs@1.0.7 is frozen). VerBump falls back to the
+# latest matching git tag when the source file is missing, and here that tag is
+# v1.0.7: a bash script, three major versions behind, on a line the Go rewrite does
+# not continue. A text bump searches for the pattern carrying the *previous*
+# version, so a tag-derived 1.0.7 would search internal/version/version.go for a
+# line that has never existed there, and the first release would ship with its
+# version constant silently unbumped. This file makes the previous version explicit
+# instead of inferring it from a lineage that broke.
+SOURCE_FILE="version.json"
+
+# The Go constant the binary reports, kept in lock-step with the source above.
+# The pattern is a literal search, built by substituting the previous version into
+# {{version}}, and every line holding that string is rewritten. So it must match the
+# source line's quoting and spacing exactly, and exactly one line may match.
+# TestVersionConstantIsTheOnlyBumpTarget holds all of it.
+BUMP_FILES="internal/version/version.go:Version = \"{{version}}\""
+
+# Commits here are Conventional Commits with a scope, so the changelog is worth
+# grouping by type rather than listing flat.
+CHANGELOG_STYLE="grouped"
+
+# The release commit follows the same convention as every other commit.
+COMMIT_MSG_PREFIX="chore(release): "
+
+# main is the only branch a release may be cut from. master has never existed here,
+# and a release from a feature branch would tag a tree that never merged. This is a
+# guard rather than a prompt, so --yes does not bypass it.
+RELEASE_BRANCHES="main"
+
+# The checks CI runs on a pull request, run before anything mutates. CI re-runs them
+# on the pushed tag, but by then the tag exists and a failing build is already the
+# release everyone installs. Skip for a single run with --no-hooks.
+PRE_BUMP_CMD="make check"
