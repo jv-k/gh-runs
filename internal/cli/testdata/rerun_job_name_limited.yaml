@@ -1,0 +1,332 @@
+---
+version: 2
+# run-lifecycle AC14d, taped at the figures the criterion names: 40 selected Runs spanning
+# two repositories, whose resolution is rate-limited after 12 Runs of which every one holds
+# the named Job. The set spans repositories, so R17's friction is the typed count, and on
+# the CLI --yes stands in for it (cli-surface R11).
+#
+# Exactly 12 re-run POSTs follow, which is the whole of the frozen set because none of the
+# 12 was unmatched. The 28 appear in no count and under no skip reason: they were never
+# answered, so they are unreached and not Item-less members (R17a). The 12 resolution reads
+# are not re-run requests and are counted as neither.
+#
+# The 403 on Run 13's listing carries a documentation_url pointing at the fine-grained-PAT
+# permissions page rather than at this endpoint's own reference, so it fails the
+# authorization-shape correspondence and the governor classifies it as rate limiting, the
+# safe default (rate-governor open question 1). The tape holds nothing after it, so a
+# resolution that carried on would fail the replay.
+interactions:
+    - id: 0
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":20,"workflow_runs":[{"id":1,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T01:00:00Z","created_at":"2026-07-22T01:00:00Z"},{"id":2,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T02:00:00Z","created_at":"2026-07-22T02:00:00Z"},{"id":3,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T03:00:00Z","created_at":"2026-07-22T03:00:00Z"},{"id":4,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T04:00:00Z","created_at":"2026-07-22T04:00:00Z"},{"id":5,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T05:00:00Z","created_at":"2026-07-22T05:00:00Z"},{"id":6,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T06:00:00Z","created_at":"2026-07-22T06:00:00Z"},{"id":7,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T07:00:00Z","created_at":"2026-07-22T07:00:00Z"},{"id":8,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T08:00:00Z","created_at":"2026-07-22T08:00:00Z"},{"id":9,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T09:00:00Z","created_at":"2026-07-22T09:00:00Z"},{"id":10,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T10:00:00Z","created_at":"2026-07-22T10:00:00Z"},{"id":11,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T11:00:00Z","created_at":"2026-07-22T11:00:00Z"},{"id":12,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T12:00:00Z","created_at":"2026-07-22T12:00:00Z"},{"id":13,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T13:00:00Z","created_at":"2026-07-22T13:00:00Z"},{"id":14,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T14:00:00Z","created_at":"2026-07-22T14:00:00Z"},{"id":15,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T15:00:00Z","created_at":"2026-07-22T15:00:00Z"},{"id":16,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T16:00:00Z","created_at":"2026-07-22T16:00:00Z"},{"id":17,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T17:00:00Z","created_at":"2026-07-22T17:00:00Z"},{"id":18,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T18:00:00Z","created_at":"2026-07-22T18:00:00Z"},{"id":19,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T19:00:00Z","created_at":"2026-07-22T19:00:00Z"},{"id":20,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T20:00:00Z","created_at":"2026-07-22T20:00:00Z"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4999"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+            Etag: ['"byname-a-1"']
+    - id: 1
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/b/actions/runs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":20,"workflow_runs":[{"id":101,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T05:00:00Z","created_at":"2026-07-22T05:00:00Z"},{"id":102,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T06:00:00Z","created_at":"2026-07-22T06:00:00Z"},{"id":103,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T07:00:00Z","created_at":"2026-07-22T07:00:00Z"},{"id":104,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T08:00:00Z","created_at":"2026-07-22T08:00:00Z"},{"id":105,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T09:00:00Z","created_at":"2026-07-22T09:00:00Z"},{"id":106,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T10:00:00Z","created_at":"2026-07-22T10:00:00Z"},{"id":107,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T11:00:00Z","created_at":"2026-07-22T11:00:00Z"},{"id":108,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T12:00:00Z","created_at":"2026-07-22T12:00:00Z"},{"id":109,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T13:00:00Z","created_at":"2026-07-22T13:00:00Z"},{"id":110,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T14:00:00Z","created_at":"2026-07-22T14:00:00Z"},{"id":111,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T15:00:00Z","created_at":"2026-07-22T15:00:00Z"},{"id":112,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T16:00:00Z","created_at":"2026-07-22T16:00:00Z"},{"id":113,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T17:00:00Z","created_at":"2026-07-22T17:00:00Z"},{"id":114,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T18:00:00Z","created_at":"2026-07-22T18:00:00Z"},{"id":115,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T19:00:00Z","created_at":"2026-07-22T19:00:00Z"},{"id":116,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T20:00:00Z","created_at":"2026-07-22T20:00:00Z"},{"id":117,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T21:00:00Z","created_at":"2026-07-22T21:00:00Z"},{"id":118,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T22:00:00Z","created_at":"2026-07-22T22:00:00Z"},{"id":119,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T23:00:00Z","created_at":"2026-07-22T23:00:00Z"},{"id":120,"status":"completed","conclusion":"failure","name":"CI","run_started_at":"2026-07-22T00:00:00Z","created_at":"2026-07-22T00:00:00Z"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4998"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+            Etag: ['"byname-b-1"']
+    - id: 2
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/1/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":101,"run_id":1,"name":"build","status":"completed","conclusion":"failure"},{"id":102,"run_id":1,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4997"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 3
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/2/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":201,"run_id":2,"name":"build","status":"completed","conclusion":"failure"},{"id":202,"run_id":2,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4996"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 4
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/3/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":301,"run_id":3,"name":"build","status":"completed","conclusion":"failure"},{"id":302,"run_id":3,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4995"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 5
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/4/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":401,"run_id":4,"name":"build","status":"completed","conclusion":"failure"},{"id":402,"run_id":4,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4994"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 6
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/5/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":501,"run_id":5,"name":"build","status":"completed","conclusion":"failure"},{"id":502,"run_id":5,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4993"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 7
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/6/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":601,"run_id":6,"name":"build","status":"completed","conclusion":"failure"},{"id":602,"run_id":6,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4992"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 8
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/7/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":701,"run_id":7,"name":"build","status":"completed","conclusion":"failure"},{"id":702,"run_id":7,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4991"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 9
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/8/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":801,"run_id":8,"name":"build","status":"completed","conclusion":"failure"},{"id":802,"run_id":8,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4990"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 10
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/9/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":901,"run_id":9,"name":"build","status":"completed","conclusion":"failure"},{"id":902,"run_id":9,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4989"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 11
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/10/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":1001,"run_id":10,"name":"build","status":"completed","conclusion":"failure"},{"id":1002,"run_id":10,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4988"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 12
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/11/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":1101,"run_id":11,"name":"build","status":"completed","conclusion":"failure"},{"id":1102,"run_id":11,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4987"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 13
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/12/jobs?per_page=100
+      response:
+        status: 200 OK
+        code: 200
+        body: '{"total_count":2,"jobs":[{"id":1201,"run_id":12,"name":"build","status":"completed","conclusion":"failure"},{"id":1202,"run_id":12,"name":"test","status":"completed","conclusion":"failure"}]}'
+        headers:
+            X-Ratelimit-Remaining: ["4986"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 14
+      request:
+        method: GET
+        url: https://api.github.com/repos/o/a/actions/runs/13/jobs?per_page=100
+      response:
+        status: 403 Forbidden
+        code: 403
+        body: '{"message":"You have exceeded a secondary rate limit","documentation_url":"https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens"}'
+        headers:
+            X-Ratelimit-Remaining: ["4985"]
+            X-Ratelimit-Reset: ["1789000000"]
+            Content-Type: ["application/json; charset=utf-8"]
+    - id: 15
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/101/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4984"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 16
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/201/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4983"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 17
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/301/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4982"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 18
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/401/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4981"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 19
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/501/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4980"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 20
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/601/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4979"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 21
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/701/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4978"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 22
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/801/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4977"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 23
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/901/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4976"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 24
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/1001/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4975"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 25
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/1101/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4974"]
+            X-Ratelimit-Reset: ["1789000000"]
+    - id: 26
+      request:
+        method: POST
+        url: https://api.github.com/repos/o/a/actions/jobs/1201/rerun
+      response:
+        status: 201 Created
+        code: 201
+        body: ""
+        headers:
+            X-Ratelimit-Remaining: ["4973"]
+            X-Ratelimit-Reset: ["1789000000"]

@@ -11,6 +11,7 @@ import (
 
 	"github.com/jv-k/gh-runs/v2/internal/domain"
 	"github.com/jv-k/gh-runs/v2/internal/ops"
+	"github.com/jv-k/gh-runs/v2/internal/textsan"
 )
 
 // lifecycleFlags holds the cancel and rerun commands' flags. It embeds listFlags so the
@@ -25,8 +26,9 @@ type lifecycleFlags struct {
 	yes      bool  // --yes: the non-interactive confirmation
 	force    bool  // cancel only: force-cancel, a distinct operation (R6)
 	failed   bool  // rerun only: re-run failed Jobs, a distinct operation (R13)
-	debug    bool  // rerun only: enable_debug_logging, off by default (R14, AC14)
-	job      int64 // rerun only: -j/--job, re-run the Job this id names (R28a)
+	debug    bool   // rerun only: enable_debug_logging, off by default (R14, AC14)
+	job      int64  // rerun only: -j/--job, re-run the Job this id names (R28a)
+	jobName  string // rerun only: --job-name, re-run the Job of this name in each resolved Run (R28b)
 }
 
 // newCancelCmd builds the cancel command, the non-interactive form of run-lifecycle's
@@ -76,12 +78,19 @@ func newRerunCmd(deps Deps) *cobra.Command {
 		RunE: func(_ *cobra.Command, args []string) error {
 			op := ops.OpRerun
 			switch {
-			case f.job != 0 && f.failed:
+			case f.job != 0 && f.jobName != "":
+				// R28c: two separate flags, refused together. They select one operation's
+				// target two ways, and no reading of the pair is the operator's stated intent.
+				// The separateness is the point: merging them into one flag read by context
+				// would read a pasted gh Job id as a name, match nothing, and exit 0 having
+				// issued no write.
+				return fmt.Errorf("-j names a Job by id and --job-name names one by name: pass one")
+			case (f.job != 0 || f.jobName != "") && f.failed:
 				// Two distinct operations against two distinct endpoints. Neither reading of
 				// the pair is what the operator asked for (R28, ADR-0008).
-				return fmt.Errorf("--failed and -j select different operations: pass one")
-			case f.job != 0:
-				op = ops.OpRerunJob // R28a, run-lifecycle R14a
+				return fmt.Errorf("--failed and the per-Job flags select different operations: pass one")
+			case f.job != 0, f.jobName != "":
+				op = ops.OpRerunJob // R28a, R28b, run-lifecycle R14a
 			case f.failed:
 				op = ops.OpRerunFailed // R13: distinct, and offered only where Jobs failed
 			}
@@ -92,6 +101,7 @@ func newRerunCmd(deps Deps) *cobra.Command {
 	cmd.Flags().BoolVar(&f.failed, "failed", false, "Re-run only the jobs that failed")
 	cmd.Flags().BoolVarP(&f.debug, "debug", "d", false, "Enable debug logging for the new attempt")
 	cmd.Flags().Int64VarP(&f.job, "job", "j", 0, "Re-run the job this ID names, and the jobs declared after it")
+	cmd.Flags().StringVar(&f.jobName, "job-name", "", "Re-run the job of this name in each resolved run, at most one per run")
 	return cmd
 }
 
@@ -143,11 +153,24 @@ func runLifecycle(deps Deps, f *lifecycleFlags, op ops.Operation, args []string)
 	if err != nil {
 		return err
 	}
+	// --job-name resolves the name against each Run before the set is frozen, which is the
+	// one lifecycle resolution that issues a request between the crawl and the Plan
+	// (run-lifecycle R17a). The Runs it matched become Job Items and the Runs it asked and
+	// got a no from become Item-less members; the Runs it never reached become neither, and
+	// are stated below instead (R28b, R17a).
+	var res ops.Resolution
+	if f.jobName != "" {
+		res, err = deps.Purge.ResolveJobsByName(ctx, items, f.jobName)
+		if err != nil {
+			return err
+		}
+		items = res.Items
+	}
 	snapshot, err := deps.RepoSnapshot()
 	if err != nil {
 		return err
 	}
-	plan, err := deps.Purge.Plan(op, items, snapshot)
+	plan, err := deps.Purge.Plan(op, items, snapshot, res.Unmatched...)
 	if err != nil {
 		return namingTheExclusion(deps, sc.repos, err)
 	}
@@ -156,7 +179,7 @@ func runLifecycle(deps Deps, f *lifecycleFlags, op ops.Operation, args []string)
 	}
 
 	if f.dryRun {
-		return printLifecycleDryRun(deps, plan, op)
+		return printLifecycleDryRun(deps, plan, op, res)
 	}
 
 	// The confirmation the Plan priced is the confirmation required, so R18's asymmetry is
@@ -180,7 +203,31 @@ func runLifecycle(deps Deps, f *lifecycleFlags, op ops.Operation, args []string)
 		return err
 	}
 	printLifecycleSummary(deps, sum, op)
+	// R17a: a resolution that stopped early is stated in the summary and exits 1. R28b's
+	// exit 0 covers a name that matched nothing, which is a definite answer and a skip. It
+	// does not cover this: nothing failed, but not everything the operator asked for
+	// happened, which is cli-surface R17's one failure bit. The count is stated rather than
+	// only signalled, because an exit code names no number (R16), and --yes reaches this
+	// operation with no confirm surface to render R17a's note instead.
+	if res.StoppedEarly() {
+		printUnreached(deps, res)
+		return &exitError{code: exitFailure, msg: fmt.Sprintf(
+			"%s reached %d of the %d runs selected", op, plan.Total(), plan.Total()+res.Unreached)}
+	}
 	return exitFromSummary(sum)
+}
+
+// printUnreached states R17a's fact on the surface that has no modal to render it: how many
+// selected Runs the resolution never reached, and why. Without it the operator is handed a
+// count smaller than the set they named with nothing saying so, which is cli-surface R16's
+// rule against a count the output cannot stand behind.
+//
+// The reason carries the API's own words, which a hostile third-party repository controls,
+// so it is sanitised at the terminal boundary exactly as every other reason this surface
+// prints is.
+func printUnreached(deps Deps, res ops.Resolution) {
+	_, _ = fmt.Fprintf(deps.Stdout, "%d selected %s were never reached: %s\n",
+		res.Unreached, plural(res.Unreached, "run", "runs"), textsan.Sanitize(res.Reason))
 }
 
 // resolveLifecycleSet builds the frozen set from whichever grammar was used.
@@ -259,13 +306,27 @@ func (f *lifecycleFlags) hasFilter() bool {
 // its repository and Run ID, so grep and wc -l answer questions about it (cli-surface R10).
 // It matters more here than for a delete, because a bulk re-run spends Actions minutes and
 // this is the only way to see the size of that bill before paying it.
-func printLifecycleDryRun(deps Deps, plan ops.Plan, op ops.Operation) error {
+func printLifecycleDryRun(deps Deps, plan ops.Plan, op ops.Operation, res ops.Resolution) error {
 	for _, it := range plan.Items() {
 		row := it.Repo.String() + "\t" + strconv.FormatInt(it.ID, 10)
 		if it.Skip != ops.SkipNone {
 			row += "\t(skipped: " + string(it.Skip) + ")"
 		}
 		_, _ = fmt.Fprintln(deps.Stdout, row)
+	}
+	// The Item-less members get a row each, after the Items and in resolution order, so the
+	// listing and the trailer's frozen total cannot disagree: both read the whole set
+	// (ADR-0019 amended, cli-surface R10). The id column is the Run's, because that is the
+	// tuple such a member carries and there is no Job id to print.
+	for _, um := range plan.Unmatched() {
+		_, _ = fmt.Fprintln(deps.Stdout, um.Repo.String()+"\t"+strconv.FormatInt(um.RunID, 10)+
+			"\t(skipped: "+textsan.Sanitize(um.Reason)+")")
+	}
+	if res.StoppedEarly() {
+		// R10 resolves the set by the same code path as the real operation, so a dry run
+		// whose resolution stopped early reports the same partial set, and R16 forbids
+		// presenting its count unqualified.
+		printUnreached(deps, res)
 	}
 	note := fmt.Sprintf("gh-runs: dry run: %s would be requested for %d %s",
 		op, plan.Total()-plan.Skipped(), plural(plan.Total()-plan.Skipped(), "run", "runs"))
