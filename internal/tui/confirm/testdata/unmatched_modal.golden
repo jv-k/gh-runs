@@ -1,0 +1,9 @@
+[1mRe-run 4 Jobs in octo/hello[m
+
+  octo/hello              4[38;2;158;158;158m (2 skipped)[m
+
+[1;38;2;255;135;95m  2 of 4 will be skipped: no job named "build" in this run[m
+
+[1m  Re-run these Jobs? [y/N][m
+
+[38;2;158;158;158m  Press v to inspect the frozen set.  n/esc to cancel.[m

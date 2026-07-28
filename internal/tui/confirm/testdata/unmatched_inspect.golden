@@ -1,0 +1,8 @@
+[1mFrozen set: 4 Jobs[m
+[1m  REPOSITORY              RUN ID        STATUS       CONCLUSION       WORKFLOW      STARTED         [m
+> octo/hello              9001                                        build                         
+  octo/hello              9002                                        build                         
+  octo/hello              503                                         no job name…                  
+  octo/hello              504                                         no job name…                  
+
+[38;2;158;158;158m  row 1 of 4.  v/n/esc to return.[m

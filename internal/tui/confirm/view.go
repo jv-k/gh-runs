@@ -66,6 +66,10 @@ func (m Model) modalView() string {
 		lines = append(lines, "")
 		lines = append(lines, split...)
 	}
+	if note, ok := m.unreachedLine(); ok {
+		lines = append(lines, "")
+		lines = append(lines, note)
+	}
 	lines = append(lines, "")
 	lines = append(lines, m.promptLine())
 	if offer, ok := m.escalationLine(); ok {
@@ -90,6 +94,33 @@ func (m Model) escalationLine() (string, bool) {
 	}
 	return styleDim.Render(indent + "A Run that is not cancelable needs force-cancel: press " +
 		m.profile.ForceCancel.Help().Key + " to escalate."), true
+}
+
+// unreachedLine is run-lifecycle R17a's one-line non-blocking note, shown where a by-name
+// resolution did not reach every selected Run. The frozen count above it is what resolution
+// resolved, which is smaller than the set the operator named, and R7's ladder has no rung
+// that expresses "this count is a lower bound". So the note names how many were not reached
+// and why, on R14b's precedent: it does not block and it does not confirm.
+//
+// It is a note rather than a refusal because the resolved portion is a real set the operator
+// can act on, and discarding it would throw away work the resolution already paid for.
+//
+// The reason carries the API's own words, which a hostile third-party repository can
+// influence, so it is sanitised at the terminal boundary like every other untrusted string
+// this pane renders.
+func (m Model) unreachedLine() (string, bool) {
+	if m.unreached <= 0 {
+		return "", false
+	}
+	noun := "runs"
+	if m.unreached == 1 {
+		noun = "run"
+	}
+	line := indent + strconv.Itoa(m.unreached) + " selected " + noun + " were not reached, so they are not in this set"
+	if m.unreachedWhy != "" {
+		line += ": " + textsan.Sanitize(m.unreachedWhy)
+	}
+	return styleWarn.Render(line), true
 }
 
 // headline is R6's count with the operation and the noun: "Delete 47 Runs across 3
@@ -147,6 +178,19 @@ func (m Model) eligibilityLines() []string {
 	if notCompleted > 0 {
 		out = append(out, styleWarn.Render(indent+strconv.Itoa(notCompleted)+" of "+strconv.Itoa(total)+" are still running and will be skipped"))
 	}
+	// The Item-less members get R11's treatment too, because they are the same thing to an
+	// operator reading this modal: members of the count above that nothing will be written
+	// for. Their reason is authored by the resolution rather than derived from the
+	// eligibility gate, so it is rendered rather than named by a constant, and it is one
+	// string per resolution so the line reads once with a count (ADR-0019, amended).
+	//
+	// This is where the reason is stated in full. The inspect viewport's WORKFLOW cell
+	// carries it too, truncated to the column as any over-long cell is, so a row can be told
+	// apart without leaving the table.
+	if um := m.plan.Unmatched(); len(um) > 0 {
+		out = append(out, styleWarn.Render(indent+strconv.Itoa(len(um))+" of "+strconv.Itoa(total)+
+			" will be skipped: "+textsan.Sanitize(um[0].Reason)))
+	}
 	return out
 }
 
@@ -176,21 +220,31 @@ func (m Model) inspectHint() string {
 // inspectView is R30's viewport over the frozen set: the Feed's columns and no new
 // ones, one row each, paged to reach both ends (R30, AC22). It issues no request; the
 // rows are the same tuples Execute is handed.
+// A set may hold a second kind of member that has no Item, and those rows append after the
+// Items in resolution order rather than interleaving by Run: interleaving would put a
+// member the operator cannot act on between two they can, and the Items keep the selection
+// order among themselves, which is the property R30's viewport shows (ADR-0019, amended).
 func (m Model) inspectView() string {
 	items := m.plan.Items()
+	unmatched := m.plan.Unmatched()
+	total := m.plan.Total()
 	var lines []string
-	lines = append(lines, styleTitle.Render("Frozen set: "+strconv.Itoa(len(items))+" "+pluralNoun(m.plan)))
+	lines = append(lines, styleTitle.Render("Frozen set: "+strconv.Itoa(total)+" "+pluralNoun(m.plan)))
 	lines = append(lines, styleHeader.Render(m.inspectHeader()))
 	rows := m.inspectPage()
 	end := m.top + rows
-	if end > len(items) {
-		end = len(items)
+	if end > total {
+		end = total
 	}
 	for i := m.top; i < end; i++ {
-		lines = append(lines, m.inspectRow(items[i], i == m.cursor))
+		if i < len(items) {
+			lines = append(lines, m.inspectRow(items[i], i == m.cursor))
+			continue
+		}
+		lines = append(lines, m.unmatchedRow(unmatched[i-len(items)], i == m.cursor))
 	}
 	lines = append(lines, "")
-	lines = append(lines, styleDim.Render(indent+"row "+strconv.Itoa(m.cursor+1)+" of "+strconv.Itoa(len(items))+".  "+
+	lines = append(lines, styleDim.Render(indent+"row "+strconv.Itoa(m.cursor+1)+" of "+strconv.Itoa(total)+".  "+
 		m.profile.ConfirmInspect.Help().Key+"/"+m.profile.ConfirmAbort.Help().Key+" to return."))
 	return strings.Join(lines, "\n")
 }
@@ -226,6 +280,20 @@ func (m Model) inspectRow(it ops.Item, cursor bool) string {
 		if !r.EffectiveStart().IsZero() {
 			started = r.EffectiveStart().UTC().Format(startLayout)
 		}
+	case it.Job != nil:
+		// A Job carries its own Status and Conclusion and its own name, and it is a row a
+		// by-name re-run fills the viewport with. Reading them off the Job is the same rule
+		// the Run arm follows one level down, and without it every Job row rendered as a
+		// repository and an id beside four empty cells.
+		j := it.Job
+		status = string(j.Status)
+		if j.Status == domain.StatusCompleted {
+			conclusion = string(j.Conclusion)
+		}
+		workflow = j.Name
+		if !j.StartedAt.IsZero() {
+			started = j.StartedAt.UTC().Format(startLayout)
+		}
 	case it.Cache != nil:
 		workflow = it.Cache.Key
 	case it.Artifact != nil:
@@ -238,6 +306,35 @@ func (m Model) inspectRow(it ops.Item, cursor bool) string {
 		truncPad(textsan.Sanitize(conclusion), conclusionW),
 		truncPad(textsan.Sanitize(workflow), m.workflowWidth()),
 		truncPad(started, startedW),
+	}
+	marker := "  "
+	if cursor {
+		marker = "> "
+	}
+	return marker + strings.Join(cells, colSep)
+}
+
+// unmatchedRow renders one Item-less member, and purge AC22's claim narrows to admit it.
+// That criterion says every row carries its owning repository, its Run ID, and Status and
+// Conclusion in separate cells, and that the last row is the oldest Run in the set by
+// run_started_at. This row satisfies the first two cells and none of the rest: it is handed
+// to nothing, it holds no Run and so has neither a Status nor a Conclusion to put in a
+// cell, and it carries no run_started_at to sort on.
+//
+// The claim the types actually make is narrower and still exact: every row that names a
+// write is a tuple Execute is handed, carries all four cells, and sorts. This row names the
+// absence of a write. It leaves Status and Conclusion empty on the same reading that
+// already empties Conclusion for a Run that is not completed, and puts the reason in the
+// WORKFLOW cell, which is the flex column and the one every non-Run Kind already fills with
+// what it carries instead (ADR-0019, amended).
+func (m Model) unmatchedRow(um ops.Unmatched, cursor bool) string {
+	cells := []string{
+		truncPad(textsan.Sanitize(um.Repo.Owner+"/"+um.Repo.Name), repoW),
+		truncPad(strconv.FormatInt(um.RunID, 10), idW),
+		truncPad("", statusW),
+		truncPad("", conclusionW),
+		truncPad(textsan.Sanitize(um.Reason), m.workflowWidth()),
+		truncPad("", startedW),
 	}
 	marker := "  "
 	if cursor {
