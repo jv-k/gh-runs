@@ -226,3 +226,39 @@ func TestGoldenJobNameForm(t *testing.T) {
 
 	goldie.New(t).Assert(t, "job_name_form", []byte(m.View()))
 }
+
+// TestUnreachedNoticeDoesNotBorrowTheCancellationMarker pins the two indicators apart. The
+// cancellation marker is the cancel key's own letter and names a Run whose cancellation was
+// requested and not yet observed. R17a's note names a resolution the API cut short, which
+// has no keystroke behind it and is not a cancellation of anything. Sharing a marker would
+// label one as the other, and an operator reads the marker before the words.
+func TestUnreachedNoticeDoesNotBorrowTheCancellationMarker(t *testing.T) {
+	m, spy := feedWithSpy(t)
+	spy.resolution = ops.Resolution{
+		Items:           []ops.Item{ops.JobItem(domain.Job{ID: 9001, RunID: 1, Repo: repoID("o", "r"), Name: "build"})},
+		Unreached:       28,
+		UnreachedReason: "the API rate-limited the jobs listing",
+	}
+	m = m.Update2(press("down"))
+	m = m.Update2(press("space"))
+	m = m.Update2(press("J"))
+	m = typeInto(m, "build")
+	m, cmd := m.Update(press("enter"))
+	m = m.Update2(cmd())
+
+	notice, ok := m.jobNameNoticeLine()
+	if !ok {
+		t.Fatal("the note did not render")
+	}
+	if strings.Contains(notice, cancelRequestedMarker+"  ") {
+		t.Errorf("the unreached note carries the cancellation-requested marker %q, which names a "+
+			"different condition:\n%s", cancelRequestedMarker, notice)
+	}
+	if !strings.Contains(notice, unreachedMarker) {
+		t.Errorf("the unreached note carries no marker of its own:\n%s", notice)
+	}
+	// Nothing was cancelled, so the cancellation indicator itself must stay absent.
+	if _, shown := m.cancelRequestedLine(); shown {
+		t.Error("a by-name resolution that stopped early raised the cancellation-requested indicator")
+	}
+}

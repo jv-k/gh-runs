@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -152,7 +153,7 @@ func runLifecycle(deps Deps, f *lifecycleFlags, op ops.Operation, args []string)
 	}
 	items, err := resolveLifecycleSet(ctx, deps, f, sc, args)
 	if err != nil {
-		return err
+		return interrupted(ctx, err)
 	}
 	// --job-name resolves the name against each Run before the set is frozen, which is the
 	// one lifecycle resolution that issues a request between the crawl and the Plan
@@ -163,7 +164,7 @@ func runLifecycle(deps Deps, f *lifecycleFlags, op ops.Operation, args []string)
 	if f.jobName != "" {
 		res, err = deps.Purge.ResolveJobsByName(ctx, items, f.jobName)
 		if err != nil {
-			return err
+			return interrupted(ctx, err)
 		}
 		items = res.Items
 	}
@@ -228,6 +229,23 @@ func runLifecycle(deps Deps, f *lifecycleFlags, op ops.Operation, args []string)
 			"%s reached %d of the %d runs selected", op, plan.Total(), plan.Total()+res.Unreached)}
 	}
 	return nil
+}
+
+// interrupted maps a resolution or crawl that stopped because the operator pressed Ctrl-C
+// onto R17's exit 2, and passes every other error through unchanged. SIGINT cancels the
+// context both of those read, so an interrupt surfaces as context.Canceled wrapped in
+// whatever the step returned, and exit 1 would report it as a failure when nothing failed
+// (cli-surface R17, AC13).
+//
+// It covers the crawl as well as the by-name resolution, which is one line wider than the
+// review that found it asked for. The two are adjacent steps of one function reading one
+// context, and the crawl had the same gap: fixing the newer half alone would leave an
+// interrupt exiting 1 or 2 depending on which step the operator caught.
+func interrupted(ctx context.Context, err error) error {
+	if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return &exitError{code: exitCancelled, msg: "interrupted before anything was requested"}
 }
 
 // printUnreached states R17a's fact on the surface that has no modal to render it: how many

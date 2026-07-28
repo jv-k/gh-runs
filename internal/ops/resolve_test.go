@@ -2,6 +2,7 @@ package ops_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -117,4 +118,29 @@ func TestResolveJobNameRefusesANonRunSelection(t *testing.T) {
 	if err == nil {
 		t.Error("ResolveJobsByName accepted a set of Job Items; it resolves a name against Runs")
 	}
+}
+
+// TestResolveJobNameReturnsACancelledContextAsAnError pins the one stop that is not an
+// unreached set. R17a's unreached count is about the API cutting the resolution short, and
+// the surfaces answer that by pricing what resolved. An operator pressing Ctrl-C asked for
+// the command to stop, so folding it into an unreached count would carry a partial set on
+// into Plan, Confirm and Execute after they had already said stop (cli-surface R17, AC13).
+func TestResolveJobNameReturnsACancelledContextAsAnError(t *testing.T) {
+	h := newOfflineHarness(t, 50, 50)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	res, err := h.ops.ResolveJobsByName(ctx, selectedRuns("o", "r", 11, 12), "build")
+
+	if err == nil {
+		t.Fatal("a cancelled resolution returned no error; an interrupt is not an unreached set")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want it to wrap context.Canceled so the CLI can exit 2 (R17)", err)
+	}
+	if res.Unreached != 0 || len(res.Items) != 0 || len(res.Unmatched) != 0 {
+		t.Errorf("a cancelled resolution returned a set (%+v); it must return nothing to price", res)
+	}
+	// The offline transport fails any wire call, so reaching one would fail loudly. Zero is
+	// the claim: the cancellation is seen before the first listing.
 }

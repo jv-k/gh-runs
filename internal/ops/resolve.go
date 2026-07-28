@@ -61,6 +61,12 @@ func (r Resolution) StoppedEarly() bool { return r.Unreached > 0 }
 // was rate-limited has no answer, and neither does the next one, so counting either as a
 // definite skip would assert something this resolution cannot know. The remaining Runs are
 // reported as unreached with the reason, and the surfaces render that separately.
+//
+// A cancelled context is the one stop that is not an unreached set. R17a is about the API
+// cutting the resolution short, and the surfaces answer that by pricing what resolved; an
+// operator pressing Ctrl-C asked for the command to stop, and cli-surface R17 gives that its
+// own exit code. Returning it as an error is what keeps a partial set from falling through
+// into Plan, Confirm and Execute after the operator has already said stop.
 func (o *Ops) ResolveJobsByName(ctx context.Context, sel []Item, name string) (Resolution, error) {
 	// One reason per invocation, built from the name and not from the Run, so groupByReason
 	// collapses every member into one group with a count rather than one line per Run
@@ -74,9 +80,12 @@ func (o *Ops) ResolveJobsByName(ctx context.Context, sel []Item, name string) (R
 	}
 	for i := range sel {
 		if err := ctx.Err(); err != nil {
-			return res.stoppedAt(i, len(sel), "the resolution was cancelled"), nil
+			return Resolution{}, err
 		}
-		jobs, why := o.listJobs(ctx, sel[i].Repo, sel[i].ID)
+		jobs, why, err := o.listJobs(ctx, sel[i].Repo, sel[i].ID)
+		if err != nil {
+			return Resolution{}, err
+		}
 		if why != "" {
 			return res.stoppedAt(i, len(sel), why), nil
 		}
@@ -109,31 +118,34 @@ func (r Resolution) stoppedAt(at, total int, why string) Resolution {
 // was had. A rate limit the governor classified, any other non-200, and a transport error
 // are all the same thing to this caller: no answer. It reports them with the API's own
 // words where there are any, because R17a's note has to name why.
-func (o *Ops) listJobs(ctx context.Context, repo domain.RepoID, runID int64) ([]domain.Job, string) {
+//
+// The error return is for a cancelled context alone, which is not "no answer" but "stop
+// asking", and the caller propagates it rather than folding it into an unreached count.
+func (o *Ops) listJobs(ctx context.Context, repo domain.RepoID, runID int64) ([]domain.Job, string, error) {
 	resp, err := o.client.RequestWithContext(ctx, http.MethodGet, jobsListPath(repo, runID), nil)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, "the resolution was cancelled"
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, "", cerr
 		}
-		return nil, "the jobs listing failed: " + err.Error()
+		return nil, "the jobs listing failed: " + err.Error(), nil
 	}
 	defer func() { _ = resp.Body.Close() }()
 	// The governor's stamped classification is read first, because a secondary-limit 403 can
 	// arrive with a healthy x-ratelimit-remaining and only the body-shape classification
 	// tells it from an authorization 403 (rate-governor open question 1).
 	if governor.RateLimited(resp) {
-		return nil, "the API rate-limited the jobs listing: " + failureReason(resp)
+		return nil, "the API rate-limited the jobs listing: " + failureReason(resp), nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, "the jobs listing failed: " + failureReason(resp)
+		return nil, "the jobs listing failed: " + failureReason(resp), nil
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, "the jobs listing could not be read: " + err.Error()
+		return nil, "the jobs listing could not be read: " + err.Error(), nil
 	}
 	var page apiJobsPage
 	if err := json.Unmarshal(body, &page); err != nil {
-		return nil, "the jobs listing could not be decoded: " + err.Error()
+		return nil, "the jobs listing could not be decoded: " + err.Error(), nil
 	}
 	// Stamp the repository the request was made against. The payload does not carry it, and
 	// this is the one place both facts are in hand, which is what lets JobItem derive its
@@ -141,7 +153,7 @@ func (o *Ops) listJobs(ctx context.Context, repo domain.RepoID, runID int64) ([]
 	for i := range page.Jobs {
 		page.Jobs[i].Repo = repo
 	}
-	return page.Jobs, ""
+	return page.Jobs, "", nil
 }
 
 // apiJobsPage is the fragment of an actions/runs/{id}/jobs listing this resolution reads.

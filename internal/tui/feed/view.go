@@ -43,10 +43,15 @@ const (
 	// ASCII, so its display width is its rune count and the row arithmetic above holds on any
 	// terminal. blankMarker keeps an unmarked row's columns in the same places.
 	cancelRequestedMarker = "c"
-	blankMarker           = "  "
-	truncMarker           = "…"
-	startedLayout         = "2006-01-02T15:04:05Z"
-	clockLayout           = "15:04"
+	// unreachedMarker is R17a's note's own marker, and it is deliberately not the cancel
+	// one. That marker is the cancel key's own letter and names a cancellation-requested
+	// Run, so borrowing it here would label a rate-limited resolution as a cancellation.
+	// This condition has no keystroke behind it, so it takes a bare warning sign.
+	unreachedMarker = "!"
+	blankMarker     = "  "
+	truncMarker     = "…"
+	startedLayout   = "2006-01-02T15:04:05Z"
+	clockLayout     = "15:04"
 
 	// failedNamesShown bounds how many repository names the failed-poll indicator
 	// spells out before it falls back to a count. The poll set runs to roughly 26
@@ -81,6 +86,10 @@ var (
 	// the attention hue rather than the danger one: an accepted cancel is a request in flight
 	// and an expected state, not a failure, and the Run it marks is still running.
 	styleCancelRequested = lipgloss.NewStyle().Bold(true).Foreground(palette.Attention)
+	// styleUnreached is R17a's note. It takes the warning colour rather than the
+	// cancellation indicator's, because the two say different things and an operator reads
+	// the colour before the words.
+	styleUnreached = lipgloss.NewStyle().Bold(true).Foreground(palette.Warn)
 
 	// Action-state decoration on the repository cell, four visibly distinct renderings
 	// (R36's third golden). Offered is plain; the three refusals each differ.
@@ -630,7 +639,7 @@ func (m Model) jobNameNoticeLine() (string, bool) {
 	if m.jobNameNotice == "" {
 		return "", false
 	}
-	return styleCancelRequested.Render(cancelRequestedMarker + "  " + textsan.Sanitize(m.jobNameNotice)), true
+	return styleUnreached.Render(unreachedMarker + " " + textsan.Sanitize(m.jobNameNotice)), true
 }
 
 // failedLine is the failed-repository indicator, from ADR-0015's RepoPollFailed. It
