@@ -49,8 +49,8 @@ func TestResolveJobNameAnswersMatchedAndUnmatched(t *testing.T) {
 	if !strings.Contains(res.Unmatched[0].Reason, "build") {
 		t.Errorf("unmatched reason %q does not name the absent Job (AC14c)", res.Unmatched[0].Reason)
 	}
-	if res.Unreached != 0 || res.Reason != "" {
-		t.Errorf("resolution reached every Run but reports %d unreached (%q)", res.Unreached, res.Reason)
+	if res.Unreached != 0 || res.UnreachedReason != "" {
+		t.Errorf("resolution reached every Run but reports %d unreached (%q)", res.Unreached, res.UnreachedReason)
 	}
 	if got := h.counting.countMethod("GET"); got != 3 {
 		t.Errorf("issued %d Jobs listings, want 3: one per selected Run", got)
@@ -96,7 +96,7 @@ func TestResolveJobNameStopsEarlyAndKeepsUnreachedApart(t *testing.T) {
 	if res.Unreached != 2 {
 		t.Errorf("Unreached = %d, want 2: the rate-limited Run and the one after it (R17a)", res.Unreached)
 	}
-	if res.Reason == "" {
+	if res.UnreachedReason == "" {
 		t.Error("a resolution that stopped early states no reason; R17a's note has to name why")
 	}
 	// The tape holds no interaction past the 403, so a resolver that carried on would fail

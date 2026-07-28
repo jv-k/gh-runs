@@ -103,16 +103,65 @@ func TestJobNameFormResolvesThenConfirms(t *testing.T) {
 	}
 }
 
-// TestJobNameFormRendersTheUnreachedNote pins R17a's mandated note on this surface. A
-// resolution that did not reach every selected Run freezes a count smaller than the set the
-// operator named, and nothing in the friction machinery would say so.
-func TestJobNameFormRendersTheUnreachedNote(t *testing.T) {
+// TestUnreachedNoteRidesTheFeedWhereR18ForbidsAModal pins the collision between two MUSTs.
+// R18: "A single-Job re-run MUST NOT [take a confirmation] either." R17a: the confirm
+// surface MUST render a note naming how many selected Runs were not reached, and that note
+// "does not block and it does not confirm".
+//
+// A resolution that stopped early and resolved to one Job is both at once. The pane's
+// FrictionNone prompt is a y/N that has to be answered, so routing the note through it
+// would make the note block. The Feed's own notice line carries it instead, which is the
+// move R17a already makes for the CLI's --yes: where there is no confirm surface, the fact
+// is stated beside the operation rather than in front of it.
+func TestUnreachedNoteRidesTheFeedWhereR18ForbidsAModal(t *testing.T) {
 	m, spy := feedWithSpy(t)
 	spy.resolution = ops.Resolution{
-		Items:     []ops.Item{ops.JobItem(domain.Job{ID: 9001, RunID: 1, Repo: repoID("o", "r"), Name: "build"})},
-		Unreached: 28,
-		Reason:    "the API rate-limited the jobs listing",
+		Items:           []ops.Item{ops.JobItem(domain.Job{ID: 9001, RunID: 1, Repo: repoID("o", "r"), Name: "build"})},
+		Unreached:       28,
+		UnreachedReason: "the API rate-limited the jobs listing",
 	}
+	m = m.Update2(press("down"))
+	m = m.Update2(press("space"))
+	m = m.Update2(press("J"))
+	m = typeInto(m, "build")
+	m, cmd := m.Update(press("enter"))
+	m, launch := m.Update(cmd())
+
+	if m.confirmOpen {
+		t.Error("a single-Job re-run opened a confirmation; R18 forbids one")
+	}
+	if launch == nil {
+		t.Fatal("the re-run was not launched; R18 removes the modal, it does not remove the operation")
+	}
+	view := m.View()
+	if !strings.Contains(view, "28") {
+		t.Errorf("the Feed states no count for the 28 Runs the resolution did not reach (R17a):\n%s", view)
+	}
+	if !strings.Contains(view, "rate-limited") {
+		t.Errorf("the note does not say why the resolution stopped (R17a):\n%s", view)
+	}
+	// Non-blocking means the list is still the list: the note is an indicator line beside
+	// the rows, not a surface the operator has to dismiss.
+	if m.CapturesInput() {
+		t.Error("the note captured input; R17a requires it not to block")
+	}
+}
+
+// TestUnreachedNoteRidesTheModalWhereThereIsOne pins the other half: once the frozen set is
+// large enough to price a confirmation, R17a's note belongs on it, because that is the
+// surface the operator is reading the count on.
+func TestUnreachedNoteRidesTheModalWhereThereIsOne(t *testing.T) {
+	m, spy := feedWithSpy(t)
+	spy.resolution = ops.Resolution{
+		Items: []ops.Item{
+			ops.JobItem(domain.Job{ID: 9001, RunID: 1, Repo: repoID("o", "r"), Name: "build"}),
+			ops.JobItem(domain.Job{ID: 9002, RunID: 2, Repo: repoID("o", "r"), Name: "build"}),
+		},
+		Unreached:       28,
+		UnreachedReason: "the API rate-limited the jobs listing",
+	}
+	m = m.Update2(press("down"))
+	m = m.Update2(press("space"))
 	m = m.Update2(press("down"))
 	m = m.Update2(press("space"))
 	m = m.Update2(press("J"))
@@ -121,14 +170,11 @@ func TestJobNameFormRendersTheUnreachedNote(t *testing.T) {
 	m = m.Update2(cmd())
 
 	if !m.confirmOpen {
-		t.Fatal("the resolution did not open the confirmation")
+		t.Fatal("a two-member set opened no confirmation")
 	}
 	view := m.View()
-	if !strings.Contains(view, "28") {
-		t.Errorf("the modal states no count for the 28 Runs the resolution did not reach (R17a):\n%s", view)
-	}
-	if !strings.Contains(view, "rate-limited") {
-		t.Errorf("the note does not say why the resolution stopped (R17a):\n%s", view)
+	if !strings.Contains(view, "28") || !strings.Contains(view, "rate-limited") {
+		t.Errorf("the modal does not carry R17a's note:\n%s", view)
 	}
 }
 

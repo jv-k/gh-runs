@@ -402,6 +402,30 @@ func TestRerunJobNameResolutionCutShortPricesWhatItResolvedAndExitsOne(t *testin
 	if !strings.Contains(out, "of 12 Runs") {
 		t.Errorf("the summary does not price the 12 that resolved (R17a, AC14d):\n%s", out)
 	}
+	// AC14d: "The 28 appear in no count and under no skip reason, because they were never
+	// answered." An unreached Run is the absence of an answer, so it is not a skip, and
+	// folding it into one would put it in Total and undo R17a's ruling by the back door.
+	if !strings.Contains(out, "0 skipped") {
+		t.Errorf("the summary counts a skip; none of the 12 was unmatched and the 28 were never answered (AC14d):\n%s", out)
+	}
+	if strings.Contains(out, "skipped: ") {
+		t.Errorf("the summary carries a skip reason; the 28 appear under none (AC14d):\n%s", out)
+	}
+	// AC14d: "the 12 resolution reads are not re-run requests and are counted as neither."
+	// The reads did travel, so the claim is about what the summary counts, not about the
+	// wire: 12 accepted over a frozen 12, with the 13 GETs outside both figures.
+	reads := 0
+	for _, u := range h.counting.urls {
+		if strings.HasSuffix(u, "/jobs?per_page=100") {
+			reads++
+		}
+	}
+	if reads != 13 {
+		t.Errorf("issued %d Jobs listings, want 13: 12 that answered and the one that did not", reads)
+	}
+	if !strings.Contains(out, "12 accepted") {
+		t.Errorf("the summary does not report the 12 accepted (AC14d):\n%s", out)
+	}
 }
 
 // TestRerunJobNameIsRefusedBesideTheJobIDFlag pins cli-surface R28c. The two flags are
@@ -459,5 +483,37 @@ func TestRerunJobNameDryRunListsEveryMemberAndClaimsTheFrozenTotal(t *testing.T)
 	}
 	if !strings.Contains(h.stderr.String(), "3 skipped") {
 		t.Errorf("--dry-run trailer does not report the 3 skipped:\n%s", h.stderr.String())
+	}
+}
+
+// TestRerunJobNameDryRunOverATruncatedResolutionSaysSoAndExitsOne pins the dry run's own
+// reading of R17a. cli-surface R10 exits 0 for a dry run that "reports exactly what would be
+// deleted", and a resolution the API cut short could not: the listing is a partial set, so
+// R16 forbids presenting its count unqualified. The note goes to stderr with the trailer,
+// because R10's listing is one row per member so grep and wc -l answer questions about it,
+// and a note on stdout would be counted as a row.
+func TestRerunJobNameDryRunOverATruncatedResolutionSaysSoAndExitsOne(t *testing.T) {
+	h := newHarness(t, "rerun_job_name_limited").
+		withCurrentErr(errNoRepo).
+		withDiscovered(gh("o", "a"), gh("o", "b")).
+		withWritable(gh("o", "a"), gh("o", "b"))
+
+	code := h.runDriven("rerun", "--all-repos", "--all", "--job-name", "build", "--dry-run")
+
+	if code != 1 {
+		t.Fatalf("a dry run over a truncated resolution exited %d, want 1 (R17a, R16). stderr: %s",
+			code, h.stderr.String())
+	}
+	for _, u := range h.counting.urls {
+		if strings.HasSuffix(u, "/rerun") {
+			t.Errorf("--dry-run issued a re-run POST to %q; it withholds the write (R10)", u)
+		}
+	}
+	rows := strings.Count(strings.TrimRight(h.stdout.String(), "\n"), "\n") + 1
+	if rows != 12 {
+		t.Errorf("--dry-run printed %d rows on stdout, want 12: one per frozen member and nothing else (R10)", rows)
+	}
+	if !strings.Contains(h.stderr.String(), "28") {
+		t.Errorf("the trailer states no count for the 28 never reached (R16, R17a):\n%s", h.stderr.String())
 	}
 }

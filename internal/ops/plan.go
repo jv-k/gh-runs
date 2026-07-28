@@ -176,7 +176,7 @@ func (o *Ops) Plan(op Operation, sel []Item, repos map[domain.RepoID]domain.Repo
 	for i := range items {
 		repo, ok := repos[items[i].Repo]
 		if !ok {
-			return Plan{}, fmt.Errorf("ops: repository %s is not in the eligibility snapshot; refusing to plan a destructive action against an unknown repository", items[i].Repo)
+			return Plan{}, unknownRepository(items[i].Repo)
 		}
 		items[i].Skip = skipFor(op, items[i], repo) // a value the caller set is overwritten (ADR-0019)
 	}
@@ -187,7 +187,7 @@ func (o *Ops) Plan(op Operation, sel []Item, repos map[domain.RepoID]domain.Repo
 	copy(frozen, unmatched)
 	for i := range frozen {
 		if _, ok := repos[frozen[i].Repo]; !ok {
-			return Plan{}, fmt.Errorf("ops: repository %s is not in the eligibility snapshot; refusing to plan a destructive action against an unknown repository", frozen[i].Repo)
+			return Plan{}, unknownRepository(frozen[i].Repo)
 		}
 	}
 	return Plan{
@@ -197,6 +197,13 @@ func (o *Ops) Plan(op Operation, sel []Item, repos map[domain.RepoID]domain.Repo
 		friction:  frictionFor(op, items, frozen, o.confirmThreshold),
 		breakdown: breakdownOf(items, frozen),
 	}, nil
+}
+
+// unknownRepository is the fail-closed refusal both kinds of member take: not-yet-known
+// keeps destructive actions disabled, and a missing entry is the caller failing to hand
+// over data it holds (ADR-0019, repo-discovery R8).
+func unknownRepository(id domain.RepoID) error {
+	return fmt.Errorf("ops: repository %s is not in the eligibility snapshot; refusing to plan a destructive action against an unknown repository", id)
 }
 
 // skipFor stamps an Item's eligibility (R10, R11, R12). The repository gate runs

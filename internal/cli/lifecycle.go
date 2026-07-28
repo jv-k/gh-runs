@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -21,11 +22,11 @@ import (
 // and --debug to rerun (R13, R14), so neither offers a flag the other's endpoints ignore.
 type lifecycleFlags struct {
 	lf       listFlags
-	matchAll bool  // --all: act on every Run in scope, the zero filter asked for by name
-	dryRun   bool  // --dry-run: resolve and report, write nothing, exit 0
-	yes      bool  // --yes: the non-interactive confirmation
-	force    bool  // cancel only: force-cancel, a distinct operation (R6)
-	failed   bool  // rerun only: re-run failed Jobs, a distinct operation (R13)
+	matchAll bool   // --all: act on every Run in scope, the zero filter asked for by name
+	dryRun   bool   // --dry-run: resolve and report, write nothing, exit 0
+	yes      bool   // --yes: the non-interactive confirmation
+	force    bool   // cancel only: force-cancel, a distinct operation (R6)
+	failed   bool   // rerun only: re-run failed Jobs, a distinct operation (R13)
 	debug    bool   // rerun only: enable_debug_logging, off by default (R14, AC14)
 	job      int64  // rerun only: -j/--job, re-run the Job this id names (R28a)
 	jobName  string // rerun only: --job-name, re-run the Job of this name in each resolved Run (R28b)
@@ -209,12 +210,24 @@ func runLifecycle(deps Deps, f *lifecycleFlags, op ops.Operation, args []string)
 	// happened, which is cli-surface R17's one failure bit. The count is stated rather than
 	// only signalled, because an exit code names no number (R16), and --yes reaches this
 	// operation with no confirm surface to render R17a's note instead.
+	//
+	// The fact is stated unconditionally and the code is decided afterwards, because the
+	// summary's own outcome outranks it. An interrupted pass exits 2 and says how to resume
+	// (R17), and a pass with failures exits 1 naming them; a truncated resolution that also
+	// got interrupted is both, and the interrupt is the one whose exit code carries an
+	// instruction. Reporting one bit means picking the more specific outcome, not the one
+	// that happens to be checked first.
 	if res.StoppedEarly() {
-		printUnreached(deps, res)
+		printUnreached(deps, deps.Stdout, res)
+	}
+	if err := exitFromSummary(sum); err != nil {
+		return err
+	}
+	if res.StoppedEarly() {
 		return &exitError{code: exitFailure, msg: fmt.Sprintf(
 			"%s reached %d of the %d runs selected", op, plan.Total(), plan.Total()+res.Unreached)}
 	}
-	return exitFromSummary(sum)
+	return nil
 }
 
 // printUnreached states R17a's fact on the surface that has no modal to render it: how many
@@ -225,9 +238,9 @@ func runLifecycle(deps Deps, f *lifecycleFlags, op ops.Operation, args []string)
 // The reason carries the API's own words, which a hostile third-party repository controls,
 // so it is sanitised at the terminal boundary exactly as every other reason this surface
 // prints is.
-func printUnreached(deps Deps, res ops.Resolution) {
-	_, _ = fmt.Fprintf(deps.Stdout, "%d selected %s were never reached: %s\n",
-		res.Unreached, plural(res.Unreached, "run", "runs"), textsan.Sanitize(res.Reason))
+func printUnreached(deps Deps, w io.Writer, res ops.Resolution) {
+	_, _ = fmt.Fprintf(w, "%d selected %s were never reached: %s\n",
+		res.Unreached, plural(res.Unreached, "run", "runs"), textsan.Sanitize(res.UnreachedReason))
 }
 
 // resolveLifecycleSet builds the frozen set from whichever grammar was used.
@@ -322,12 +335,6 @@ func printLifecycleDryRun(deps Deps, plan ops.Plan, op ops.Operation, res ops.Re
 		_, _ = fmt.Fprintln(deps.Stdout, um.Repo.String()+"\t"+strconv.FormatInt(um.RunID, 10)+
 			"\t(skipped: "+textsan.Sanitize(um.Reason)+")")
 	}
-	if res.StoppedEarly() {
-		// R10 resolves the set by the same code path as the real operation, so a dry run
-		// whose resolution stopped early reports the same partial set, and R16 forbids
-		// presenting its count unqualified.
-		printUnreached(deps, res)
-	}
 	note := fmt.Sprintf("gh-runs: dry run: %s would be requested for %d %s",
 		op, plan.Total()-plan.Skipped(), plural(plan.Total()-plan.Skipped(), "run", "runs"))
 	if plan.Skipped() > 0 {
@@ -337,6 +344,20 @@ func printLifecycleDryRun(deps Deps, plan ops.Plan, op ops.Operation, res ops.Re
 	// same crawl the real operation runs, so GETs did travel. --dry-run withholds the
 	// mutation alone, which is the claim the delete trailer already makes about its DELETE.
 	_, _ = fmt.Fprintln(deps.Stderr, note+" (no POST issued)")
+	if res.StoppedEarly() {
+		// R10 resolves the set by the same code path as the real operation, so a dry run whose
+		// resolution stopped early reports a partial set. It goes to stderr with the trailer,
+		// because R10's listing is one row per member "so grep and wc -l answer questions about
+		// it" and a note on stdout would be counted as a row.
+		//
+		// It exits 1 rather than R10's 0 for the reason the real invocation does: R10's exit 0
+		// is written about a dry run that "reports exactly what would be deleted", and this one
+		// could not. R16 forbids standing behind the count either way, which is what the note
+		// above says in words.
+		printUnreached(deps, deps.Stderr, res)
+		return &exitError{code: exitFailure, msg: fmt.Sprintf(
+			"dry run reached %d of the %d runs selected", plan.Total(), plan.Total()+res.Unreached)}
+	}
 	return nil
 }
 

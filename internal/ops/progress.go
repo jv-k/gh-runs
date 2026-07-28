@@ -163,9 +163,9 @@ func (o *Ops) Retry(ctx context.Context, sum Summary) (Started, error) {
 	// resolved. Re-stamping them would need the repository snapshot again and could only
 	// re-derive what Plan already decided, and R5 froze the set at the modal, not here.
 	plan := Plan{
-		op:        sum.op,
-		items:     failed,
-		friction:  FrictionNone,
+		op:       sum.op,
+		items:    failed,
+		friction: FrictionNone,
 		// No Item-less member rides the retry: an Unmatched is a skip by construction and
 		// never enters Failed(), so a re-attempt of the failures is over Items alone.
 		breakdown: breakdownOf(failed, nil),

@@ -2,6 +2,7 @@ package feed
 
 import (
 	"context"
+	"fmt"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -41,6 +42,7 @@ func (m Model) openJobNameForm() (Model, tea.Cmd) {
 	m.applyView(m.liveView())
 	m.jobNameSelection = sel
 	m.jobNameActive = true
+	m.jobNameNotice = "" // the prior resolution's note belongs to the prior resolution
 	m.jobNameInput.SetValue("")
 	return m, m.jobNameInput.Focus()
 }
@@ -131,15 +133,36 @@ func (m Model) handleJobNameResolved(msg jobNameResolved) (Model, tea.Cmd) {
 		return m, nil // fail closed: an unknown repository keeps the action disabled (repo-discovery R8)
 	}
 	if plan.Friction() == ops.FrictionNone {
-		// A single-member set takes no confirmation (R18), so there is no modal to carry
-		// R17a's note. A resolution that stopped early still owes the operator that fact, so
-		// the modal is kept in that case: R18 removes a confirmation, and R17a's note is not
-		// one. Without this a 40-Run selection that resolved to 1 would re-run silently.
-		if !msg.res.StoppedEarly() {
-			return m, m.launch(plan, ops.NoInput())
-		}
+		// A single-member set takes no confirmation, and R18 says so as a MUST NOT: "A
+		// single-Job re-run MUST NOT [take a confirmation] either. R14b's note is what that
+		// operation carries instead, and a note is not a confirmation."
+		//
+		// R17a's fact is still owed where the resolution stopped early, and the modal is not
+		// how it gets paid: the pane's FrictionNone prompt is a y/N that has to be answered,
+		// so routing the note through it would make a note block, which R17a forbids in the
+		// same sentence that requires it. The Feed's own notice line carries it instead,
+		// which is the same move R17a makes for the CLI's --yes: where there is no confirm
+		// surface, state the fact beside the operation rather than in front of it.
+		m.jobNameNotice = unreachedNotice(msg.res)
+		return m, m.launch(plan, ops.NoInput())
 	}
-	m.confirm = m.confirm.Open(plan).WithUnreached(msg.res.Unreached, msg.res.Reason)
+	m.confirm = m.confirm.Open(plan).WithUnreached(msg.res.Unreached, msg.res.UnreachedReason)
 	m.confirmOpen = true
 	return m, nil
+}
+
+// unreachedNotice is R17a's fact as a Feed line, for the one path that has no modal to
+// render it: a resolution that stopped early and froze a set small enough to take no
+// confirmation. It is empty where the resolution reached everything, so the line is absent
+// rather than blank.
+func unreachedNotice(res ops.Resolution) string {
+	if !res.StoppedEarly() {
+		return ""
+	}
+	notice := fmt.Sprintf("%d selected %s were not reached, so they were not re-run",
+		res.Unreached, plural(res.Unreached, "run", "runs"))
+	if res.UnreachedReason != "" {
+		notice += ": " + res.UnreachedReason
+	}
+	return notice
 }

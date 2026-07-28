@@ -18,18 +18,22 @@ import (
 // Items are the Runs that held a Job of the name, each addressing that Job's own id.
 // Unmatched are the Runs that were asked and held none, a definite answer.
 // Unreached is how many selected Runs were never asked, the absence of an answer, with
-// Reason naming why. Folding the unreached into Unmatched would put them in the Plan's
+// UnreachedReason naming why. Folding the unreached into Unmatched would put them in the Plan's
 // Total, which would price a set larger than the one the operator confirms and undo R17a's
 // ruling by the back door.
 //
 // Items and Unmatched go to Plan together, which freezes them into one set. Unreached and
-// Reason go to the surface, which states them in R17a's non-blocking note or, where there
+// UnreachedReason go to the surface, which states them in R17a's non-blocking note or, where there
 // is no confirm surface, in the CLI's summary beside a non-zero exit.
 type Resolution struct {
 	Items     []Item
 	Unmatched []Unmatched
 	Unreached int
-	Reason    string
+	// UnreachedReason is why the resolution stopped, and it is named apart from
+	// Unmatched.Reason deliberately: that one says why a Run matched nothing, and this one
+	// says why other Runs were never asked. Two fields called Reason one struct apart is
+	// how the distinction R17a turns on gets lost.
+	UnreachedReason string
 }
 
 // StoppedEarly reports whether the resolution failed to reach every selected Run. It is
@@ -97,7 +101,7 @@ func unmatchedReason(name string) string {
 // was asked and did not answer, which is not the same as answering no (R17a).
 func (r Resolution) stoppedAt(at, total int, why string) Resolution {
 	r.Unreached = total - at
-	r.Reason = why
+	r.UnreachedReason = why
 	return r
 }
 

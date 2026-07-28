@@ -181,15 +181,43 @@ func (m Model) eligibilityLines() []string {
 	// The Item-less members get R11's treatment too, because they are the same thing to an
 	// operator reading this modal: members of the count above that nothing will be written
 	// for. Their reason is authored by the resolution rather than derived from the
-	// eligibility gate, so it is rendered rather than named by a constant, and it is one
-	// string per resolution so the line reads once with a count (ADR-0019, amended).
+	// eligibility gate, so it is rendered rather than named by a constant.
 	//
 	// This is where the reason is stated in full. The inspect viewport's WORKFLOW cell
 	// carries it too, truncated to the column as any over-long cell is, so a row can be told
 	// apart without leaving the table.
-	if um := m.plan.Unmatched(); len(um) > 0 {
-		out = append(out, styleWarn.Render(indent+strconv.Itoa(len(um))+" of "+strconv.Itoa(total)+
-			" will be skipped: "+textsan.Sanitize(um[0].Reason)))
+	//
+	// Grouped by reason rather than read off the first member. The resolver builds one
+	// reason per invocation, so this is one line in practice, but that is the resolver's
+	// property and not this pane's to assume: a Plan accepts whatever reasons it is handed,
+	// and rendering the first as though it spoke for all of them would mislabel the rest if
+	// that ever stopped holding.
+	for _, g := range groupUnmatched(m.plan.Unmatched()) {
+		out = append(out, styleWarn.Render(indent+strconv.Itoa(g.count)+" of "+strconv.Itoa(total)+
+			" will be skipped: "+textsan.Sanitize(g.reason)))
+	}
+	return out
+}
+
+// unmatchedGroup is a reason shared by some of the Item-less members, with its count.
+type unmatchedGroup struct {
+	reason string
+	count  int
+}
+
+// groupUnmatched collapses the Item-less members by reason in first-seen order, the same
+// shape Summary.Skips takes for the same members once Execute has seeded it.
+func groupUnmatched(um []ops.Unmatched) []unmatchedGroup {
+	var out []unmatchedGroup
+	index := make(map[string]int, len(um))
+	for _, u := range um {
+		at, ok := index[u.Reason]
+		if !ok {
+			index[u.Reason] = len(out)
+			out = append(out, unmatchedGroup{reason: u.Reason, count: 1})
+			continue
+		}
+		out[at].count++
 	}
 	return out
 }
@@ -299,9 +327,29 @@ func (m Model) inspectRow(it ops.Item, cursor bool) string {
 	case it.Artifact != nil:
 		workflow = it.Artifact.Name
 	}
+	return m.row(repo, rowID(it), status, conclusion, workflow, started, cursor)
+}
+
+// rowID is what the RUN ID column holds for an Item. It is the Item's own id for every
+// Kind but a Job, whose id addresses the Job endpoint and is not a Run ID at all: a Job
+// row would otherwise put a Job id under a RUN ID header, beside an Item-less row of the
+// same set putting a Run ID there. One column, one meaning (purge AC22, as amended).
+//
+// The Job's own id is not lost to the operator: the WORKFLOW cell carries its name, which
+// is what they typed to select it and what the endpoint was resolved from.
+func rowID(it ops.Item) int64 {
+	if it.Kind == ops.KindJob && it.Job != nil {
+		return it.Job.RunID
+	}
+	return it.ID
+}
+
+// row lays one viewport line out in the table's six columns, so the two kinds of member
+// cannot drift apart in width, order or cursor marker.
+func (m Model) row(repo string, id int64, status, conclusion, workflow, started string, cursor bool) string {
 	cells := []string{
 		truncPad(repo, repoW),
-		truncPad(strconv.FormatInt(it.ID, 10), idW),
+		truncPad(strconv.FormatInt(id, 10), idW),
 		truncPad(textsan.Sanitize(status), statusW),
 		truncPad(textsan.Sanitize(conclusion), conclusionW),
 		truncPad(textsan.Sanitize(workflow), m.workflowWidth()),
@@ -328,19 +376,7 @@ func (m Model) inspectRow(it ops.Item, cursor bool) string {
 // WORKFLOW cell, which is the flex column and the one every non-Run Kind already fills with
 // what it carries instead (ADR-0019, amended).
 func (m Model) unmatchedRow(um ops.Unmatched, cursor bool) string {
-	cells := []string{
-		truncPad(textsan.Sanitize(um.Repo.Owner+"/"+um.Repo.Name), repoW),
-		truncPad(strconv.FormatInt(um.RunID, 10), idW),
-		truncPad("", statusW),
-		truncPad("", conclusionW),
-		truncPad(textsan.Sanitize(um.Reason), m.workflowWidth()),
-		truncPad("", startedW),
-	}
-	marker := "  "
-	if cursor {
-		marker = "> "
-	}
-	return marker + strings.Join(cells, colSep)
+	return m.row(textsan.Sanitize(um.Repo.Owner+"/"+um.Repo.Name), um.RunID, "", "", um.Reason, "", cursor)
 }
 
 // inspectPage is the number of Item rows the viewport shows, leaving lines for the

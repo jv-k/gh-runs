@@ -268,6 +268,13 @@ type Model struct {
 	jobNameInput     textinput.Model
 	jobNameSelection []ops.Item
 
+	// jobNameNotice is R17a's fact on the one path with no modal to render it: a by-name
+	// resolution that stopped early and froze a set small enough that R18 forbids a
+	// confirmation. It is a line rather than a prompt, because R17a requires the note to be
+	// non-blocking in the same sentence that requires it at all. It clears on the next
+	// by-name form, so it names one resolution and never an older one.
+	jobNameNotice string
+
 	// repos is the capability gate's data, keyed by RepoID.String() (R17, R18, R21).
 	repos map[string]domain.Repo
 

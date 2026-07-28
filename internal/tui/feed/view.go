@@ -146,6 +146,9 @@ func (m Model) View() string {
 	if c, ok := m.cancelRequestedLine(); ok {
 		top = append(top, c)
 	}
+	if j, ok := m.jobNameNoticeLine(); ok {
+		top = append(top, j)
+	}
 	if f, ok := m.filterLine(); ok {
 		top = append(top, f)
 	}
@@ -613,6 +616,21 @@ func (m Model) cancelRequestedLine() (string, bool) {
 	label := fmt.Sprintf("%s  cancellation requested for %d %s, awaiting the poll that observes it",
 		cancelRequestedMarker, n, plural(n, "run", "runs"))
 	return styleCancelRequested.Render(label), true
+}
+
+// jobNameNoticeLine is run-lifecycle R17a's non-blocking note, rendered where the by-name
+// re-run launched with no modal to carry it (R18 forbids the confirmation, and R17a
+// forbids the note blocking). It sits with the other standing indicators rather than
+// replacing the list, which is what makes it a note.
+//
+// The reason carries the API's own words, which a hostile third-party repository can
+// influence, so it is sanitised at the terminal boundary like every other untrusted string
+// the Feed renders.
+func (m Model) jobNameNoticeLine() (string, bool) {
+	if m.jobNameNotice == "" {
+		return "", false
+	}
+	return styleCancelRequested.Render(cancelRequestedMarker + "  " + textsan.Sanitize(m.jobNameNotice)), true
 }
 
 // failedLine is the failed-repository indicator, from ADR-0015's RepoPollFailed. It
